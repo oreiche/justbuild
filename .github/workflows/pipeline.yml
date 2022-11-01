@@ -3,19 +3,19 @@ name: Bootstrap and Deploy
 on:
   push:
     tags:
-      - '*'
+      - 'v*'
+    branches:
+      - github-ci
 
 jobs:
   x86_64-linux:
     name: x86_64 Linux
-    if: contains(github.ref, 'refs/tags/')
     runs-on: ubuntu-20.04
     steps:
-      - name: Determine package name
-        run: echo "PKG_NAME=justbuild-${GITHUB_REF##*/}-x86_86-linux" >> $GITHUB_ENV
-
       - name: Checkout sources
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
       - name: Run and prepare docker image
         run: |
@@ -25,12 +25,38 @@ jobs:
       - name: Bootstrap justbuild
         run: |
           docker exec ubuntu bash -c "\
+            set -e; \
             apt install --yes wget python3 clang libstdc++-10-dev unzip patch; \
             ./bin/bootstrap.py . /tmp/justbuild"
+
+      - name: Determine package name
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            UNTAGGED=false
+            TAG_NAME="${GITHUB_REF_NAME}"
+          elif [ "${GITHUB_REF_TYPE}" = "branch" ]; then
+            UNTAGGED=true
+            docker exec ubuntu bash -c "\
+              set -e; \
+              apt install --yes jq; \
+              /tmp/justbuild/out/bin/just version | jq -r '(.version | join(\".\"))+.suffix' > version.txt"
+            VERSION="$(cat version.txt | tr '~' '-')"
+            BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} origin/master)"
+            COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
+            COMMIT_HASH="$(git log -n1 ${BASE_COMMIT} --format=%h)"
+            TAG_NAME="v${VERSION}-${COMMIT_TIME}-g${COMMIT_HASH}"
+          else
+            echo "Error: unsupported ref type"
+            exit 1
+          fi
+          echo "UNTAGGED=${UNTAGGED}" >> $GITHUB_ENV
+          echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_ENV
+          echo "PKG_NAME=justbuild-${TAG_NAME}-x86_86-linux" >> $GITHUB_ENV
 
       - name: Build man pages
         run: |
           docker exec ubuntu bash -c "\
+            set -e; \
             apt install --yes pandoc; \
             mkdir -p $PKG_NAME/share/man/man{1,5}; \
             pandoc -s -t man ./share/man/just.1.org -o $PKG_NAME/share/man/man1/just.1; \
@@ -43,6 +69,7 @@ jobs:
       - name: Create package
         run: |
           docker exec ubuntu bash -c "\
+            set -e; \
             mkdir -p $PKG_NAME/{bin,etc/bash_completion.d}; \
             cp /tmp/justbuild/out/bin/just $PKG_NAME/bin/just; \
             cp ./bin/just-mr.py $PKG_NAME/bin/just-mr; \
@@ -64,6 +91,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           file: "*.tar.gz;SHA256SUMS"
-          tags: true
+          tag_name: ${{ env.TAG_NAME }}
+          prerelease: ${{ env.UNTAGGED }}
+          tags: false
           draft: false
           overwrite: true
+
