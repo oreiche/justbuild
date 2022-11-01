@@ -31,7 +31,6 @@ from concurrent.futures import ThreadPoolExecutor
 DEBUG = os.environ.get("DEBUG")
 
 REPOS = "etc/repos.json"
-BOOTSTRAP_CC = ["clang++", "-std=c++20", "-DBOOTSTRAP_BUILD_TOOL"]
 MAIN_MODULE = ""
 MAIN_TARGET = ""
 MAIN_STAGE = "bin/just"
@@ -59,13 +58,18 @@ if 'SOURCE_DATE_EPOCH' in os.environ:
 
 CONF_STRING = json.dumps(CONF)
 
+AR="ar"
 CC="clang"
 CXX="clang++"
 
+if "AR" in CONF:
+    AR=CONF["AR"]
 if "CC" in CONF:
     CC=CONF["CC"]
 if "CXX" in CONF:
     CXX=CONF["CXX"]
+
+BOOTSTRAP_CC = [CXX, "-std=c++20", "-DBOOTSTRAP_BUILD_TOOL"]
 
 # relevant directories (global variables)
 
@@ -157,7 +161,7 @@ def setup_deps(src_wrkdir):
                 os.symlink(os.path.normpath(include_dir),
                            os.path.join(include_location, include_name))
             if "build" in hints:
-                run(["sh", "-c", hints["build"].format(cc=CC, cxx=CXX)],
+                run(["sh", "-c", hints["build"].format(cc=CC, cxx=CXX, ar=AR)],
                     cwd=subdir)
             if "link" in hints:
                 link_flags.extend(["-L", subdir])
