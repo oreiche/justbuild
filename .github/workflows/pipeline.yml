@@ -10,6 +10,7 @@ on:
 jobs:
   x86_64-linux:
     name: x86_64 Linux
+    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-20.04
     steps:
       - name: Checkout sources
@@ -41,7 +42,8 @@ jobs:
               apt install --yes jq; \
               /tmp/justbuild/out/bin/just version | jq -r '(.version | join(\".\"))+.suffix' > version.txt"
             VERSION="$(cat version.txt | tr '~' '-')"
-            BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} origin/master)"
+            git fetch https://github.com/just-buildsystem/justbuild master
+            BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
             COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
             COMMIT_HASH="$(git log -n1 ${BASE_COMMIT} --format=%h)"
             TAG_NAME="v${VERSION}-${COMMIT_TIME}-g${COMMIT_HASH}"
