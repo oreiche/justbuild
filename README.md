@@ -1,4 +1,4 @@
-# Justbuild
+# Justbuild [![Bootstrap and Deploy](../../actions/workflows/pipeline.yml/badge.svg)](../../releases)
 
 Justbuild is a generic build system supporting multi-repository
 builds. A pecularity of the tool is the separation between global
