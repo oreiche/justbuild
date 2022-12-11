@@ -1,5 +1,14 @@
 { "test-action":
-  { "vars": ["name", "test.sh", "ATTEMPT", "TEST_ENV"]
+  { "vars":
+    [ "TEST_ENV"
+    , "ATTEMPT"
+    , "name"
+    , "test.sh"
+    , "keep"
+    , "runner"
+    , "deps-fieldname"
+    , "deps-transition"
+    ]
   , "imports":
     { "artifacts_list": ["./", "../..", "field_artifacts_list"]
     , "runfiles_list": ["./", "../..", "field_runfiles_list"]
@@ -12,7 +21,7 @@
           , "$1":
             { "type": "foreach"
             , "var": "runner"
-            , "range": {"type": "FIELD", "name": "runner"}
+            , "range": {"type": "var", "name": "runner"}
             , "body":
               { "type": "map_union"
               , "$1":
@@ -35,12 +44,19 @@
         , { "type": "TREE"
           , "$1":
             { "type": "disjoint_map_union"
-            , "msg": "Field 'deps' has to stage in a conflict free way"
+            , "msg":
+              [ "Field"
+              , {"type": "var", "name": "deps-fieldname"}
+              , "has to stage in a conflict free way"
+              ]
             , "$1":
               { "type": "++"
               , "$1":
                 { "type": "let*"
-                , "bindings": [["fieldname", "deps"]]
+                , "bindings":
+                  [ ["fieldname", {"type": "var", "name": "deps-fieldname"}]
+                  , ["transition", {"type": "var", "name": "deps-transition"}]
+                  ]
                 , "body":
                   [ {"type": "CALL_EXPRESSION", "name": "runfiles_list"}
                   , {"type": "CALL_EXPRESSION", "name": "artifacts_list"}
@@ -72,7 +88,7 @@
             [ ["result", "stdout", "stderr", "time-start", "time-stop"]
             , { "type": "foreach"
               , "var": "filename"
-              , "range": {"type": "FIELD", "name": "keep"}
+              , "range": {"type": "var", "name": "keep"}
               , "body":
                 { "type": "join"
                 , "$1": ["work/", {"type": "var", "name": "filename"}]
@@ -95,9 +111,7 @@
           }
         ]
       , [ "cmd"
-        , { "type": "++"
-          , "$1": [["./runner"], {"type": "FIELD", "name": "keep"}]
-          }
+        , {"type": "++", "$1": [["./runner"], {"type": "var", "name": "keep"}]}
         ]
       , [ "test_env"
         , {"type": "var", "name": "TEST_ENV", "default": {"type": "empty_map"}}
@@ -142,7 +156,15 @@
     }
   }
 , "test-result":
-  { "vars": ["name", "test.sh", "TEST_ENV"]
+  { "vars":
+    [ "TEST_ENV"
+    , "name"
+    , "test.sh"
+    , "keep"
+    , "runner"
+    , "deps-fieldname"
+    , "deps-transition"
+    ]
   , "imports": {"action": "test-action"}
   , "expression":
     { "type": "let*"

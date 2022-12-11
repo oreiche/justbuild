@@ -123,6 +123,19 @@ with key the result of evaluating ~"name"~ and value a (non-executable)
 file with content the result of evaluating ~"data"~. The provides
 map is empty.
 
+** ~"tree"~
+
+The ~"tree"~ rule allows to specify a tree out of the artifact
+stage of given targets. More precisely, the deps field ~"deps"~
+has to evaluate to a list of targets. For each target, runfiles
+and artifacts are overlayed in an artifacts-win fashion and
+the union of the resulting stages is taken; it is an error if conflicts
+arise in this way. The resulting stage is transformed into a tree.
+Both, artifacts and runfiles of the ~"tree"~ target are a singleton map
+with the key the result of evaluting ~"name"~ (which has to evalutate to
+a single string) and value that tree.
+
+
 ** ~"configure"~
 
 The ~"configure"~ rule allows to configure a target with a given
@@ -136,3 +149,19 @@ evaluating the given target, and thereby performs a configuration transition. It
 forwards all results (artifacts/runfiles/provides map) of the configured target
 to the upper context. The result of a target that uses this rule is the result
 of the target given in the ~"target"~ field (the configured target).
+
+As a full configuration transition is performed, the same care has
+to be taken when using this rule as when writing a configuration
+transition in a rule. Typically, this rule is used only at a
+top-level target of a project and configures only variables internally
+to the project. In any case, when using non-internal targets as
+dependencies (i.e., targets that a caller of the ~"configure"~
+potentially might use as well), care should be taken that those
+are only used in the initial configuration. Such preservation of
+the configuraiton is necessary to avoid conflicts, if the targets
+depended upon are visible in the ~"configure"~ target itself, e.g.,
+as link dependency (which almost always happens when depending on a
+library). Even if a non-internal target depended upon is not visible
+in the ~"configure"~ target itself, requesting it in a modified
+configuration causes additional overhead by increasing the target
+graph and potentially the action graph.

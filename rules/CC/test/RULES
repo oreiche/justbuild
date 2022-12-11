@@ -1,37 +1,52 @@
 { "test":
-  { "doc":
-    [ "A test written in C++"
-    , "FIXME: the test binary and data must be built for host"
-    ]
+  { "doc": ["A test written in C++"]
   , "tainted": ["test"]
-  , "target_fields": ["srcs", "private-hdrs", "deps", "data"]
-  , "string_fields": ["name", "stage"]
+  , "target_fields": ["srcs", "private-hdrs", "private-deps", "data"]
+  , "string_fields":
+    [ "name"
+    , "args"
+    , "stage"
+    , "pure C"
+    , "private-defines"
+    , "private-cflags"
+    , "private-ldflags"
+    ]
   , "config_vars":
-    [ "CXX"
+    [ "ARCH"
+    , "HOST_ARCH"
     , "CC"
-    , "CXXFLAGS"
+    , "CXX"
     , "CFLAGS"
-    , "ADD_CXXFLAGS"
+    , "CXXFLAGS"
     , "ADD_CFLAGS"
+    , "ADD_CXXFLAGS"
     , "ENV"
     , "TEST_ENV"
     , "CC_TEST_LAUNCHER"
     ]
   , "implicit":
-    { "defaults": [["./", "..", "defaults"]]
-    , "proto-deps": []
-    , "runner": ["test_runner.sh"]
-    }
+    {"defaults": [["./", "..", "defaults"]], "runner": ["test_runner.py"]}
   , "field_doc":
     { "name":
       [ "The name of the test"
       , ""
       , "Used to name the test binary as well as for staging the test result"
       ]
+    , "args": ["Command line arguments for the test binary"]
     , "srcs": ["The sources of the test binary"]
     , "private-hdrs":
       [ "Any additional header files that need to be present when compiling"
       , "the test binary."
+      ]
+    , "private-defines":
+      [ "List of defines set for source files local to this target."
+      , "Each list entry will be prepended by \"-D\"."
+      ]
+    , "private-cflags":
+      ["List of compile flags set for source files local to this target."]
+    , "private-ldflags":
+      [ "Additional linker flags for linking external libraries (not built"
+      , "by this tool, typically system libraries)."
       ]
     , "stage":
       [ "The logical location of all header and source files."
@@ -40,25 +55,25 @@
     , "data": ["Any files the test binary needs access to when running"]
     }
   , "config_doc":
-    { "CXX": ["The name of the C++ compiler to be used."]
-    , "CC": ["The name of the C compiler to be used."]
-    , "ENV": ["The environment for any action generated."]
-    , "CXXFLAGS":
-      [ "The flags for CXX to be used instead of the default ones"
-      , "taken from the [\"CC\", \"defaults\"] target"
-      ]
+    { "CC": ["The name of the C compiler to be used."]
+    , "CXX": ["The name of the C++ compiler to be used."]
     , "CFLAGS":
       [ "The flags for CC to be used instead of the default ones"
       , "taken from the [\"CC\", \"defaults\"] target"
       ]
-    , "ADD_CXXFLAGS":
-      [ "The flags to add to the default ones for CXX"
+    , "CXXFLAGS":
+      [ "The flags for CXX to be used instead of the default ones"
       , "taken from the [\"CC\", \"defaults\"] target"
       ]
     , "ADD_CFLAGS":
       [ "The flags to add to the default ones for CC"
       , "taken from the [\"CC\", \"defaults\"] target"
       ]
+    , "ADD_CXXFLAGS":
+      [ "The flags to add to the default ones for CXX"
+      , "taken from the [\"CC\", \"defaults\"] target"
+      ]
+    , "ENV": ["The environment for any action generated."]
     , "TEST_ENV": ["The environment for executing the test runner."]
     , "CC_TEST_LAUNCHER":
       [ "List of strings representing the launcher that is prepend to the"
@@ -75,24 +90,36 @@
     ]
   , "runfiles_doc":
     [ "A tree consisting of the artifacts staged at the name of the test."
-    , "As the built-in \"install\" rule only takes the runfiles of its \"deps\""
-    , "argument, this gives an easy way of defining test suites."
+    , "As the built-in \"install\" rule only takes the runfiles of its"
+    , "\"private-deps\" argument, this gives an easy way of defining test"
+    , "suites."
     ]
   , "imports":
     { "artifacts": ["./", "../..", "field_artifacts"]
     , "runfiles_list": ["./", "../..", "field_runfiles_list"]
     , "compile-deps": ["./", "..", "compile-deps"]
+    , "compile-args-deps": ["./", "..", "compile-args-deps"]
     , "link-deps": ["./", "..", "link-deps"]
     , "link-args-deps": ["./", "..", "link-args-deps"]
-    , "objects": ["./", "..", "objects"]
-    , "default-CXX": ["./", "..", "default-CXX"]
-    , "default-CXXFLAGS": ["./", "..", "default-CXXFLAGS"]
-    , "default-ENV": ["./", "..", "default-ENV"]
+    , "binary": ["./", "..", "bin artifact"]
+    , "host transition": ["transitions", "for host"]
+    }
+  , "config_transitions":
+    { "defaults": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
+    , "private-deps": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
+    , "data": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
     }
   , "expression":
     { "type": "let*"
     , "bindings":
-      [ [ "stage"
+      [ [ "name"
+        , { "type": "assert_non_empty"
+          , "msg": "A non-empty name has to be provided for binaries"
+          , "$1": {"type": "join", "$1": {"type": "FIELD", "name": "name"}}
+          }
+        ]
+      , ["pure C", {"type": "FIELD", "name": "pure C"}]
+      , [ "stage"
         , { "type": "join"
           , "separator": "/"
           , "$1": {"type": "FIELD", "name": "stage"}
@@ -108,7 +135,7 @@
             }
           }
         ]
-      , [ "local hdrs"
+      , [ "private-hdrs"
         , { "type": "to_subdir"
           , "subdir": {"type": "var", "name": "stage"}
           , "$1":
@@ -118,91 +145,35 @@
             }
           }
         ]
-      , [ "CXX"
-        , { "type": "var"
-          , "name": "CXX"
-          , "default": {"type": "CALL_EXPRESSION", "name": "default-CXX"}
-          }
-        ]
-      , [ "CXXFLAGS"
-        , { "type": "var"
-          , "name": "CXXFLAGS"
-          , "default": {"type": "CALL_EXPRESSION", "name": "default-CXXFLAGS"}
-          }
-        ]
-      , [ "ENV"
-        , { "type": "map_union"
-          , "$1":
-            { "type": "++"
-            , "$1":
-              [ {"type": "CALL_EXPRESSION", "name": "default-ENV"}
-              , [ { "type": "var"
-                  , "name": "ENV"
-                  , "default": {"type": "empty_map"}
-                  }
-                ]
-              ]
-            }
-          }
-        ]
-      , ["deps-fieldnames", ["deps", "proto-deps"]]
+      , ["host-trans", {"type": "CALL_EXPRESSION", "name": "host transition"}]
+      , ["defaults-transition", {"type": "var", "name": "host-trans"}]
+      , ["deps-transition", {"type": "var", "name": "host-trans"}]
+      , ["deps-fieldnames", ["private-deps"]]
       , ["compile-deps", {"type": "CALL_EXPRESSION", "name": "compile-deps"}]
-      , ["link-deps", {"type": "CALL_EXPRESSION", "name": "link-deps"}]
-      , ["objects", {"type": "CALL_EXPRESSION", "name": "objects"}]
-      , [ "base name"
-        , { "type": "assert_non_empty"
-          , "msg": "A non-empty name has to be provided"
-          , "$1": {"type": "join", "$1": {"type": "FIELD", "name": "name"}}
-          }
-        ]
-      , [ "binary name"
-        , { "type": "if"
-          , "cond": {"type": "var", "name": "stage"}
-          , "else": {"type": "var", "name": "base name"}
-          , "then":
-            { "type": "join"
-            , "separator": "/"
-            , "$1":
-              [ {"type": "var", "name": "stage"}
-              , {"type": "var", "name": "base name"}
-              ]
-            }
-          }
-        ]
-      , [ "link-args"
-        , { "type": "nub_right"
+      , [ "compile-args"
+        , { "type": "++"
           , "$1":
-            { "type": "++"
-            , "$1":
-              [ {"type": "keys", "$1": {"type": "var", "name": "objects"}}
-              , {"type": "CALL_EXPRESSION", "name": "link-args-deps"}
-              ]
-            }
+            [ { "type": "foreach"
+              , "var": "def"
+              , "range": {"type": "FIELD", "name": "private-defines"}
+              , "body":
+                {"type": "join", "$1": ["-D", {"type": "var", "name": "def"}]}
+              }
+            , {"type": "FIELD", "name": "private-cflags"}
+            , {"type": "CALL_EXPRESSION", "name": "compile-args-deps"}
+            ]
           }
         ]
-      , [ "binary"
-        , { "type": "ACTION"
-          , "outs": [{"type": "var", "name": "binary name"}]
-          , "inputs":
-            { "type": "disjoint_map_union"
-            , "$1":
-              [ {"type": "var", "name": "objects"}
-              , {"type": "var", "name": "link-deps"}
-              ]
-            }
-          , "cmd":
-            { "type": "++"
-            , "$1":
-              [ [ {"type": "var", "name": "CXX"}
-                , "-o"
-                , {"type": "var", "name": "binary name"}
-                ]
-              , {"type": "var", "name": "link-args"}
-              ]
-            }
-          , "env": {"type": "var", "name": "ENV"}
+      , ["link-deps", {"type": "CALL_EXPRESSION", "name": "link-deps"}]
+      , [ "link-args"
+        , { "type": "++"
+          , "$1":
+            [ {"type": "CALL_EXPRESSION", "name": "link-args-deps"}
+            , {"type": "FIELD", "name": "private-ldflags"}
+            ]
           }
         ]
+      , ["binary", {"type": "CALL_EXPRESSION", "name": "binary"}]
       , [ "staged test binary"
         , { "type": "map_union"
           , "$1":
@@ -237,10 +208,35 @@
                   }
                 , "body":
                   { "type": "singleton_map"
-                  , "key": "runner.sh"
+                  , "key": "runner"
                   , "value": {"type": "var", "name": "runner"}
                   }
                 }
+              }
+            }
+          }
+        ]
+      , [ "test-args"
+        , { "type": "singleton_map"
+          , "key": "test-args.json"
+          , "value":
+            { "type": "BLOB"
+            , "data":
+              { "type": "json_encode"
+              , "$1": {"type": "FIELD", "name": "args", "default": []}
+              }
+            }
+          }
+        ]
+      , [ "test-launcher"
+        , { "type": "singleton_map"
+          , "key": "test-launcher.json"
+          , "value":
+            { "type": "BLOB"
+            , "data":
+              { "type": "json_encode"
+              , "$1":
+                {"type": "var", "name": "CC_TEST_LAUNCHER", "default": []}
               }
             }
           }
@@ -250,9 +246,19 @@
           , "msg": "Data runfiles may not conflict"
           , "$1":
             { "type": "let*"
-            , "bindings": [["fieldname", "data"]]
+            , "bindings":
+              [ ["fieldname", "data"]
+              , ["transition", {"type": "var", "name": "deps-transition"}]
+              ]
             , "body": {"type": "CALL_EXPRESSION", "name": "runfiles_list"}
             }
+          }
+        ]
+      , [ "test-name"
+        , { "type": "join"
+          , "separator": "/"
+          , "$1":
+            [{"type": "var", "name": "stage"}, {"type": "var", "name": "name"}]
           }
         ]
       , [ "test-results"
@@ -266,16 +272,12 @@
                 , "$1": {"type": "var", "name": "data"}
                 }
               , {"type": "var", "name": "runner"}
+              , {"type": "var", "name": "test-args"}
+              , {"type": "var", "name": "test-launcher"}
               , {"type": "var", "name": "staged test binary"}
               ]
             }
-          , "cmd":
-            { "type": "++"
-            , "$1":
-              [ ["sh", "./runner.sh"]
-              , {"type": "var", "name": "CC_TEST_LAUNCHER", "default": []}
-              ]
-            }
+          , "cmd": ["./runner"]
           , "env":
             { "type": "var"
             , "name": "TEST_ENV"
@@ -285,13 +287,13 @@
           , "fail_message":
             { "type": "join"
             , "$1":
-              ["CC test ", {"type": "var", "name": "binary name"}, " failed"]
+              ["CC test ", {"type": "var", "name": "test-name"}, " failed"]
             }
           }
         ]
       , [ "runfiles"
         , { "type": "singleton_map"
-          , "key": {"type": "var", "name": "base name"}
+          , "key": {"type": "var", "name": "name"}
           , "value":
             {"type": "TREE", "$1": {"type": "var", "name": "test-results"}}
           }

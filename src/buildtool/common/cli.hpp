@@ -42,7 +42,7 @@ struct CommonArguments {
 };
 
 struct LogArguments {
-    std::optional<std::filesystem::path> log_file{};
+    std::vector<std::filesystem::path> log_files{};
     LogLevel log_limit{kDefaultLogLevel};
     bool plain_log{false};
 };
@@ -151,9 +151,15 @@ static inline auto SetupCommonArguments(
 static inline auto SetupLogArguments(
     gsl::not_null<CLI::App*> const& app,
     gsl::not_null<LogArguments*> const& clargs) {
-    app->add_option(
-           "-f,--log-file", clargs->log_file, "Path to local log file.")
-        ->type_name("PATH");
+    app->add_option_function<std::string>(
+           "-f,--log-file",
+           [clargs](auto const& log_file_) {
+               clargs->log_files.emplace_back(log_file_);
+           },
+           "Path to local log file.")
+        ->type_name("PATH")
+        ->trigger_on_parse();  // run callback on all instances while parsing,
+                               // not after all parsing is done
     app->add_option_function<std::underlying_type_t<LogLevel>>(
            "--log-limit",
            [clargs](auto const& limit) {
@@ -270,7 +276,7 @@ static inline auto SetupDiagnosticArguments(
         ->type_name("PATH");
     app->add_option("--dump-vars",
                     clargs->dump_vars,
-                    "Dump domain of the effective configuraiton to file (use - "
+                    "Dump domain of the effective configuration to file (use - "
                     "for stdout).")
         ->type_name("PATH");
     app->add_option("--dump-targets",
@@ -410,7 +416,7 @@ static inline auto SetupFetchArguments(
 
     app->add_flag("--raw-tree",
                   clargs->raw_tree,
-                  "Dump raw tree object (omit pretty printting)");
+                  "Dump raw tree object (omit pretty printing)");
 }
 
 static inline auto SetupGraphArguments(
