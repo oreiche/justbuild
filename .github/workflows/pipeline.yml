@@ -63,6 +63,7 @@ jobs:
             mkdir -p $PKG_NAME/share/man/man{1,5}; \
             pandoc -s -t man ./share/man/just.1.org -o $PKG_NAME/share/man/man1/just.1; \
             pandoc -s -t man ./share/man/just-mr.1.org -o $PKG_NAME/share/man/man1/just-mr.1; \
+            pandoc -s -t man ./share/man/just-import-git.1.org -o $PKG_NAME/share/man/man1/just-import-git.1; \
             pandoc -s -t man ./share/man/just-mrrc.5.org -o $PKG_NAME/share/man/man5/just-mrrc.5; \
             pandoc -s -t man ./share/man/just-graph-file.5.org -o $PKG_NAME/share/man/man5/just-graph-file.5; \
             pandoc -s -t man ./share/man/just-repository-config.5.org -o $PKG_NAME/share/man/man5/just-repository-config.5; \
@@ -75,6 +76,7 @@ jobs:
             mkdir -p $PKG_NAME/{bin,etc/bash_completion.d}; \
             cp /tmp/justbuild/out/bin/just $PKG_NAME/bin/just; \
             cp ./bin/just-mr.py $PKG_NAME/bin/just-mr; \
+            cp ./bin/just-import-git.py $PKG_NAME/bin/just-import-git; \
             cp ./share/just_complete.bash $PKG_NAME/etc/bash_completion.d/just"
           tar -czvf $PKG_NAME.tar.gz $PKG_NAME
           sha256sum $PKG_NAME.tar.gz | tee SHA256SUMS
