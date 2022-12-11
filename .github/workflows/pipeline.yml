@@ -75,8 +75,7 @@ jobs:
             mkdir -p $PKG_NAME/{bin,etc/bash_completion.d}; \
             cp /tmp/justbuild/out/bin/just $PKG_NAME/bin/just; \
             cp ./bin/just-mr.py $PKG_NAME/bin/just-mr; \
-            cp ./share/just_complete.bash $PKG_NAME/etc/bash_completion.d/just; \
-            cp ./share/just-mr_complete.bash $PKG_NAME/etc/bash_completion.d/just-mr"
+            cp ./share/just_complete.bash $PKG_NAME/etc/bash_completion.d/just"
           tar -czvf $PKG_NAME.tar.gz $PKG_NAME
           sha256sum $PKG_NAME.tar.gz | tee SHA256SUMS
 
