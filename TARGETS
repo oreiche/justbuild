@@ -117,6 +117,60 @@
       }
     }
   }
+, "installed just-mr": {"type": "install", "files": {"bin/just-mr": "just-mr"}}
+, "exported-just-mr":
+  { "type": "export"
+  , "target": ["src/other_tools/just_mr", "just-mr"]
+  , "flexible_config":
+    [ "OS"
+    , "ARCH"
+    , "HOST_ARCH"
+    , "TARGET_ARCH"
+    , "DEBUG"
+    , "COMPILER_FAMILY"
+    , "CC"
+    , "CXX"
+    , "ADD_CXXFLAGS"
+    , "ADD_CFLAGS"
+    , "AR"
+    , "ENV"
+    , "BUILD_STATIC_BINARY"
+    , "SOURCE_DATE_EPOCH"
+    , "VERSION_EXTRA_SUFFIX"
+    ]
+  }
+, "just-mr":
+  { "type": "configure"
+  , "arguments_config":
+    ["OS", "ARCH", "HOST_ARCH", "TARGET_ARCH", "COMPILER_FAMILY"]
+  , "target": "exported-just-mr"
+  , "config":
+    { "type": "let*"
+    , "bindings":
+      [ ["OS", {"type": "var", "name": "OS", "default": "linux"}]
+      , ["ARCH", {"type": "var", "name": "ARCH", "default": "x86_64"}]
+      , [ "HOST_ARCH"
+        , { "type": "var"
+          , "name": "HOST_ARCH"
+          , "default": {"type": "var", "name": "ARCH"}
+          }
+        ]
+      , [ "TARGET_ARCH"
+        , { "type": "var"
+          , "name": "TARGET_ARCH"
+          , "default": {"type": "var", "name": "ARCH"}
+          }
+        ]
+      , [ "COMPILER_FAMILY"
+        , {"type": "var", "name": "COMPILER_FAMILY", "default": "clang"}
+        ]
+      ]
+    , "body":
+      { "type": "env"
+      , "vars": ["OS", "ARCH", "HOST_ARCH", "TARGET_ARCH", "COMPILER_FAMILY"]
+      }
+    }
+  }
 , "libgit2":
   { "type": "configure"
   , "target": ["@", "libgit2", "", "git2"]
@@ -131,6 +185,60 @@
     , "body":
       { "type": "env"
       , "vars": ["USE_SHA1", "USE_SSH", "USE_HTTPS", "USE_GSSAPI"]
+      }
+    }
+  }
+, "libcurl":
+  { "type": "configure"
+  , "target": ["@", "libcurl", "", "curl"]
+  , "config":
+    { "type": "let*"
+    , "bindings":
+      [ ["ENABLE_ARES", true]
+      , ["HTTP_ONLY", true]
+      , ["CURL_USE_LIBPSL", false]
+      , ["CURL_USE_LIBSSH2", false]
+      ]
+    , "body":
+      { "type": "env"
+      , "vars":
+        ["ENABLE_ARES", "HTTP_ONLY", "CURL_USE_LIBPSL", "CURL_USE_LIBSSH2"]
+      }
+    }
+  }
+, "libarchive":
+  { "type": "configure"
+  , "target": ["@", "libarchive", "", "archive"]
+  , "config":
+    { "type": "let*"
+    , "bindings":
+      [ ["ENABLE_LIBB2", false]
+      , ["ENABLE_LZ4", false]
+      , ["ENABLE_LZMA", false]
+      , ["ENABLE_ZSTD", false]
+      , ["ENABLE_LIBXML2", false]
+      , ["ENABLE_EXPAT", false]
+      , ["ENABLE_PCREPOSIX", false]
+      , ["ENABLE_LibGCC", false]
+      , ["ENABLE_CNG", false]
+      , ["XATTR_PROVIDER", "gnu"]
+      , ["ENABLE_ACL", false]
+      ]
+    , "body":
+      { "type": "env"
+      , "vars":
+        [ "ENABLE_LIBB2"
+        , "ENABLE_LZ4"
+        , "ENABLE_LZMA"
+        , "ENABLE_ZSTD"
+        , "ENABLE_LIBXML2"
+        , "ENABLE_EXPAT"
+        , "ENABLE_PCREPOSIX"
+        , "ENABLE_LibGCC"
+        , "ENABLE_CNG"
+        , "XATTR_PROVIDER"
+        , "ENABLE_ACL"
+        ]
       }
     }
   }

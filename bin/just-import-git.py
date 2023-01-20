@@ -107,6 +107,8 @@ def get_repository_config_file(root=None):
 
 
 def get_base_config(repository_config):
+    if repository_config == "-":
+        return json.load(sys.stdin)
     if not repository_config:
         repository_config = get_repository_config_file()
     with open(repository_config) as f:
@@ -116,11 +118,9 @@ def clone(url, branch):
     # clone the given git repository, checkout the specified
     # branch, and return the checkout location
     workdir = tempfile.mkdtemp()
-    run_cmd(["git", "clone", url, "src"],
+    run_cmd(["git", "clone", "-b", branch, "--depth", "1", url, "src"],
             cwd=workdir)
     srcdir = os.path.join(workdir, "src")
-    run_cmd(["git", "checkout", branch],
-            cwd = srcdir)
     commit = run_cmd(["git", "log", "-n", "1", "--pretty=%H"],
                      cwd = srcdir, stdout=subprocess.PIPE).decode('utf-8').strip()
     log("Importing commit %s" % (commit,))
@@ -186,7 +186,7 @@ def name_imports(to_import, existing, base_name, main=None):
             if (candidate not in existing) and (candidate not in assign):
                 return candidate
 
-    if main and (base_name not in existing):
+    if main is not None and (base_name not in existing):
         assign[main] = base_name
         to_import = [x for x in to_import if x != main]
     for repo in to_import:

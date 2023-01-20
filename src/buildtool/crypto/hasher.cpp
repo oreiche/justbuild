@@ -16,6 +16,7 @@
 
 #include "src/buildtool/crypto/hash_impl_sha1.hpp"
 #include "src/buildtool/crypto/hash_impl_sha256.hpp"
+#include "src/buildtool/crypto/hash_impl_sha512.hpp"
 
 auto Hasher::CreateHashImpl(HashType type) noexcept
     -> std::unique_ptr<IHashImpl> {
@@ -24,6 +25,8 @@ auto Hasher::CreateHashImpl(HashType type) noexcept
             return CreateHashImplSha1();
         case HashType::SHA256:
             return CreateHashImplSha256();
+        case HashType::SHA512:
+            return CreateHashImplSha512();
     }
     return nullptr;  // make gcc happy
 }

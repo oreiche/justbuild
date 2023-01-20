@@ -1,5 +1,21 @@
 { "tool-under-test":
   {"type": "install", "files": {"bin/tool-under-test": [".", "just"]}}
+, "mr-tool-under-test":
+  { "type": "install"
+  , "arguments_config": ["TEST_BOOTSTRAP_JUST_MR"]
+  , "files":
+    { "bin/mr-tool-under-test":
+      { "type": "if"
+      , "cond": {"type": "var", "name": "TEST_BOOTSTRAP_JUST_MR"}
+      , "then": ["", "bin/just-mr.py"]
+      , "else": [".", "just-mr"]
+      }
+    }
+  }
+, "git-import-under-test":
+  { "type": "install"
+  , "files": {"bin/git-import-under-test": ["", "bin/just-import-git.py"]}
+  }
 , "TESTS":
   { "type": "install"
   , "tainted": ["test"]
@@ -13,6 +29,8 @@
     , [["./", "build-fails", "TESTS"], "build-fails"]
     , [["./", "remote-execution", "TESTS"], "remote-execution"]
     , [["./", "target-cache", "TESTS"], "target-cache"]
+    , [["./", "just-mr", "TESTS"], "just-mr"]
+    , [["./", "git-import", "TESTS"], "git-import"]
     ]
   }
 }

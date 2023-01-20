@@ -1,0 +1,60 @@
+{ "just-mr":
+  { "type": ["@", "rules", "CC", "binary"]
+  , "arguments_config": ["BUILD_STATIC_BINARY"]
+  , "name": ["just-mr"]
+  , "srcs": ["main.cpp"]
+  , "private-deps":
+    [ ["src/buildtool/build_engine/expression", "expression"]
+    , ["src/buildtool/logging", "logging"]
+    , "cli"
+    , "exit_codes"
+    , ["src/other_tools/ops_maps", "repo_fetch_map"]
+    , ["src/other_tools/ops_maps", "git_update_map"]
+    , ["src/other_tools/repo_map", "repos_to_setup_map"]
+    , ["@", "json", "", "json"]
+    ]
+  , "stage": ["src", "other_tools", "just_mr"]
+  , "private-ldflags":
+    { "type": "if"
+    , "cond": {"type": "var", "name": "BUILD_STATIC_BINARY"}
+    , "then": ["-static"]
+    }
+  }
+, "utils":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["utils"]
+  , "hdrs": ["utils.hpp"]
+  , "srcs": ["utils.cpp"]
+  , "deps":
+    [ ["src/utils/cpp", "tmp_dir"]
+    , ["src/buildtool/execution_api/local", "config"]
+    , ["src/buildtool/main", "constants"]
+    , ["src/buildtool/build_engine/expression", "expression"]
+    ]
+  , "stage": ["src", "other_tools", "just_mr"]
+  , "private-deps":
+    [["src/utils/cpp", "path"], ["src/buildtool/execution_api/local", "local"]]
+  }
+, "exit_codes":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["exit_codes"]
+  , "hdrs": ["exit_codes.hpp"]
+  , "stage": ["src", "other_tools", "just_mr"]
+  }
+, "cli":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["cli"]
+  , "hdrs": ["cli.hpp"]
+  , "deps":
+    [ ["@", "cli11", "", "cli11"]
+    , ["@", "fmt", "", "fmt"]
+    , ["@", "gsl-lite", "", "gsl-lite"]
+    , ["@", "json", "", "json"]
+    , ["src/buildtool/execution_api/local", "config"]
+    , ["src/other_tools/just_mr", "utils"]
+    , ["src/buildtool/logging", "log_level"]
+    ]
+  , "stage": ["src", "other_tools", "just_mr"]
+  , "private-deps": [["src/buildtool/logging", "logging"]]
+  }
+}

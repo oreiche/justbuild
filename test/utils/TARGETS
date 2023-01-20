@@ -26,7 +26,11 @@
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["test_env"]
   , "hdrs": ["test_env.hpp"]
-  , "deps": ["log_config", ["src/buildtool/compatibility", "compatibility"]]
+  , "deps":
+    [ "log_config"
+    , ["src/buildtool/compatibility", "compatibility"]
+    , ["src/buildtool/auth", "auth"]
+    ]
   , "stage": ["test", "utils"]
   }
 , "local_hermeticity":
@@ -53,6 +57,11 @@
     , "test_env"
     ]
   , "stage": ["test", "utils"]
+  }
+, "test_utils_install":
+  { "type": "install"
+  , "tainted": ["test"]
+  , "files": {"utils/run_test_server.py": ["test/utils", "run_test_server.py"]}
   }
 , "TESTS":
   { "type": "install"

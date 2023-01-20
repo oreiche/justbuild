@@ -2,7 +2,11 @@
   { "type": ["@", "rules", "shell/test", "script"]
   , "name": ["target-cache-hit"]
   , "test": ["target-cache-hit.sh"]
-  , "deps": [["test/end-to-end", "tool-under-test"], ["", "bin/just-mr.py"]]
+  , "deps":
+    [ ["test/end-to-end", "tool-under-test"]
+    , ["test/end-to-end", "mr-tool-under-test"]
+    , ["@", "credentials", "", ""]
+    ]
   }
 , "artifacts-sync":
   { "type": ["@", "rules", "shell/test", "script"]
@@ -13,6 +17,7 @@
     , ["./", "test-data-artifacts-sync", "greetlib"]
     , ["./", "test-data-artifacts-sync", "pydicts"]
     , "bootstrap-src-staged"
+    , ["@", "credentials", "", ""]
     ]
   }
 , "bootstrap-src-staged":

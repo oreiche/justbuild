@@ -31,10 +31,12 @@
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/main/analyse.hpp"
+#include "src/buildtool/main/constants.hpp"
 #include "src/buildtool/main/describe.hpp"
 #include "src/buildtool/main/exit_codes.hpp"
 #include "src/buildtool/main/install_cas.hpp"
 #ifndef BOOTSTRAP_BUILD_TOOL
+#include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/graph_traverser/graph_traverser.hpp"
 #include "src/buildtool/progress_reporting/base_progress_reporter.hpp"
 #endif
@@ -77,6 +79,7 @@ struct CommandLineArguments {
     RebuildArguments rebuild;
     FetchArguments fetch;
     GraphArguments graph;
+    AuthArguments auth;
 };
 
 /// \brief Setup arguments for sub command "just describe".
@@ -109,6 +112,7 @@ auto SetupBuildCommandArguments(
     SetupLogArguments(app, &clargs->log);
     SetupAnalysisArguments(app, &clargs->analysis);
     SetupEndpointArguments(app, &clargs->endpoint);
+    SetupAuthArguments(app, &clargs->auth);
     SetupBuildArguments(app, &clargs->build);
     SetupCompatibilityArguments(app);
 }
@@ -135,6 +139,7 @@ auto SetupInstallCasCommandArguments(
     gsl::not_null<CommandLineArguments*> const& clargs) {
     SetupCompatibilityArguments(app);
     SetupEndpointArguments(app, &clargs->endpoint);
+    SetupAuthArguments(app, &clargs->auth);
     SetupFetchArguments(app, &clargs->fetch);
     SetupLogArguments(app, &clargs->log);
 }
@@ -146,6 +151,7 @@ auto SetupTraverseCommandArguments(
     SetupCommonArguments(app, &clargs->common);
     SetupLogArguments(app, &clargs->log);
     SetupEndpointArguments(app, &clargs->endpoint);
+    SetupAuthArguments(app, &clargs->auth);
     SetupGraphArguments(app, &clargs->graph);  // instead of analysis
     SetupBuildArguments(app, &clargs->build);
     SetupStageArguments(app, &clargs->stage);
@@ -238,6 +244,7 @@ void SetupLogging(LogArguments const& clargs) {
 
 #ifndef BOOTSTRAP_BUILD_TOOL
 void SetupExecutionConfig(EndpointArguments const& eargs,
+                          AuthArguments const& authargs,
                           BuildArguments const& bargs,
                           RebuildArguments const& rargs) {
     using LocalConfig = LocalExecutionConfig;
@@ -272,6 +279,39 @@ void SetupExecutionConfig(EndpointArguments const& eargs,
             Logger::Log(LogLevel::Error,
                         "setting cache endpoint address '{}' failed.",
                         *rargs.cache_endpoint);
+            std::exit(kExitFailure);
+        }
+    }
+    auto use_tls = false;
+    if (authargs.tls_ca_cert) {
+        use_tls = true;
+        if (not Auth::TLS::SetCACertificate(*authargs.tls_ca_cert)) {
+            Logger::Log(LogLevel::Error,
+                        "Could not read '{}' certificate.",
+                        authargs.tls_ca_cert->string());
+            std::exit(kExitFailure);
+        }
+    }
+    if (authargs.tls_client_cert) {
+        use_tls = true;
+        if (not Auth::TLS::SetClientCertificate(*authargs.tls_client_cert)) {
+            Logger::Log(LogLevel::Error,
+                        "Could not read '{}' certificate.",
+                        authargs.tls_client_cert->string());
+            std::exit(kExitFailure);
+        }
+    }
+    if (authargs.tls_client_key) {
+        use_tls = true;
+        if (not Auth::TLS::SetClientKey(*authargs.tls_client_key)) {
+            Logger::Log(LogLevel::Error,
+                        "Could not read '{}' key.",
+                        authargs.tls_client_key->string());
+            std::exit(kExitFailure);
+        }
+    }
+    if (use_tls) {
+        if (not Auth::TLS::Validate()) {
             std::exit(kExitFailure);
         }
     }
@@ -440,8 +480,7 @@ void SetupHashFunction() {
     auto cwd = std::filesystem::current_path();
     auto root = cwd.root_path();
     cwd = std::filesystem::relative(cwd, root);
-    auto root_dir =
-        FindRoot(cwd, FileRoot{root}, {"ROOT", "WORKSPACE", ".git"});
+    auto root_dir = FindRoot(cwd, FileRoot{root}, kRootMarkers);
     if (not root_dir) {
         Logger::Log(LogLevel::Error, "Could not determine workspace root.");
         std::exit(kExitFailure);
@@ -787,7 +826,8 @@ void DumpTrees(std::string const& file_path, AnalysisResult const& result) {
 }
 
 void DumpTargets(std::string const& file_path,
-                 std::vector<Target::ConfiguredTarget> const& target_ids) {
+                 std::vector<Target::ConfiguredTarget> const& target_ids,
+                 std::string const& target_qualifier = "") {
     auto repo_map = nlohmann::json::object();
     auto conf_list =
         [&repo_map](Base::EntityName const& ref) -> nlohmann::json& {
@@ -813,12 +853,14 @@ void DumpTargets(std::string const& file_path,
         });
     auto const dump_string = IndentListsOnlyUntilDepth(repo_map, 2);
     if (file_path == "-") {
-        Logger::Log(LogLevel::Info, "List of analysed targets:");
+        Logger::Log(
+            LogLevel::Info, "List of analysed {}targets:", target_qualifier);
         std::cout << dump_string << std::endl;
     }
     else {
         Logger::Log(LogLevel::Info,
-                    "Dumping list of analysed targets to file '{}'.",
+                    "Dumping list of analysed {}targets to file '{}'.",
+                    target_qualifier,
                     file_path);
         std::ofstream os(file_path);
         os << dump_string << std::endl;
@@ -940,6 +982,10 @@ void DumpNodes(std::string const& file_path, AnalysisResult const& result) {
     }
     if (clargs.dump_targets) {
         DumpTargets(*clargs.dump_targets, result_map.ConfiguredTargets());
+    }
+    if (clargs.dump_export_targets) {
+        DumpTargets(
+            *clargs.dump_export_targets, result_map.ExportTargets(), "export ");
     }
     if (clargs.dump_targets_graph) {
         auto graph = result_map.ConfiguredTargetsGraph().dump(2);
@@ -1090,8 +1136,10 @@ auto main(int argc, char* argv[]) -> int {
         }
 #ifndef BOOTSTRAP_BUILD_TOOL
         SetupHashFunction();
-        SetupExecutionConfig(
-            arguments.endpoint, arguments.build, arguments.rebuild);
+        SetupExecutionConfig(arguments.endpoint,
+                             arguments.auth,
+                             arguments.build,
+                             arguments.rebuild);
 #endif
 
         auto jobs = arguments.build.build_jobs > 0 ? arguments.build.build_jobs
