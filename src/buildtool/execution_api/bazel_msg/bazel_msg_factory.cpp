@@ -491,11 +491,15 @@ auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
 
     auto dir_reader = [&files, &dirs, &root, &store_file, &store_dir](
                           auto name, auto type) {
+        const auto full_name = root / name;
         if (IsTreeObject(type)) {
             // create and store sub directory
             auto digest = CreateDirectoryDigestFromLocalTree(
                 root / name, store_file, store_dir);
             if (not digest) {
+                Logger::Log(LogLevel::Error,
+                            "failed storing tree {}",
+                            full_name.string());
                 return false;
             }
 
@@ -508,16 +512,15 @@ auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
 
         // create and store file
         try {
-            const auto full_name = root / name;
-            const bool is_executable =
-                FileSystemManager::IsExecutable(full_name, true);
-            if (auto digest = store_file(full_name, is_executable)) {
+            if (auto digest = store_file(full_name, IsExecutableObject(type))) {
                 auto file = CreateFileNode(name.string(), type, {});
                 file.set_allocated_digest(gsl::owner<bazel_re::Digest*>{
                     new bazel_re::Digest{std::move(*digest)}});
                 files.emplace_back(std::move(file));
                 return true;
             }
+            Logger::Log(
+                LogLevel::Error, "failed storing file {}", full_name.string());
         } catch (std::exception const& ex) {
             Logger::Log(
                 LogLevel::Error, "storing file failed with:\n{}", ex.what());
@@ -551,10 +554,11 @@ auto BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
     GitRepo::tree_entries_t entries{};
     auto dir_reader = [&entries, &root, &store_file, &store_tree](auto name,
                                                                   auto type) {
+        const auto full_name = root / name;
         if (IsTreeObject(type)) {
             // create and store sub directory
             if (auto digest = CreateGitTreeDigestFromLocalTree(
-                    root / name, store_file, store_tree)) {
+                    full_name, store_file, store_tree)) {
                 if (auto raw_id = FromHexString(
                         NativeSupport::Unprefix(digest->hash()))) {
                     entries[std::move(*raw_id)].emplace_back(name.string(),
@@ -562,24 +566,23 @@ auto BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
                     return true;
                 }
             }
+            Logger::Log(
+                LogLevel::Error, "failed storing tree {}", full_name.string());
             return false;
         }
 
         // create and store file
         try {
-            const auto full_name = root / name;
-            const bool is_executable =
-                FileSystemManager::IsExecutable(full_name, true);
-            if (auto digest = store_file(full_name, is_executable)) {
+            if (auto digest = store_file(full_name, IsExecutableObject(type))) {
                 if (auto raw_id = FromHexString(
                         NativeSupport::Unprefix(digest->hash()))) {
-                    entries[std::move(*raw_id)].emplace_back(
-                        name.string(),
-                        is_executable ? ObjectType::Executable
-                                      : ObjectType::File);
+                    entries[std::move(*raw_id)].emplace_back(name.string(),
+                                                             type);
                     return true;
                 }
             }
+            Logger::Log(
+                LogLevel::Error, "failed storing file {}", full_name.string());
         } catch (std::exception const& ex) {
             Logger::Log(
                 LogLevel::Error, "storing file failed with:\n{}", ex.what());

@@ -138,31 +138,22 @@ class GitRepo {
     [[nodiscard]] auto GetHeadCommit(anon_logger_ptr const& logger) noexcept
         -> std::optional<std::string>;
 
-    /// \brief Get the local refname of a given branch.
-    /// Only possible with real repository and thus non-thread-safe.
-    /// Returns the refname as a string, or nullopt if failure.
-    /// It guarantees the logger is called exactly once with fatal if failure.
-    [[nodiscard]] auto GetBranchLocalRefname(
-        std::string const& branch,
-        anon_logger_ptr const& logger) noexcept -> std::optional<std::string>;
-
-    /// \brief Retrieve commit hash from remote branch given its refname.
+    /// \brief Retrieve commit hash from remote branch given its name.
     /// Only possible with real repository and thus non-thread-safe.
     /// Returns the retrieved commit hash, or nullopt if failure.
     /// It guarantees the logger is called exactly once with fatal if failure.
     [[nodiscard]] auto GetCommitFromRemote(
         std::string const& repo_url,
-        std::string const& branch_refname_local,
+        std::string const& branch,
         anon_logger_ptr const& logger) noexcept -> std::optional<std::string>;
 
-    /// \brief Fetch from given remote using refspec (usually for a branch).
+    /// \brief Fetch from given remote. It can either fetch a given named
+    /// branch, or it can fetch with base refspecs.
     /// Only possible with real repository and thus non-thread-safe.
-    /// If the refspec string in empty, performs a fetch of all branches with
-    /// default refspecs.
     /// Returns a success flag.
     /// It guarantees the logger is called exactly once with fatal if failure.
     [[nodiscard]] auto FetchFromRemote(std::string const& repo_url,
-                                       std::string const& refspec,
+                                       std::optional<std::string> const& branch,
                                        anon_logger_ptr const& logger) noexcept
         -> bool;
 
@@ -207,7 +198,7 @@ class GitRepo {
     /// \brief Get commit from remote via a temporary repository.
     /// Calling it from a fake repository allows thread-safe use.
     /// Creates a temporary real repository at the given location and uses it to
-    /// retrieve from the remote the commit of a branch given its refname.
+    /// retrieve from the remote the commit of a branch given its name.
     /// Caller needs to make sure the temporary directory exists and that the
     /// given path is thread- and process-safe!
     /// Returns the commit hash, as a string, or nullopt if failure.
@@ -215,7 +206,7 @@ class GitRepo {
     [[nodiscard]] auto UpdateCommitViaTmpRepo(
         std::filesystem::path const& tmp_repo_path,
         std::string const& repo_url,
-        std::string const& branch_refname,
+        std::string const& branch,
         anon_logger_ptr const& logger) const noexcept
         -> std::optional<std::string>;
 
@@ -225,13 +216,13 @@ class GitRepo {
     /// custom backend to redirect the fetched objects into the desired odb.
     /// Caller needs to make sure the temporary directory exists and that the
     /// given path is thread- and process-safe!
-    /// Uses either a given branch refspec, or fetches all (if refspec empty).
+    /// Uses either a given branch, or fetches using base refspecs.
     /// Returns a success flag.
     /// It guarantees the logger is called exactly once with fatal if failure.
     [[nodiscard]] auto FetchViaTmpRepo(
         std::filesystem::path const& tmp_repo_path,
         std::string const& repo_url,
-        std::string const& refspec,
+        std::optional<std::string> const& branch,
         anon_logger_ptr const& logger) noexcept -> bool;
 
     /// \brief Try to retrieve the root of the repository containing the

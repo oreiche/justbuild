@@ -23,6 +23,7 @@ extern "C" {
 #include <git2/sys/odb_backend.h>
 }
 
+#ifndef BOOTSTRAP_BUILD_TOOL
 namespace {
 
 constexpr std::size_t kWaitTime{2};  // time in ms between tries for git locks
@@ -161,6 +162,7 @@ constexpr std::size_t kOIDHexSize{GIT_OID_HEXSZ};
             return 1;  // return >=0 on success, 1 == skip subtrees (flat)
         }
     }
+    Logger::Log(LogLevel::Error, "failed walk for git tree entry: {}", name);
     return -1;  // fail
 }
 
@@ -273,12 +275,8 @@ void backend_free(git_odb_backend* /*_backend*/) {}
     return b;
 }
 
-#ifndef BOOTSTRAP_BUILD_TOOL
-
 // A backend that can be used to read and create tree objects in-memory.
 auto const kInMemoryODBParent = CreateInMemoryODBParent();
-
-#endif  // BOOTSTRAP_BUILD_TOOL
 
 struct FetchIntoODBBackend {
     git_odb_backend parent;
@@ -319,14 +317,53 @@ void fetch_backend_free(git_odb_backend* /*_backend*/) {}
     return b;
 }
 
-#ifndef BOOTSTRAP_BUILD_TOOL
-
 // A backend that can be used to fetch from the remote of another repository.
 auto const kFetchIntoODBParent = CreateFetchIntoODBParent();
 
-#endif  // BOOTSTRAP_BUILD_TOOL
+// callback to enable SSL certificate check for remote fetch
+const auto certificate_check_cb = [](git_cert* /*cert*/,
+                                     int /*valid*/,
+                                     const char* /*host*/,
+                                     void* /*payload*/) -> int { return 1; };
+
+// callback to remote fetch without an SSL certificate check
+const auto certificate_passthrough_cb = [](git_cert* /*cert*/,
+                                           int /*valid*/,
+                                           const char* /*host*/,
+                                           void* /*payload*/) -> int {
+    return 0;
+};
+
+/// \brief Set a custom SSL certificate check callback to honor the existing Git
+/// configuration of a repository trying to connect to a remote.
+[[nodiscard]] auto SetCustomSSLCertificateCheckCallback(git_repository* repo)
+    -> git_transport_certificate_check_cb {
+    // check SSL verification settings, from most to least specific
+    std::optional<int> check_cert{std::nullopt};
+    // check gitconfig; ignore errors
+    git_config* cfg{nullptr};
+    int tmp{};
+    if (git_repository_config(&cfg, repo) == 0 and
+        git_config_get_bool(&tmp, cfg, "http.sslVerify") == 0) {
+        check_cert = tmp;
+    }
+    if (not check_cert) {
+        // check for GIT_SSL_NO_VERIFY environment variable
+        const char* ssl_no_verify_var{std::getenv("GIT_SSL_NO_VERIFY")};
+        if (ssl_no_verify_var != nullptr and
+            git_config_parse_bool(&tmp, ssl_no_verify_var) == 0) {
+            check_cert = tmp;
+        }
+    }
+    // cleanup memory
+    git_config_free(cfg);
+    // set callback
+    return (check_cert and check_cert.value() == 0) ? certificate_passthrough_cb
+                                                    : certificate_check_cb;
+}
 
 }  // namespace
+#endif  // BOOTSTRAP_BUILD_TOOL
 
 auto GitRepo::Open(GitCASPtr git_cas) noexcept -> std::optional<GitRepo> {
 #ifdef BOOTSTRAP_BUILD_TOOL
@@ -716,49 +753,8 @@ auto GitRepo::GetHeadCommit(anon_logger_ptr const& logger) noexcept
 #endif  // BOOTSTRAP_BUILD_TOOL
 }
 
-auto GitRepo::GetBranchLocalRefname(std::string const& branch,
-                                    anon_logger_ptr const& logger) noexcept
-    -> std::optional<std::string> {
-#ifdef BOOTSTRAP_BUILD_TOOL
-    return std::nullopt;
-#else
-    try {
-        // only possible for real repository!
-        if (IsRepoFake()) {
-            (*logger)("cannot retrieve branch refname using a fake repository!",
-                      true /*fatal*/);
-            return std::nullopt;
-        }
-        // get local reference of branch
-        git_reference* local_ref = nullptr;
-        if (git_branch_lookup(
-                &local_ref, repo_.get(), branch.c_str(), GIT_BRANCH_LOCAL) !=
-            0) {
-            (*logger)(fmt::format("retrieving branch {} local reference in git "
-                                  "repository {} failed with:\n{}",
-                                  branch,
-                                  GetGitCAS()->git_path_.string(),
-                                  GitLastError()),
-                      true /*fatal*/);
-            // release resources
-            git_reference_free(local_ref);
-            return std::nullopt;
-        }
-        auto refname = std::string(git_reference_name(local_ref));
-        // release resources
-        git_reference_free(local_ref);
-        return refname;
-    } catch (std::exception const& ex) {
-        Logger::Log(LogLevel::Error,
-                    "get branch local refname failed with:\n{}",
-                    ex.what());
-        return std::nullopt;
-    }
-#endif  // BOOTSTRAP_BUILD_TOOL
-}
-
 auto GitRepo::GetCommitFromRemote(std::string const& repo_url,
-                                  std::string const& branch_refname_local,
+                                  std::string const& branch,
                                   anon_logger_ptr const& logger) noexcept
     -> std::optional<std::string> {
 #ifdef BOOTSTRAP_BUILD_TOOL
@@ -790,10 +786,21 @@ auto GitRepo::GetCommitFromRemote(std::string const& repo_url,
         // connect to remote
         git_remote_callbacks callbacks{};
         git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION);
+
+        // set custom SSL verification callback
+        callbacks.certificate_check =
+            SetCustomSSLCertificateCheckCallback(repo_.get());
+
+        git_proxy_options proxy_opts{};
+        git_proxy_options_init(&proxy_opts, GIT_PROXY_OPTIONS_VERSION);
+
+        // set the option to auto-detect proxy settings
+        proxy_opts.type = GIT_PROXY_AUTO;
+
         if (git_remote_connect(remote.get(),
                                GIT_DIRECTION_FETCH,
                                &callbacks,
-                               nullptr,
+                               &proxy_opts,
                                nullptr) != 0) {
             (*logger)(
                 fmt::format("connecting to remote {} for git repository {} "
@@ -818,21 +825,22 @@ auto GitRepo::GetCommitFromRemote(std::string const& repo_url,
         }
         // figure out what remote branch the local one is tracking
         for (size_t i = 0; i < refs_len; ++i) {
+            // by treating each read reference string as a path we can easily
+            // check for the branch name
             // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-            std::string ref_name{refs[i]->name};
-            if (ref_name == branch_refname_local) {
+            std::filesystem::path ref_name_as_path{refs[i]->name};
+            if (ref_name_as_path.filename() == branch) {
                 // branch found!
                 // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
                 std::string new_commit_hash{git_oid_tostr_s(&refs[i]->oid)};
                 return new_commit_hash;
             }
         }
-        (*logger)(
-            fmt::format("could not find branch with refname {} for remote {}",
-                        branch_refname_local,
-                        repo_url,
-                        GitLastError()),
-            true /*fatal*/);
+        (*logger)(fmt::format("could not find branch {} for remote {}",
+                              branch,
+                              repo_url,
+                              GitLastError()),
+                  true /*fatal*/);
         return std::nullopt;
     } catch (std::exception const& ex) {
         Logger::Log(LogLevel::Error,
@@ -844,7 +852,7 @@ auto GitRepo::GetCommitFromRemote(std::string const& repo_url,
 }
 
 auto GitRepo::FetchFromRemote(std::string const& repo_url,
-                              std::string const& refspec,
+                              std::optional<std::string> const& branch,
                               anon_logger_ptr const& logger) noexcept -> bool {
 #ifdef BOOTSTRAP_BUILD_TOOL
     return false;
@@ -870,29 +878,43 @@ auto GitRepo::FetchFromRemote(std::string const& repo_url,
             git_remote_free(remote_ptr);
             return false;
         }
+        // wrap remote object
         auto remote = std::unique_ptr<git_remote, decltype(&remote_closer)>(
             remote_ptr, remote_closer);
 
+        // define default fetch options
+        git_fetch_options fetch_opts{};
+        git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
+
+        // set the option to auto-detect proxy settings
+        fetch_opts.proxy_opts.type = GIT_PROXY_AUTO;
+
+        // set custom SSL verification callback
+        fetch_opts.callbacks.certificate_check =
+            SetCustomSSLCertificateCheckCallback(repo_.get());
+
+        // disable update of the FETCH_HEAD pointer
+        fetch_opts.update_fetchhead = 0;
+
         // setup fetch refspecs array
         git_strarray refspecs_array_obj{};
-        if (not refspec.empty()) {
-            PopulateStrarray(&refspecs_array_obj, {refspec});
+        if (branch) {
+            // make sure we check for tags as well
+            std::string tag = fmt::format("+refs/tags/{}", *branch);
+            std::string head = fmt::format("+refs/heads/{}", *branch);
+            PopulateStrarray(&refspecs_array_obj, {tag, head});
         }
         auto refspecs_array =
             std::unique_ptr<git_strarray, decltype(&strarray_deleter)>(
                 &refspecs_array_obj, strarray_deleter);
 
-        // do the fetch
-        git_fetch_options fetch_opts{};
-        git_fetch_init_options(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
-        if (git_remote_fetch(remote.get(),
-                             refspec.empty() ? nullptr : refspecs_array.get(),
-                             &fetch_opts,
-                             nullptr) != 0) {
+        if (git_remote_fetch(
+                remote.get(), refspecs_array.get(), &fetch_opts, nullptr) !=
+            0) {
             (*logger)(
-                fmt::format("fetch of refspec {} in git repository {} failed "
+                fmt::format("fetching{} in git repository {} failed "
                             "with:\n{}",
-                            refspec,
+                            branch ? fmt::format(" branch {}", *branch) : "",
                             GetGitCAS()->git_path_.string(),
                             GitLastError()),
                 true /*fatal*/);
@@ -1163,7 +1185,7 @@ auto GitRepo::CheckCommitExists(std::string const& commit,
 
 auto GitRepo::UpdateCommitViaTmpRepo(std::filesystem::path const& tmp_repo_path,
                                      std::string const& repo_url,
-                                     std::string const& branch_refname,
+                                     std::string const& branch,
                                      anon_logger_ptr const& logger)
     const noexcept -> std::optional<std::string> {
 #ifdef BOOTSTRAP_BUILD_TOOL
@@ -1188,8 +1210,7 @@ auto GitRepo::UpdateCommitViaTmpRepo(std::filesystem::path const& tmp_repo_path,
                                 msg),
                     fatal);
             });
-        return tmp_repo->GetCommitFromRemote(
-            repo_url, branch_refname, wrapped_logger);
+        return tmp_repo->GetCommitFromRemote(repo_url, branch, wrapped_logger);
     } catch (std::exception const& ex) {
         Logger::Log(LogLevel::Error,
                     "update commit via tmp repo failed with:\n{}",
@@ -1201,7 +1222,7 @@ auto GitRepo::UpdateCommitViaTmpRepo(std::filesystem::path const& tmp_repo_path,
 
 auto GitRepo::FetchViaTmpRepo(std::filesystem::path const& tmp_repo_path,
                               std::string const& repo_url,
-                              std::string const& refspec,
+                              std::optional<std::string> const& branch,
                               anon_logger_ptr const& logger) noexcept -> bool {
 #ifdef BOOTSTRAP_BUILD_TOOL
     return false;
@@ -1234,7 +1255,7 @@ auto GitRepo::FetchViaTmpRepo(std::filesystem::path const& tmp_repo_path,
                             "While doing branch fetch via tmp repo:\n{}", msg),
                         fatal);
                 });
-            return tmp_repo->FetchFromRemote(repo_url, refspec, wrapped_logger);
+            return tmp_repo->FetchFromRemote(repo_url, branch, wrapped_logger);
         }
         return false;
     } catch (std::exception const& ex) {

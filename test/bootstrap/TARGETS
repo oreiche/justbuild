@@ -6,7 +6,11 @@
     , {"type": "var", "name": "SUFFIX", "default": ""}
     ]
   , "test": ["test-bootstrap.sh"]
-  , "deps": [["", "bootstrap-src"], ["@", "just-distfiles", "", "distdir"]]
+  , "deps":
+    [ ["", "bootstrap-src"]
+    , ["@", "just-distfiles", "", "distdir"]
+    , "prune-config.py"
+    ]
   }
 , "bundled-test-debug":
   { "type": "configure"
@@ -17,6 +21,24 @@
     , "bindings":
       [ ["SUFFIX", "-debug"]
       , ["TEST_ENV", {"type": "singleton_map", "key": "DEBUG", "value": "YES"}]
+      ]
+    , "body": {"type": "env", "vars": ["TEST_ENV", "SUFFIX"]}
+    }
+  }
+, "bundled-test-gnu":
+  { "type": "configure"
+  , "tainted": ["test"]
+  , "target": "bundled-test"
+  , "config":
+    { "type": "let*"
+    , "bindings":
+      [ ["SUFFIX", "-gnu"]
+      , [ "TEST_ENV"
+        , { "type": "singleton_map"
+          , "key": "JUST_BUILD_CONF"
+          , "value": "{\"COMPILER_FAMILY\": \"gnu\", \"CC\": \"gcc\", \"CXX\": \"g++\"}"
+          }
+        ]
       ]
     , "body": {"type": "env", "vars": ["TEST_ENV", "SUFFIX"]}
     }
@@ -62,6 +84,7 @@
 , "TESTS":
   { "type": "install"
   , "tainted": ["test"]
-  , "deps": ["bundled-test", "bundled-test-debug", "prebuilt-test"]
+  , "deps":
+    ["bundled-test", "bundled-test-debug", "bundled-test-gnu", "prebuilt-test"]
   }
 }

@@ -25,11 +25,14 @@
 #include "src/buildtool/build_engine/expression/evaluator.hpp"
 #include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/build_engine/target_map/target_cache.hpp"
+#include "src/buildtool/build_engine/target_map/target_cache_entry.hpp"
+#include "src/buildtool/build_engine/target_map/target_cache_key.hpp"
 #include "src/buildtool/build_engine/target_map/target_map.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
 #include "src/buildtool/common/cli.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/execution_api/local/garbage_collector.hpp"
 #include "src/buildtool/main/analyse.hpp"
 #include "src/buildtool/main/constants.hpp"
 #include "src/buildtool/main/describe.hpp"
@@ -37,6 +40,7 @@
 #include "src/buildtool/main/install_cas.hpp"
 #ifndef BOOTSTRAP_BUILD_TOOL
 #include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/execution_api/local/garbage_collector.hpp"
 #include "src/buildtool/graph_traverser/graph_traverser.hpp"
 #include "src/buildtool/progress_reporting/base_progress_reporter.hpp"
 #endif
@@ -63,7 +67,8 @@ enum class SubCommand {
     kInstall,
     kRebuild,
     kInstallCas,
-    kTraverse
+    kTraverse,
+    kGc
 };
 
 struct CommandLineArguments {
@@ -99,6 +104,7 @@ auto SetupAnalyseCommandArguments(
     SetupCommonArguments(app, &clargs->common);
     SetupLogArguments(app, &clargs->log);
     SetupAnalysisArguments(app, &clargs->analysis);
+    SetupCacheArguments(app, &clargs->endpoint);
     SetupEndpointArguments(app, &clargs->endpoint);
     SetupDiagnosticArguments(app, &clargs->diagnose);
     SetupCompatibilityArguments(app);
@@ -111,6 +117,7 @@ auto SetupBuildCommandArguments(
     SetupCommonArguments(app, &clargs->common);
     SetupLogArguments(app, &clargs->log);
     SetupAnalysisArguments(app, &clargs->analysis);
+    SetupCacheArguments(app, &clargs->endpoint);
     SetupEndpointArguments(app, &clargs->endpoint);
     SetupAuthArguments(app, &clargs->auth);
     SetupBuildArguments(app, &clargs->build);
@@ -138,6 +145,7 @@ auto SetupInstallCasCommandArguments(
     gsl::not_null<CLI::App*> const& app,
     gsl::not_null<CommandLineArguments*> const& clargs) {
     SetupCompatibilityArguments(app);
+    SetupCacheArguments(app, &clargs->endpoint);
     SetupEndpointArguments(app, &clargs->endpoint);
     SetupAuthArguments(app, &clargs->auth);
     SetupFetchArguments(app, &clargs->fetch);
@@ -150,12 +158,20 @@ auto SetupTraverseCommandArguments(
     gsl::not_null<CommandLineArguments*> const& clargs) {
     SetupCommonArguments(app, &clargs->common);
     SetupLogArguments(app, &clargs->log);
+    SetupCacheArguments(app, &clargs->endpoint);
     SetupEndpointArguments(app, &clargs->endpoint);
     SetupAuthArguments(app, &clargs->auth);
     SetupGraphArguments(app, &clargs->graph);  // instead of analysis
     SetupBuildArguments(app, &clargs->build);
     SetupStageArguments(app, &clargs->stage);
     SetupCompatibilityArguments(app);
+}
+
+/// \brief Setup arguments for sub command "just gc".
+auto SetupGcCommandArguments(
+    gsl::not_null<CLI::App*> const& app,
+    gsl::not_null<CommandLineArguments*> const& clargs) {
+    SetupCacheArguments(app, &clargs->endpoint);
 }
 
 auto ParseCommandLineArguments(int argc, char const* const* argv)
@@ -176,6 +192,8 @@ auto ParseCommandLineArguments(int argc, char const* const* argv)
         "rebuild", "Rebuild and compare artifacts to cached build.");
     auto* cmd_install_cas =
         app.add_subcommand("install-cas", "Fetch and stage artifact from CAS.");
+    auto* cmd_gc =
+        app.add_subcommand("gc", "Trigger garbage collection of local cache.");
     auto* cmd_traverse =
         app.group("")  // group for creating hidden options
             ->add_subcommand("traverse",
@@ -190,6 +208,7 @@ auto ParseCommandLineArguments(int argc, char const* const* argv)
     SetupRebuildCommandArguments(cmd_rebuild, &clargs);
     SetupInstallCasCommandArguments(cmd_install_cas, &clargs);
     SetupTraverseCommandArguments(cmd_traverse, &clargs);
+    SetupGcCommandArguments(cmd_gc, &clargs);
 
     try {
         app.parse(argc, argv);
@@ -223,6 +242,9 @@ auto ParseCommandLineArguments(int argc, char const* const* argv)
     }
     else if (*cmd_traverse) {
         clargs.cmd = SubCommand::kTraverse;
+    }
+    else if (*cmd_gc) {
+        clargs.cmd = SubCommand::kGc;
     }
 
     return clargs;
@@ -1073,8 +1095,8 @@ void DumpArtifactsToBuild(
 }
 
 auto CollectNonKnownArtifacts(
-    std::unordered_map<TargetCache::Key, AnalysedTargetPtr> const&
-        cache_targets) -> std::vector<ArtifactDescription> {
+    std::unordered_map<TargetCacheKey, AnalysedTargetPtr> const& cache_targets)
+    -> std::vector<ArtifactDescription> {
     auto cache_artifacts = std::unordered_set<ArtifactDescription>{};
     for (auto const& [_, target] : cache_targets) {
         auto artifacts = target->ContainedNonKnownArtifacts();
@@ -1087,8 +1109,7 @@ auto CollectNonKnownArtifacts(
 
 #ifndef BOOTSTRAP_BUILD_TOOL
 void WriteTargetCacheEntries(
-    std::unordered_map<TargetCache::Key, AnalysedTargetPtr> const&
-        cache_targets,
+    std::unordered_map<TargetCacheKey, AnalysedTargetPtr> const& cache_targets,
     std::unordered_map<ArtifactDescription, Artifact::ObjectInfo> const&
         extra_infos,
     std::size_t jobs,
@@ -1100,7 +1121,7 @@ void WriteTargetCacheEntries(
     for (auto const& [key, target] : cache_targets) {
         ts.QueueTask([&key = key, &target = target, &extra_infos]() {
             if (auto entry =
-                    TargetCache::Entry::FromTarget(target, extra_infos)) {
+                    TargetCacheEntry::FromTarget(target, extra_infos)) {
                 if (not TargetCache::Instance().Store(key, *entry)) {
                     Logger::Log(LogLevel::Warning,
                                 "Failed writing target cache entry for {}",
@@ -1140,6 +1161,14 @@ auto main(int argc, char* argv[]) -> int {
                              arguments.auth,
                              arguments.build,
                              arguments.rebuild);
+
+        if (arguments.cmd == SubCommand::kGc) {
+            if (GarbageCollector::TriggerGarbageCollection()) {
+                return kExitSuccess;
+            }
+            return kExitFailure;
+        }
+
 #endif
 
         auto jobs = arguments.build.build_jobs > 0 ? arguments.build.build_jobs
@@ -1175,6 +1204,11 @@ auto main(int argc, char* argv[]) -> int {
             DetermineRoots(arguments.common, arguments.analysis);
 
 #ifndef BOOTSTRAP_BUILD_TOOL
+        auto lock = GarbageCollector::SharedLock();
+        if (not lock) {
+            return kExitFailure;
+        }
+
         if (arguments.cmd == SubCommand::kTraverse) {
             if (arguments.graph.git_cas) {
                 if (Compatibility::IsCompatible()) {

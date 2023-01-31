@@ -224,26 +224,22 @@ TEST_CASE("Single-threaded real repository remote operations", "[git_repo]") {
         auto repo_remote_ls_bare = GitRepo::Open(*path_remote_ls_bare);
         REQUIRE(repo_remote_ls_bare);
 
-        // get refname of branch
-        auto branch_refname =
-            repo_remote_ls_bare->GetBranchLocalRefname("master", logger);
-        REQUIRE(branch_refname);
-        REQUIRE(*branch_refname == "refs/heads/master");
         // remote ls
         auto remote_commit = repo_remote_ls_bare->GetCommitFromRemote(
-            *repo_path, *branch_refname, logger);
+            *repo_path, "master", logger);
         REQUIRE(remote_commit);
         CHECK(*remote_commit == kRootCommit);
     }
 
-    SECTION("Fetch all from remote") {
+    SECTION("Fetch with base refspecs from remote") {
         // make bare real repo to fetch into
         auto path_fetch_all_bare = TestUtils::CreateTestRepoWithCheckout();
         REQUIRE(path_fetch_all_bare);
         auto repo_fetch_all_bare = GitRepo::Open(*path_fetch_all_bare);
 
         // fetch
-        CHECK(repo_fetch_all_bare->FetchFromRemote(*repo_path, "", logger));
+        CHECK(repo_fetch_all_bare->FetchFromRemote(
+            *repo_path, std::nullopt, logger));
     }
 
     SECTION("Fetch branch from remote") {
@@ -253,15 +249,9 @@ TEST_CASE("Single-threaded real repository remote operations", "[git_repo]") {
         auto repo_fetch_branch_bare = GitRepo::Open(*path_fetch_branch_bare);
         REQUIRE(repo_fetch_branch_bare);
 
-        // get refspec of branch
-        auto branch_refname =
-            repo_fetch_branch_bare->GetBranchLocalRefname("master", logger);
-        REQUIRE(branch_refname);
-        auto branch_refspec = std::string("+") + *branch_refname;
-        REQUIRE(branch_refspec == "+refs/heads/master");
         // fetch
         CHECK(repo_fetch_branch_bare->FetchFromRemote(
-            *repo_path, branch_refspec, logger));
+            *repo_path, "master", logger));
     }
 }
 
@@ -432,9 +422,9 @@ TEST_CASE("Single-threaded fake repository operations", "[git_repo]") {
 
             // create path for tmp repo to use for fetch
             auto tmp_path_fetch_all = TestUtils::GetRepoPath();
-            // fetch all
+            // fetch with base refspecs
             REQUIRE(repo_fetch_all->FetchViaTmpRepo(
-                tmp_path_fetch_all, *repo_path, "", logger));
+                tmp_path_fetch_all, *repo_path, std::nullopt, logger));
 
             // check commit is there after fetch
             CHECK(*repo_fetch_all->CheckCommitExists(kRootCommit, logger));
@@ -454,11 +444,8 @@ TEST_CASE("Single-threaded fake repository operations", "[git_repo]") {
             // create path for tmp repo to use for fetch
             auto tmp_path_fetch_wRefspec = TestUtils::GetRepoPath();
             // fetch all
-            REQUIRE(
-                repo_fetch_wRefspec->FetchViaTmpRepo(tmp_path_fetch_wRefspec,
-                                                     *repo_path,
-                                                     "+refs/heads/master",
-                                                     logger));
+            REQUIRE(repo_fetch_wRefspec->FetchViaTmpRepo(
+                tmp_path_fetch_wRefspec, *repo_path, "master", logger));
 
             // check commit is there after fetch
             CHECK(*repo_fetch_wRefspec->CheckCommitExists(kRootCommit, logger));
@@ -475,7 +462,7 @@ TEST_CASE("Single-threaded fake repository operations", "[git_repo]") {
         auto tmp_path_commit_upd = TestUtils::GetRepoPath();
         // do remote ls
         auto fetched_commit = repo_commit_upd->UpdateCommitViaTmpRepo(
-            tmp_path_commit_upd, *repo_path, "refs/heads/master", logger);
+            tmp_path_commit_upd, *repo_path, "master", logger);
 
         REQUIRE(fetched_commit);
         CHECK(*fetched_commit == kRootCommit);
@@ -597,21 +584,22 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
                         case 1: {
                             // create path for tmp repo to use for fetch
                             auto tmp_path_fetch_all = TestUtils::GetRepoPath();
+                            // fetch with base refspecs
                             CHECK(
                                 target_repo->FetchViaTmpRepo(tmp_path_fetch_all,
                                                              *remote_repo_path,
-                                                             "",
+                                                             std::nullopt,
                                                              logger));
                         } break;
                         case 2: {
                             // create path for tmp repo to use for fetch
                             auto tmp_path_fetch_wRefspec =
                                 TestUtils::GetRepoPath();
-                            // fetch all
+                            // fetch specific branch
                             CHECK(target_repo->FetchViaTmpRepo(
                                 tmp_path_fetch_wRefspec,
                                 *remote_repo_path,
-                                "+refs/heads/master",
+                                "master",
                                 logger));
                         } break;
                         case 3: {
@@ -622,7 +610,7 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
                                 target_repo->UpdateCommitViaTmpRepo(
                                     tmp_path_commit_upd,
                                     *remote_repo_path,
-                                    "refs/heads/master",
+                                    "master",
                                     logger);
 
                             REQUIRE(fetched_commit);
