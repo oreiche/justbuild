@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "google/bytestream/bytestream.grpc.pb.h"
+#include "src/buildtool/execution_api/common/bytestream_common.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_client_common.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -122,7 +123,7 @@ class ByteStreamClient {
                 // writing from the returned `committed_size`.
                 auto const committed_size = QueryWriteStatus(resource_name);
                 if (committed_size <= 0) {
-                    logger_.Emit(LogLevel::Debug,
+                    logger_.Emit(LogLevel::Error,
                                  "broken stream for upload to resource name {}",
                                  resource_name);
                     return false;
@@ -134,7 +135,7 @@ class ByteStreamClient {
             }
         } while (pos < data.size());
         if (not writer->WritesDone()) {
-            logger_.Emit(LogLevel::Debug,
+            logger_.Emit(LogLevel::Error,
                          "broken stream for upload to resource name {}",
                          resource_name);
             return false;
@@ -142,7 +143,7 @@ class ByteStreamClient {
 
         auto status = writer->Finish();
         if (not status.ok()) {
-            LogStatus(&logger_, LogLevel::Debug, status);
+            LogStatus(&logger_, LogLevel::Error, status);
             return false;
         }
 
@@ -177,9 +178,6 @@ class ByteStreamClient {
     }
 
   private:
-    // Chunk size for uploads (default size used by BuildBarn)
-    constexpr static std::size_t kChunkSize = 64 * 1024;
-
     std::unique_ptr<google::bytestream::ByteStream::Stub> stub_;
     Logger logger_{"ByteStreamClient"};
 
