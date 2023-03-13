@@ -1,0 +1,50 @@
+{ "archive_usage":
+  { "type": ["@", "rules", "CC/test", "test"]
+  , "name": ["archive_usage"]
+  , "srcs": ["archive_usage.test.cpp"]
+  , "private-deps":
+    [ ["@", "catch2", "", "catch2"]
+    , ["test", "catch-main"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    , ["", "libarchive"]
+    , ["src/other_tools/utils", "archive_ops"]
+    ]
+  , "stage": ["test", "other_tools", "utils"]
+  }
+, "curl_usage_install":
+  { "type": ["@", "rules", "CC", "binary"]
+  , "tainted": ["test"]
+  , "name": ["curl_usage"]
+  , "srcs": ["curl_usage.test.cpp"]
+  , "private-deps":
+    [ ["@", "catch2", "", "catch2"]
+    , ["test", "catch-main"]
+    , ["src/other_tools/utils", "curl_context"]
+    , ["src/other_tools/utils", "curl_easy_handle"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    ]
+  , "stage": ["test", "other_tools", "utils"]
+  }
+, "curl_usage_test":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["curl_usage_test"]
+  , "test": ["curl_usage_test.sh"]
+  , "deps": [["test/utils", "test_utils_install"], "curl_usage_install"]
+  }
+, "curl_url":
+  { "type": ["@", "rules", "CC/test", "test"]
+  , "name": ["curl_url"]
+  , "srcs": ["curl_url.test.cpp"]
+  , "private-deps":
+    [ ["@", "catch2", "", "catch2"]
+    , ["test", "catch-main"]
+    , ["src/other_tools/utils", "curl_url_handle"]
+    ]
+  , "stage": ["test", "other_tools", "utils"]
+  }
+, "TESTS":
+  { "type": "install"
+  , "tainted": ["test"]
+  , "deps": ["archive_usage", "curl_usage_test", "curl_url"]
+  }
+}

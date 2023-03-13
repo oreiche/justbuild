@@ -31,7 +31,7 @@
     , "COMPILER_FAMILY":
       [ "The compiler family to use as (cross) toolchain."
       , ""
-      , "Supported values are \"unkonwn\" (the default), \"clang\", and \"gcc\"."
+      , "Supported values are \"unknown\" (the default), \"clang\", and \"gcc\"."
       , "The unknown compiler family tries to not make any assumptions on the"
       , "used C and C++ compilers and uses the generic \"cc\" and \"c++\" as"
       , "names for the respective compilers; typically used in conjunction with"
@@ -44,7 +44,7 @@
     , "BUILD_STATIC_BINARY":
       [ "Boolean, default false. If set, try to build a (mainly) static binary."
       ]
-    , "DEBUG": ["Boolean, default false. Wheter a to build a debug version."]
+    , "DEBUG": ["Boolean, default false. Whether to build a debug version."]
     , "OS":
       [ "Operating system to build for."
       , ""
@@ -178,13 +178,15 @@
     { "type": "let*"
     , "bindings":
       [ ["USE_SHA1", "OpenSSL"]
+      , ["USE_SHA256", "OpenSSL"]
       , ["USE_SSH", false]
       , ["USE_HTTPS", "OpenSSL"]
       , ["USE_GSSAPI", false]
       ]
     , "body":
       { "type": "env"
-      , "vars": ["USE_SHA1", "USE_SSH", "USE_HTTPS", "USE_GSSAPI"]
+      , "vars":
+        ["USE_SHA1", "USE_SHA256", "USE_SSH", "USE_HTTPS", "USE_GSSAPI"]
       }
     }
   }
@@ -219,7 +221,7 @@
       , ["ENABLE_LIBXML2", false]
       , ["ENABLE_EXPAT", false]
       , ["ENABLE_PCREPOSIX", false]
-      , ["ENABLE_LibGCC", false]
+      , ["ENABLE_LIBGCC", false]
       , ["ENABLE_CNG", false]
       , ["XATTR_PROVIDER", "gnu"]
       , ["ENABLE_ACL", false]
@@ -234,7 +236,7 @@
         , "ENABLE_LIBXML2"
         , "ENABLE_EXPAT"
         , "ENABLE_PCREPOSIX"
-        , "ENABLE_LibGCC"
+        , "ENABLE_LIBGCC"
         , "ENABLE_CNG"
         , "XATTR_PROVIDER"
         , "ENABLE_ACL"
@@ -262,7 +264,8 @@
     [ [["TREE", null, "bin"], "."]
     , [["TREE", null, "rules"], "."]
     , [["TREE", null, "etc"], "."]
-    , [["TREE", null, "src"], "."]
+    , [["TREE", null, "src/buildtool"], "."]
+    , [["TREE", null, "src/utils"], "."]
     ]
   }
 , "large-tests":

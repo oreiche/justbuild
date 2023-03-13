@@ -16,12 +16,12 @@
 #define EXECUTION_SERVER_HPP
 
 #include "build/bazel/remote/execution/v2/remote_execution.grpc.pb.h"
+#include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/execution_api/local/local_api.hpp"
-#include "src/buildtool/execution_api/local/local_storage.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/storage.hpp"
 
-class ExecutionServiceImpl final
-    : public build::bazel::remote::execution::v2::Execution::Service {
+class ExecutionServiceImpl final : public bazel_re::Execution::Service {
   public:
     ExecutionServiceImpl() = default;
     // Execute an action remotely.
@@ -88,10 +88,9 @@ class ExecutionServiceImpl final
     // where, for each requested blob not present in the CAS, there is a
     // `Violation` with a `type` of `MISSING` and a `subject` of
     // `"blobs/{hash}/{size}"` indicating the digest of the missing blob.
-    auto Execute(
-        ::grpc::ServerContext* context,
-        const ::build::bazel::remote::execution::v2::ExecuteRequest* request,
-        ::grpc::ServerWriter< ::google::longrunning::Operation>* writer)
+    auto Execute(::grpc::ServerContext* context,
+                 const ::bazel_re::ExecuteRequest* request,
+                 ::grpc::ServerWriter<::google::longrunning::Operation>* writer)
         -> ::grpc::Status override;
 
     // Wait for an execution operation to complete. When the client initially
@@ -103,15 +102,45 @@ class ExecutionServiceImpl final
     // execution.
     auto WaitExecution(
         ::grpc::ServerContext* context,
-        const ::build::bazel::remote::execution::v2::WaitExecutionRequest*
-            request,
-        ::grpc::ServerWriter< ::google::longrunning::Operation>* writer)
+        const ::bazel_re::WaitExecutionRequest* request,
+        ::grpc::ServerWriter<::google::longrunning::Operation>* writer)
         -> ::grpc::Status override;
 
   private:
-    LocalStorage storage_{};
+    gsl::not_null<Storage const*> storage_ = &Storage::Instance();
     IExecutionApi::Ptr api_{new LocalApi()};
     Logger logger_{"execution-service"};
+
+    [[nodiscard]] auto GetAction(::bazel_re::ExecuteRequest const* request)
+        const noexcept -> std::pair<std::optional<::bazel_re::Action>,
+                                    std::optional<std::string>>;
+    [[nodiscard]] auto GetCommand(::bazel_re::Action const& action)
+        const noexcept -> std::pair<std::optional<::bazel_re::Command>,
+                                    std::optional<std::string>>;
+
+    [[nodiscard]] auto GetIExecutionAction(
+        ::bazel_re::ExecuteRequest const* request,
+        ::bazel_re::Action const& action) const
+        -> std::pair<std::optional<IExecutionAction::Ptr>,
+                     std::optional<std::string>>;
+
+    [[nodiscard]] auto GetResponse(
+        ::bazel_re::ExecuteRequest const* request,
+        IExecutionResponse::Ptr const& i_execution_response) const noexcept
+        -> std::pair<std::optional<::bazel_re::ExecuteResponse>,
+                     std::optional<std::string>>;
+
+    [[nodiscard]] auto StoreActionResult(
+        ::bazel_re::ExecuteRequest const* request,
+        IExecutionResponse::Ptr const& i_execution_response,
+        ::bazel_re::ExecuteResponse const& execute_response,
+        ::bazel_re::Action const& action) const noexcept
+        -> std::optional<std::string>;
+
+    [[nodiscard]] auto AddResult(
+        ::bazel_re::ExecuteResponse* response,
+        IExecutionResponse::Ptr const& i_execution_response,
+        std::string const& hash) const noexcept -> std::optional<std::string>;
 };
 
 #endif

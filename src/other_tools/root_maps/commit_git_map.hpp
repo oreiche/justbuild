@@ -28,6 +28,8 @@ struct GitRepoInfo {
     std::string repo_url{};
     std::string branch{};
     std::string subdir{}; /* key */
+    // name of repository for which work is done; used in progress reporting
+    std::string origin{};
 
     [[nodiscard]] auto operator==(const GitRepoInfo& other) const -> bool {
         return hash == other.hash and subdir == other.subdir;
@@ -54,13 +56,5 @@ using CommitGitMap = AsyncMapConsumer<GitRepoInfo, nlohmann::json>;
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     JustMR::PathsPtr const& just_mr_paths,
     std::size_t jobs) -> CommitGitMap;
-
-void EnsureCommit(GitRepoInfo const& repo_info,
-                  std::filesystem::path const& repo_root,
-                  GitCASPtr const& git_cas,
-                  gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
-                  gsl::not_null<TaskSystem*> const& ts,
-                  CommitGitMap::SetterPtr const& ws_setter,
-                  CommitGitMap::LoggerPtr const& logger);
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_ROOT_MAPS_COMMIT_GIT_MAP_HPP

@@ -15,17 +15,21 @@
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
 
 #include "src/buildtool/crypto/hasher.hpp"
-#include "src/buildtool/execution_api/local/local_cas.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
-#include "src/utils/cpp/curl_easy_handle.hpp"
+#include "src/buildtool/storage/storage.hpp"
+#include "src/other_tools/just_mr/progress_reporting/progress.hpp"
+#include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
+#include "src/other_tools/utils/curl_easy_handle.hpp"
 
 namespace {
 
 /// \brief Fetches a file from the internet and stores its content in memory.
 /// Returns the content.
-[[nodiscard]] auto NetworkFetch(std::string const& fetch_url) noexcept
+[[nodiscard]] auto NetworkFetch(std::string const& fetch_url,
+                                JustMR::CAInfoPtr const& ca_info) noexcept
     -> std::optional<std::string> {
-    auto curl_handle = CurlEasyHandle::Create();
+    auto curl_handle =
+        CurlEasyHandle::Create(ca_info->no_ssl_verify, ca_info->ca_bundle);
     if (not curl_handle) {
         return std::nullopt;
     }
@@ -44,16 +48,22 @@ template <Hasher::HashType type>
 }  // namespace
 
 auto CreateContentCASMap(JustMR::PathsPtr const& just_mr_paths,
+                         JustMR::CAInfoPtr const& ca_info,
                          std::size_t jobs) -> ContentCASMap {
-    auto ensure_in_cas = [just_mr_paths](auto /*unused*/,
-                                         auto setter,
-                                         auto logger,
-                                         auto /*unused*/,
-                                         auto const& key) {
+    auto ensure_in_cas = [just_mr_paths, ca_info](auto /*unused*/,
+                                                  auto setter,
+                                                  auto logger,
+                                                  auto /*unused*/,
+                                                  auto const& key) {
+        // start work reporting, but only if part of a distdir
+        if (key.origin_from_distdir) {
+            JustMRProgress::Instance().TaskTracker().Start(key.origin);
+            JustMRStatistics::Instance().IncrementQueuedCounter();
+        }
         // check if content already in CAS
-        auto const& casf = LocalCAS<ObjectType::File>::Instance();
+        auto const& cas = Storage::Instance().CAS();
         auto digest = ArtifactDigest(key.content, 0, false);
-        if (casf.BlobPath(digest)) {
+        if (cas.BlobPath(digest, /*is_executable=*/false)) {
             (*setter)(true);
             return;
         }
@@ -64,7 +74,7 @@ auto CreateContentCASMap(JustMR::PathsPtr const& just_mr_paths,
                  : std::filesystem::path(key.fetch_url).filename().string());
         JustMR::Utils::AddDistfileToCAS(repo_distfile, just_mr_paths);
         // check if content is in CAS now
-        if (casf.BlobPath(digest)) {
+        if (cas.BlobPath(digest, /*is_executable=*/false)) {
             (*setter)(true);
             return;
         }
@@ -76,7 +86,7 @@ auto CreateContentCASMap(JustMR::PathsPtr const& just_mr_paths,
             return;
         }
         // now do the actual fetch
-        auto data = NetworkFetch(key.fetch_url);
+        auto data = NetworkFetch(key.fetch_url, ca_info);
         if (data == std::nullopt) {
             (*logger)(fmt::format("Failed to fetch a file with id {} from {}",
                                   key.content,
@@ -122,6 +132,11 @@ auto CreateContentCASMap(JustMR::PathsPtr const& just_mr_paths,
             return;
         }
         (*setter)(true);
+        // report work done, but only if part of a distdir
+        if (key.origin_from_distdir) {
+            JustMRProgress::Instance().TaskTracker().Stop(key.origin);
+            JustMRStatistics::Instance().IncrementExecutedCounter();
+        }
     };
     return AsyncMapConsumer<ArchiveContent, bool>(ensure_in_cas, jobs);
 }

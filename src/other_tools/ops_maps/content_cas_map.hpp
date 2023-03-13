@@ -28,6 +28,10 @@ struct ArchiveContent {
     std::string fetch_url;
     std::optional<std::string> sha256;
     std::optional<std::string> sha512;
+    // name of repository for which work is done; used in progress reporting
+    std::string origin;
+    // flag deciding whether progress reporting is needed for key
+    bool origin_from_distdir;
 
     [[nodiscard]] auto operator==(const ArchiveContent& other) const -> bool {
         return content == other.content;
@@ -49,6 +53,7 @@ struct ArchiveRepoInfo {
 using ContentCASMap = AsyncMapConsumer<ArchiveContent, bool>;
 
 [[nodiscard]] auto CreateContentCASMap(JustMR::PathsPtr const& just_mr_paths,
+                                       JustMR::CAInfoPtr const& ca_info,
                                        std::size_t jobs) -> ContentCASMap;
 
 namespace std {

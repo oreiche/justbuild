@@ -83,6 +83,7 @@ SRCDIR = os.getcwd()
 WRKDIR = None
 DISTDIR = []
 LOCALBASE = "/"
+NON_LOCAL_DEPS = []
 
 # other global variables
 
@@ -185,7 +186,11 @@ def config_to_local(*, repos_file, link_targets_file):
     with open(repos_file) as f:
         repos = json.load(f)
     global_link_dirs = set()
+    changed_file_roots = {}
+    backup_layers = {}
     for repo in repos["repositories"]:
+        if repo in NON_LOCAL_DEPS:
+            continue
         desc = repos["repositories"][repo]
         repo_desc = desc.get("repository")
         if not isinstance(repo_desc, dict):
@@ -211,6 +216,14 @@ def config_to_local(*, repos_file, link_targets_file):
                 del desc["local_bootstrap"]
         if repo_desc.get("type") == "file":
             local_bootstrap = desc.get("local_bootstrap", {})
+            if local_bootstrap.get("local_path") and NON_LOCAL_DEPS:
+                # local layer gets changed, keep a copy
+                backup_name = "ORIGINAL: " + repo
+                backup_layers[backup_name] = {
+                    "repository": {"type": "file",
+                                   "path": repo_desc.get("path")
+                                   }}
+                changed_file_roots[repo] = backup_name
             desc["repository"] = {
                 "type": "file",
                 "path": local_bootstrap.get("local_path", desc["repository"].get("path"))
@@ -218,6 +231,17 @@ def config_to_local(*, repos_file, link_targets_file):
             desc["bootstrap"] = local_bootstrap
             if "local_bootstrap" in desc:
                 del desc["local_bootstrap"]
+
+    # For repos that we didn't change to local, make file roots point
+    # to the original version, so that, in particular, the original
+    # target root will be used.
+    for repo in NON_LOCAL_DEPS:
+        for layer in ["target_root", "rule_root", "expression_root"]:
+            layer_ref = repos["repositories"][repo].get(layer)
+            if layer_ref in changed_file_roots:
+                repos["repositories"][repo][layer] = changed_file_roots[layer_ref]
+
+    repos["repositories"] = dict(repos["repositories"], **backup_layers)
 
     print("just-mr config rewritten to local:\n%s\n"
           % (json.dumps(repos, indent=2)))
@@ -248,6 +272,30 @@ def prune_config(*, repos_file, empty_dir):
     with open(repos_file, "w") as f:
         json.dump(repos, f, indent=2)
 
+def copy_roots(*, repos_file, copy_dir):
+    with open(repos_file) as f:
+        repos = json.load(f)
+    for repo in repos["repositories"]:
+        desc = repos["repositories"][repo]
+        to_copy = desc.get("bootstrap", {}).get("copy")
+        if to_copy:
+            old_root = desc["repository"]["path"]
+            new_root = os.path.join(copy_dir, repo)
+            for x in to_copy:
+                src = os.path.join(old_root, x)
+                dst = os.path.join(new_root, x)
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst,
+                                     symlinks=False, dirs_exist_ok=True)
+                elif os.path.isfile(src):
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copyfile(src, dst, follow_symlinks=True)
+                    shutil.copymode(src, dst, follow_symlinks=True)
+            desc["repository"]["path"] = new_root
+    os.unlink(repos_file)
+    with open(repos_file, "w") as f:
+        json.dump(repos, f, indent=2)
+
 def bootstrap():
     if LOCAL_DEPS:
         print("Bootstrap build in %r from sources %r against LOCALBASE %r"
@@ -266,6 +314,8 @@ def bootstrap():
     empty_dir = os.path.join(WRKDIR, "empty_directory")
     os.makedirs(empty_dir)
     prune_config(repos_file=os.path.join(src_wrkdir, REPOS), empty_dir=empty_dir)
+    copy_dir = os.path.join(WRKDIR, "copied_roots")
+    copy_roots(repos_file=os.path.join(src_wrkdir, REPOS), copy_dir=copy_dir)
     dep_flags = setup_deps(src_wrkdir)
     # handle proto
     flags = ["-I", src_wrkdir] + dep_flags["include"] + ["-I", os.path.join(LOCALBASE, "include")]
@@ -331,6 +381,7 @@ def main(args):
     global DISTDIR
     global LOCAL_DEPS
     global LOCALBASE
+    global NON_LOCAL_DEPS
     if len(args) > 1:
         SRCDIR = os.path.abspath(args[1])
     if len(args) > 2:
@@ -345,6 +396,7 @@ def main(args):
 
     LOCAL_DEPS = "PACKAGE" in os.environ
     LOCALBASE = os.environ.get("LOCALBASE", "/")
+    NON_LOCAL_DEPS = json.loads(os.environ.get("NON_LOCAL_DEPS", "[]"))
     bootstrap()
 
 

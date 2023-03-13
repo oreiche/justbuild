@@ -81,10 +81,32 @@
   , "test": ["test-bootstrap-prebuilt.sh"]
   , "deps": ["distro-bootstrap-deps", "staged-sources"]
   }
+, "mixed-test":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["bootstrap-test-mixed"]
+  , "test": ["test-mixed-bootstrap.sh"]
+  , "deps":
+    [ "distro-bootstrap-deps"
+    , "staged-sources"
+    , ["@", "just-distfiles", "", "distdir"]
+    ]
+  }
+, "symlink-test":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["bootstrap-test-symlink"]
+  , "test": ["test-symlink-bootstrap.sh"]
+  , "deps": ["distro-bootstrap-deps", "staged-sources"]
+  }
 , "TESTS":
   { "type": "install"
   , "tainted": ["test"]
   , "deps":
-    ["bundled-test", "bundled-test-debug", "bundled-test-gnu", "prebuilt-test"]
+    [ "bundled-test"
+    , "bundled-test-debug"
+    , "bundled-test-gnu"
+    , "prebuilt-test"
+    , "mixed-test"
+    , "symlink-test"
+    ]
   }
 }

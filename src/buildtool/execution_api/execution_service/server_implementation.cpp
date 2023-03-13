@@ -23,11 +23,13 @@
 #include "grpcpp/grpcpp.h"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/execution_api/execution_service/ac_server.hpp"
 #include "src/buildtool/execution_api/execution_service/bytestream_server.hpp"
 #include "src/buildtool/execution_api/execution_service/capabilities_server.hpp"
 #include "src/buildtool/execution_api/execution_service/cas_server.hpp"
 #include "src/buildtool/execution_api/execution_service/execution_server.hpp"
+#include "src/buildtool/execution_api/execution_service/operations_server.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
@@ -52,6 +54,7 @@ auto ServerImpl::Run() -> bool {
     CASServiceImpl cas{};
     BytestreamServiceImpl b{};
     CapabilitiesServiceImpl cap{};
+    OperarationsServiceImpl op{};
 
     grpc::ServerBuilder builder;
 
@@ -59,7 +62,8 @@ auto ServerImpl::Run() -> bool {
         .RegisterService(&ac)
         .RegisterService(&cas)
         .RegisterService(&b)
-        .RegisterService(&cap);
+        .RegisterService(&cap)
+        .RegisterService(&op);
 
     std::shared_ptr<grpc::ServerCredentials> creds;
     if (Auth::GetAuthMethod() == AuthMethod::kTLS) {
@@ -100,7 +104,9 @@ auto ServerImpl::Run() -> bool {
 
     auto const& info_str = nlohmann::to_string(info);
     Logger::Log(LogLevel::Info,
-                fmt::format("execution service started: {}", info_str));
+                fmt::format("{}execution service started: {}",
+                            Compatibility::IsCompatible() ? "compatible " : "",
+                            info_str));
 
     if (!info_file_.empty()) {
         if (!TryWrite(info_file_, info_str)) {

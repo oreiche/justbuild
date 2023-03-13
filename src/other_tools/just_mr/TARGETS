@@ -6,12 +6,18 @@
   , "private-deps":
     [ ["src/buildtool/build_engine/expression", "expression"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/main", "version"]
     , "cli"
     , "exit_codes"
     , ["src/other_tools/ops_maps", "repo_fetch_map"]
     , ["src/other_tools/ops_maps", "git_update_map"]
     , ["src/other_tools/repo_map", "repos_to_setup_map"]
+    , ["src/buildtool/progress_reporting", "base_progress_reporter"]
+    , ["src/buildtool/progress_reporting", "progress"]
     , ["@", "json", "", "json"]
+    , ["src/other_tools/just_mr/progress_reporting", "progress"]
+    , ["src/other_tools/just_mr/progress_reporting", "statistics"]
+    , ["src/other_tools/just_mr/progress_reporting", "progress_reporter"]
     ]
   , "stage": ["src", "other_tools", "just_mr"]
   , "private-ldflags":
@@ -27,7 +33,7 @@
   , "srcs": ["utils.cpp"]
   , "deps":
     [ ["src/utils/cpp", "tmp_dir"]
-    , ["src/buildtool/execution_api/local", "config"]
+    , ["src/buildtool/storage", "config"]
     , ["src/buildtool/main", "constants"]
     , ["src/buildtool/build_engine/expression", "expression"]
     ]
@@ -53,6 +59,7 @@
     , ["@", "fmt", "", "fmt"]
     , ["@", "gsl-lite", "", "gsl-lite"]
     , ["@", "json", "", "json"]
+    , ["src/buildtool/common", "clidefaults"]
     , ["src/buildtool/execution_api/local", "config"]
     , ["src/other_tools/just_mr", "utils"]
     , ["src/buildtool/logging", "log_level"]

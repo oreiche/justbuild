@@ -27,10 +27,10 @@
 #include "gsl-lite/gsl-lite.hpp"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/expression/evaluator.hpp"
+#include "src/buildtool/common/clidefaults.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 
-constexpr auto kDefaultLogLevel = LogLevel::Progress;
 constexpr auto kDefaultTimeout = std::chrono::milliseconds{300000};
 
 /// \brief Arguments common to all commands.
@@ -45,12 +45,13 @@ struct LogArguments {
     std::vector<std::filesystem::path> log_files{};
     LogLevel log_limit{kDefaultLogLevel};
     bool plain_log{false};
+    bool log_append{false};
 };
 
 /// \brief Arguments required for analysing targets.
 struct AnalysisArguments {
     std::optional<std::size_t> expression_log_limit{};
-    std::string defines{};
+    std::vector<std::string> defines{};
     std::filesystem::path config_file{};
     std::optional<nlohmann::json> target{};
     std::optional<std::string> request_action_input{};
@@ -149,6 +150,7 @@ struct ExecutionServiceArguments {
     std::optional<std::filesystem::path> info_file{std::nullopt};
     std::optional<std::string> interface{std::nullopt};
     std::optional<std::string> pid_file{std::nullopt};
+    std::optional<uint8_t> op_exponent;
 };
 
 static inline auto SetupCommonArguments(
@@ -201,6 +203,10 @@ static inline auto SetupLogArguments(
     app->add_flag("--plain-log",
                   clargs->plain_log,
                   "Do not use ANSI escape sequences to highlight messages.");
+    app->add_flag(
+        "--log-append",
+        clargs->log_append,
+        "Append messages to log file instead of overwriting existing.");
 }
 
 static inline auto SetupAnalysisArguments(
@@ -213,12 +219,14 @@ static inline auto SetupAnalysisArguments(
                                 "in error messages (Default {})",
                                 Evaluator::kDefaultExpressionLogLimit))
         ->type_name("NUM");
-    app->add_option(
+    app->add_option_function<std::string>(
            "-D,--defines",
-           clargs->defines,
+           [clargs](auto const& d) { clargs->defines.emplace_back(d); },
            "Define an overlay configuration via an in-line JSON object."
-           "Latest wins.")
-        ->type_name("JSON");
+           " Multiple options overlay.")
+        ->type_name("JSON")
+        ->trigger_on_parse();  // run callback on all instances while parsing,
+                               // not after all parsing is done
     app->add_option(
            "-c,--config", clargs->config_file, "Path to configuration file.")
         ->type_name("PATH");
@@ -228,19 +236,17 @@ static inline auto SetupAnalysisArguments(
            "Instead of the target result, request input for this action.")
         ->type_name("ACTION");
     app->add_option_function<std::vector<std::string>>(
-           "target",
-           [clargs](auto const& target_raw) {
-               if (target_raw.size() > 1) {
-                   clargs->target =
-                       nlohmann::json{target_raw[0], target_raw[1]};
-               }
-               else {
-                   clargs->target = nlohmann::json{target_raw[0]}[0];
-               }
-           },
-           "Module and target name to build.\n"
-           "Assumes current module if module name is omitted.")
-        ->expected(2);
+        "target",
+        [clargs](auto const& target_raw) {
+            if (target_raw.size() == 1) {
+                clargs->target = nlohmann::json(target_raw[0]);
+            }
+            else {
+                clargs->target = nlohmann::json(target_raw);
+            }
+        },
+        "Module and target name to build.\n"
+        "Assumes current module if module name is omitted.");
     app->add_option("--target-root",
                     clargs->target_root,
                     "Path of the target files' root directory.\n"
@@ -371,7 +377,7 @@ static inline auto SetupCommonBuildArguments(
            "JSON array with the list of strings representing the launcher to "
            "prepend actions' commands before being executed locally.")
         ->type_name("JSON")
-        ->default_val(nlohmann::json{"env", "--"}.dump());
+        ->default_val(nlohmann::json(kDefaultLauncher).dump());
 }
 
 static inline auto SetupBuildArguments(
@@ -544,5 +550,13 @@ static inline auto SetupExecutionServiceArguments(
         es_args->pid_file,
         "Write pid to this file in plain txt. If the file exists, it "
         "will be overwritten.");
+
+    app->add_option(
+        "--log-operations-threshold",
+        es_args->op_exponent,
+        "Once the number of operations stored exceeds twice 2^n, where n is "
+        "given by the option --log-operations-threshold, at most 2^n "
+        "operations will be removed, in a FIFO scheme. If unset, defaults to "
+        "14. Must be in the range [0,255]");
 }
 #endif  // INCLUDED_SRC_BUILDTOOL_COMMON_CLI_HPP

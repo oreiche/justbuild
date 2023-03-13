@@ -57,46 +57,38 @@ readonly JUST_MR="$ROOT/foo/bin/just-mr.py"
 readonly JUST_RULES="$ROOT/foo/rules"
 readonly LBRDIR="$TEST_TMPDIR/local-build-root"
 readonly TESTDIR="$TEST_TMPDIR/test-root"
-readonly CREDENTIALS_DIR="${PWD}/credentials"
-
-if [ "${REMOTE_EXECUTION_ADDRESS:-}" = "" ]; then
-  echo
-  echo "Test skipped, since no remote execution is specified."
-  echo
-  return
-fi
 
 REMOTE_EXECUTION_ARGS="-r $REMOTE_EXECUTION_ADDRESS"
 if [ "${REMOTE_EXECUTION_PROPERTIES:-}" != "" ]; then
   REMOTE_EXECUTION_ARGS="$REMOTE_EXECUTION_ARGS --remote-execution-property $REMOTE_EXECUTION_PROPERTIES"
 fi
 
-AUTH_ARGS=""
-if [ -f "${CREDENTIALS_DIR}/ca.crt" ]; then
-  AUTH_ARGS=" --tls-ca-cert ${CREDENTIALS_DIR}/ca.crt "
-  if [ -f "${CREDENTIALS_DIR}/client.crt" ]; then
-    AUTH_ARGS=" --tls-client-cert ${CREDENTIALS_DIR}/client.crt "${AUTH_ARGS}
-  fi
-  if [ -f "${CREDENTIALS_DIR}/client.key" ]; then
-    AUTH_ARGS=" --tls-client-key ${CREDENTIALS_DIR}/client.key "${AUTH_ARGS}
-  fi
-fi
-
 if [ "${COMPATIBLE:-}" = "YES" ]; then
   ARGS="--compatible"
   HASH_TYPE="compatible-sha256"
+  TREE_CAS_DIR="casf"
 else
   ARGS=""
   HASH_TYPE="git-sha1"
+  TREE_CAS_DIR="cast"
 fi
-TCDIR="$LBRDIR/protocol-dependent/generation-0/$HASH_TYPE/tc"
+readonly FIRST_GEN="${LBRDIR}/protocol-dependent/generation-0/$HASH_TYPE"
+readonly TCDIR="$FIRST_GEN/tc"
+readonly EXEC_CAS="$FIRST_GEN/casx"
+readonly FILE_CAS="$FIRST_GEN/casf"
+readonly TREE_CAS="$FIRST_GEN/$TREE_CAS_DIR"
 
-# Print the CASF hash of the first target cache entry found for a given backend
+# Print the CASF hashes of all target cache entries found for a given backend
 # (parameter $1)
-get_tc_hash() {
-  TC_HASH0=$(ls -1 "$TCDIR/$1" | head -n1)
-  TC_HASH1=$(ls -1 "$TCDIR/$1/$TC_HASH0" | head -n1)
-  cat "$TCDIR/$1/$TC_HASH0/$TC_HASH1" | tr -d '[]' | cut -d: -f1
+get_tc_hashes() {
+  for FILE in $(find "$TCDIR/$1" -type f); do
+    cat "$FILE" | tr -d '[]' | cut -d: -f1
+  done
+}
+
+# print cache path (ab/cde...) for given hash (parameter $1)
+cache_path() {
+  echo "$(echo $1 | cut -b -2)/$(echo $1 | cut -b 3-)"
 }
 
 # ------------------------------------------------------------------------------
@@ -133,7 +125,7 @@ echo "Local execution ID: $LOCAL_EXECUTION_ID"
 rm -rf "$TCDIR"
 
 # Determine remote execution ID
-"$JUST_MR" --norc --just "$JUST" --local-build-root "$LBRDIR" build main $ARGS $REMOTE_EXECUTION_ARGS ${AUTH_ARGS}
+"$JUST_MR" --norc --just "$JUST" --local-build-root "$LBRDIR" build main $ARGS $REMOTE_EXECUTION_ARGS
 readonly REMOTE_EXECUTION_ID=$(ls -1 "$TCDIR" | head -n1)
 echo "Remote execution ID: $REMOTE_EXECUTION_ID"
 rm -rf "$TCDIR"
@@ -167,13 +159,23 @@ sed -i "s|RANDOM_STRING_1 \".*\"|RANDOM_STRING_1 \"$RANDOM_STRING\"|" greet/incl
 sed -i "s|RANDOM_STRING_2 \".*\"|RANDOM_STRING_2 \"$RANDOM_STRING\"|" greet/src/greet.cpp
 
 # Build greetlib remotely
-"$JUST_MR" --norc --just "$JUST" --local-build-root "$LBRDIR" --main main build main $ARGS $REMOTE_EXECUTION_ARGS ${AUTH_ARGS}
+"$JUST_MR" --norc --just "$JUST" --local-build-root "$LBRDIR" --main main build main $ARGS $REMOTE_EXECUTION_ARGS
 
 # Check if file and tree artifacts have been downloaded correctly
-readonly TC_HASH=$(get_tc_hash $REMOTE_EXECUTION_ID)
-readonly TC_ENTRY=$("$JUST" install-cas --local-build-root "$LBRDIR" $ARGS ${TC_HASH})
-readonly FILE_HASH=$(echo $TC_ENTRY | jq -r '.artifacts."libgreet.a".data.id')
-readonly TREE_HASH=$(echo $TC_ENTRY | jq -r '.runfiles.greet.data.id')
+EXEC_HASH=
+FILE_HASH=
+TREE_HASH=
+readonly TC_HASHES=$(get_tc_hashes $REMOTE_EXECUTION_ID)
+for TC_HASH in $TC_HASHES; do
+  TC_ENTRY=$("$JUST" install-cas --local-build-root "$LBRDIR" $ARGS ${TC_HASH})
+  EXEC_HASH=${EXEC_HASH:-$(echo $TC_ENTRY | jq -r '.artifacts."main".data.id // ""')}
+  FILE_HASH=${FILE_HASH:-$(echo $TC_ENTRY | jq -r '.artifacts."libgreet.a".data.id // ""')}
+  TREE_HASH=${TREE_HASH:-$(echo $TC_ENTRY | jq -r '.runfiles.greet.data.id // ""')}
+done
+test -x ${EXEC_CAS}/$(cache_path $EXEC_HASH)
+test -f ${FILE_CAS}/$(cache_path $FILE_HASH)
+test -f ${TREE_CAS}/$(cache_path $TREE_HASH)
+"$JUST" install-cas --local-build-root "$LBRDIR" $ARGS ${EXEC_HASH} > /dev/null
 "$JUST" install-cas --local-build-root "$LBRDIR" $ARGS ${FILE_HASH} > /dev/null
 "$JUST" install-cas --local-build-root "$LBRDIR" $ARGS ${TREE_HASH} > /dev/null
 
@@ -193,7 +195,7 @@ sed -i "s|RANDOM_STRING_2 \".*\"|RANDOM_STRING_2 \"$RANDOM_STRING\"|" greet/src/
 mv "$TCDIR/$LOCAL_EXECUTION_ID" "$TCDIR/$REMOTE_EXECUTION_ID"
 
 # Check if greetlib successfully builds remotely
-"$JUST_MR" --norc --just "$JUST" --local-build-root "$LBRDIR" --main main build main $ARGS $REMOTE_EXECUTION_ARGS ${AUTH_ARGS}
+"$JUST_MR" --norc --just "$JUST" --local-build-root "$LBRDIR" --main main build main $ARGS $REMOTE_EXECUTION_ARGS
 
 # Clean up test files
 rm -rf "$TESTDIR" "$LBRDIR"
@@ -221,7 +223,7 @@ sed -i "s|\"foo\": \"[^\"]*\"|\"foo\": \"$RANDOM_STRING\"|" foo.py
 sed -i "s|\"foo\": \"[^\"]*\"|\"foo\": \"$RANDOM_STRING\"|" bar.py
 
 # Build pydicts remotely
-"$JUST_MR" --norc --just "$JUST" --local-build-root "$LBRDIR" build json_from_py $ARGS $REMOTE_EXECUTION_ARGS ${AUTH_ARGS}
+"$JUST_MR" --norc --just "$JUST" --local-build-root "$LBRDIR" build json_from_py $ARGS $REMOTE_EXECUTION_ARGS
 
 # 'exported_py' target contains a provides map,
 #   which contains an abstract node (type 'convert'),
@@ -237,6 +239,8 @@ else
   readonly FOO_HASH=$(cat foo.py | git hash-object --stdin)
   readonly BAR_HASH=$(cat bar.py | git hash-object --stdin)
 fi
+test -f ${FILE_CAS}/$(cache_path $FOO_HASH)
+test -f ${FILE_CAS}/$(cache_path $BAR_HASH)
 "$JUST" install-cas --local-build-root "$LBRDIR" $ARGS ${FOO_HASH} > /dev/null
 "$JUST" install-cas --local-build-root "$LBRDIR" $ARGS ${BAR_HASH} > /dev/null
 
@@ -256,7 +260,7 @@ sed -i "s|\"foo\": \"[^\"]*\"|\"foo\": \"$RANDOM_STRING\"|" bar.py
 mv "$TCDIR/$LOCAL_EXECUTION_ID" "$TCDIR/$REMOTE_EXECUTION_ID"
 
 # Check if pydicts successfully builds remotely
-"$JUST_MR" --norc --just "$JUST" --local-build-root "$LBRDIR" build json_from_py $ARGS $REMOTE_EXECUTION_ARGS ${AUTH_ARGS}
+"$JUST_MR" --norc --just "$JUST" --local-build-root "$LBRDIR" build json_from_py $ARGS $REMOTE_EXECUTION_ARGS
 
 # Clean up test files
 rm -rf "$TESTDIR" "$LBRDIR"

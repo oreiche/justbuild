@@ -53,8 +53,8 @@ class IBundle {
         -> std::string const& = 0;
     [[nodiscard]] virtual auto Digest() const& noexcept
         -> bazel_re::Digest const& = 0;
-    [[nodiscard]] auto MakeBlob() const noexcept -> BazelBlob {
-        return BazelBlob{Digest(), Content()};
+    [[nodiscard]] auto MakeBlob(bool is_exec) const noexcept -> BazelBlob {
+        return BazelBlob{Digest(), Content(), is_exec};
     }
 };
 
@@ -241,7 +241,7 @@ template <class T>
     return node;
 }
 
-/// \brief Create profobuf message FileNode from Artifact::ObjectInfo
+/// \brief Create protobuf message FileNode from Artifact::ObjectInfo
 [[nodiscard]] auto CreateFileNodeFromObjectInfo(
     std::string const& name,
     Artifact::ObjectInfo const& object_info) noexcept -> bazel_re::FileNode {
@@ -253,7 +253,7 @@ template <class T>
     return file_node;
 }
 
-/// \brief Create profobuf message DirectoryNode from Artifact::ObjectInfo
+/// \brief Create protobuf message DirectoryNode from Artifact::ObjectInfo
 [[nodiscard]] auto CreateDirectoryNodeFromObjectInfo(
     std::string const& name,
     Artifact::ObjectInfo const& object_info) noexcept
@@ -266,7 +266,7 @@ template <class T>
     return dir_node;
 }
 
-/// \brief Create bundle for profobuf message DirectoryNode from Directory.
+/// \brief Create bundle for protobuf message DirectoryNode from Directory.
 [[nodiscard]] auto CreateDirectoryNodeBundle(std::string const& dir_name,
                                              bazel_re::Directory const& dir)
     -> DirectoryNodeBundle::Ptr {
@@ -279,7 +279,7 @@ template <class T>
     return DirectoryNodeBundle::Create(msg, content_creator, digest_creator);
 }
 
-/// \brief Create bundle for profobuf message Command from args strings.
+/// \brief Create bundle for protobuf message Command from args strings.
 [[nodiscard]] auto CreateCommandBundle(
     std::vector<std::string> const& args,
     std::vector<std::string> const& output_files,
@@ -311,7 +311,7 @@ template <class T>
     return CommandBundle::Create(msg, content_creator, digest_creator);
 }
 
-/// \brief Create bundle for profobuf message Action from Command.
+/// \brief Create bundle for protobuf message Action from Command.
 [[nodiscard]] auto CreateActionBundle(
     bazel_re::Digest const& command,
     bazel_re::Digest const& root_dir,
@@ -382,7 +382,7 @@ template <class T>
                 }
                 dir_nodes.push_back(dir_bundle->Message());
                 if (store_blob) {
-                    (*store_blob)(dir_bundle->MakeBlob());
+                    (*store_blob)(dir_bundle->MakeBlob(/*is_exec=*/false));
                 }
             }
             else {
@@ -472,7 +472,7 @@ auto BazelMsgFactory::CreateDirectoryDigestFromTree(
     if (auto bundle = DirectoryTreeToBundle("", tree, store_blob, store_info)) {
         if (store_blob) {
             try {
-                (*store_blob)(bundle->MakeBlob());
+                (*store_blob)(bundle->MakeBlob(/*is_exec=*/false));
             } catch (...) {
                 return std::nullopt;
             }
@@ -627,8 +627,8 @@ auto BazelMsgFactory::CreateActionDigestFromCommandLine(
         cmd->Digest(), exec_dir, output_node_properties, do_not_cache, timeout);
 
     if (store_blob) {
-        (*store_blob)(cmd->MakeBlob());
-        (*store_blob)(action->MakeBlob());
+        (*store_blob)(cmd->MakeBlob(/*is_exec=*/false));
+        (*store_blob)(action->MakeBlob(/*is_exec=*/false));
     }
 
     return action->Digest();

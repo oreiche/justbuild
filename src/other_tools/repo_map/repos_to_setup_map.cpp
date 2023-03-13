@@ -14,7 +14,8 @@
 
 #include "src/other_tools/repo_map/repos_to_setup_map.hpp"
 
-#include "src/other_tools/just_mr/utils.hpp"
+#include "src/other_tools/just_mr/progress_reporting/progress.hpp"
+#include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
 
 namespace {
 
@@ -47,39 +48,41 @@ void GitCheckout(ExpressionPtr const& repo_desc,
     // enforce mandatory fields
     auto repo_desc_commit = repo_desc->At("commit");
     if (not repo_desc_commit) {
-        (*logger)("GitCheckout: Mandatory field \'commit\' is missing",
+        (*logger)("GitCheckout: Mandatory field \"commit\" is missing",
                   /*fatal=*/true);
         return;
     }
     if (not repo_desc_commit->get()->IsString()) {
-        (*logger)(
-            "GitCheckout: Unsupported value for mandatory field \'commit\'",
-            /*fatal=*/true);
+        (*logger)(fmt::format("GitCheckout: Unsupported value {} for mandatory "
+                              "field \"commit\"",
+                              repo_desc_commit->get()->ToString()),
+                  /*fatal=*/true);
         return;
     }
     auto repo_desc_repository = repo_desc->At("repository");
     if (not repo_desc_repository) {
-        (*logger)("GitCheckout: Mandatory field \'repository\' is missing",
+        (*logger)("GitCheckout: Mandatory field \"repository\" is missing",
                   /*fatal=*/true);
         return;
     }
     if (not repo_desc_repository->get()->IsString()) {
-        (*logger)(
-            "GitCheckout: Unsupported value for mandatory field "
-            "\'repository\'",
-            /*fatal=*/true);
+        (*logger)(fmt::format("GitCheckout: Unsupported value {} for mandatory "
+                              "field \"repository\"",
+                              repo_desc_repository->get()->ToString()),
+                  /*fatal=*/true);
         return;
     }
     auto repo_desc_branch = repo_desc->At("branch");
     if (not repo_desc_branch) {
-        (*logger)("GitCheckout: Mandatory field \'branch\' is missing",
+        (*logger)("GitCheckout: Mandatory field \"branch\" is missing",
                   /*fatal=*/true);
         return;
     }
     if (not repo_desc_branch->get()->IsString()) {
-        (*logger)(
-            "GitCheckout: Unsupported value for mandatory field \'branch\'",
-            /*fatal=*/true);
+        (*logger)(fmt::format("GitCheckout: Unsupported value {} for mandatory "
+                              "field \"branch\"",
+                              repo_desc_branch->get()->ToString()),
+                  /*fatal=*/true);
         return;
     }
     auto repo_desc_subdir = repo_desc->Get("subdir", Expression::none_t{});
@@ -89,10 +92,11 @@ void GitCheckout(ExpressionPtr const& repo_desc,
                       .lexically_normal();
     // populate struct
     GitRepoInfo git_repo_info = {
-        repo_desc_commit->get()->String(),     /* hash */
-        repo_desc_repository->get()->String(), /* repo_url */
-        repo_desc_branch->get()->String(),     /* branch */
-        subdir.empty() ? "." : subdir.string() /* subdir */
+        repo_desc_commit->get()->String(),      /* hash */
+        repo_desc_repository->get()->String(),  /* repo_url */
+        repo_desc_branch->get()->String(),      /* branch */
+        subdir.empty() ? "." : subdir.string(), /* subdir */
+        repo_name                               /* origin */
     };
     // get the WS root as git tree
     commit_git_map->ConsumeAfterKeysReady(
@@ -107,8 +111,8 @@ void GitCheckout(ExpressionPtr const& repo_desc,
         },
         [logger, repo_name](auto const& msg, bool fatal) {
             (*logger)(fmt::format("While setting the workspace root for "
-                                  "repository {} of type git:\n{}",
-                                  repo_name,
+                                  "repository {} of type \"git\":\n{}",
+                                  nlohmann::json(repo_name).dump(),
                                   msg),
                       fatal);
         });
@@ -127,28 +131,28 @@ void ArchiveCheckout(ExpressionPtr const& repo_desc,
     // enforce mandatory fields
     auto repo_desc_content = repo_desc->At("content");
     if (not repo_desc_content) {
-        (*logger)("ArchiveCheckout: Mandatory field \'content\' is missing",
+        (*logger)("ArchiveCheckout: Mandatory field \"content\" is missing",
                   /*fatal=*/true);
         return;
     }
     if (not repo_desc_content->get()->IsString()) {
-        (*logger)(
-            "ArchiveCheckout: Unsupported value for mandatory field "
-            "\'content\'",
-            /*fatal=*/true);
+        (*logger)(fmt::format("ArchiveCheckout: Unsupported value {} for "
+                              "mandatory field \"content\"",
+                              repo_desc_content->get()->ToString()),
+                  /*fatal=*/true);
         return;
     }
     auto repo_desc_fetch = repo_desc->At("fetch");
     if (not repo_desc_fetch) {
-        (*logger)("ArchiveCheckout: Mandatory field \'fetch\' is missing",
+        (*logger)("ArchiveCheckout: Mandatory field \"fetch\" is missing",
                   /*fatal=*/true);
         return;
     }
     if (not repo_desc_fetch->get()->IsString()) {
-        (*logger)(
-            "ArchiveCheckout: Unsupported value for mandatory field "
-            "\'fetch\'",
-            /*fatal=*/true);
+        (*logger)(fmt::format("ArchiveCheckout: Unsupported value {} for "
+                              "mandatory field \"fetch\"",
+                              repo_desc_fetch->get()->ToString()),
+                  /*fatal=*/true);
         return;
     }
     auto repo_desc_subdir = repo_desc->Get("subdir", Expression::none_t{});
@@ -172,7 +176,9 @@ void ArchiveCheckout(ExpressionPtr const& repo_desc,
                 : std::nullopt, /* sha256 */
             repo_desc_sha512->IsString()
                 ? std::make_optional(repo_desc_sha512->String())
-                : std::nullopt                 /* sha512 */
+                : std::nullopt,                /* sha512 */
+            repo_name,                         /* origin */
+            false                              /* origin_from_distdir */
         },                                     /* archive */
         repo_type,                             /* repo_type */
         subdir.empty() ? "." : subdir.string() /* subdir */
@@ -191,8 +197,8 @@ void ArchiveCheckout(ExpressionPtr const& repo_desc,
         [logger, repo_name, repo_type](auto const& msg, bool fatal) {
             (*logger)(fmt::format("While setting the workspace root for "
                                   "repository {} of type {}:\n{}",
-                                  repo_name,
-                                  repo_type,
+                                  nlohmann::json(repo_name).dump(),
+                                  nlohmann::json(repo_type).dump(),
                                   msg),
                       fatal);
         });
@@ -210,14 +216,15 @@ void FileCheckout(ExpressionPtr const& repo_desc,
     // enforce mandatory fields
     auto repo_desc_path = repo_desc->At("path");
     if (not repo_desc_path) {
-        (*logger)("FileCheckout: Mandatory field \'path\' is missing",
+        (*logger)("FileCheckout: Mandatory field \"path\" is missing",
                   /*fatal=*/true);
         return;
     }
     if (not repo_desc_path->get()->IsString()) {
-        (*logger)(
-            "FileCheckout: Unsupported value for mandatory field \'path\'",
-            /*fatal=*/true);
+        (*logger)(fmt::format("FileCheckout: Unsupported value {} for "
+                              "mandatory field \"path\"",
+                              repo_desc_path->get()->ToString()),
+                  /*fatal=*/true);
         return;
     }
     // get absolute path
@@ -229,6 +236,9 @@ void FileCheckout(ExpressionPtr const& repo_desc,
         repo_desc_pragma ? repo_desc_pragma->get()->At("to_git") : std::nullopt;
     if (pragma_to_git and pragma_to_git->get()->IsBool() and
         pragma_to_git->get()->Bool()) {
+        // start work reporting
+        JustMRProgress::Instance().TaskTracker().Start(repo_name);
+        JustMRStatistics::Instance().IncrementQueuedCounter();
         // get the WS root as git tree
         fpath_git_map->ConsumeAfterKeysReady(
             ts,
@@ -239,11 +249,14 @@ void FileCheckout(ExpressionPtr const& repo_desc,
                 cfg["workspace_root"] = ws_root;
                 SetReposTakeOver(&cfg, repos, repo_name);
                 (*setter)(std::move(cfg));
+                // report work done
+                JustMRProgress::Instance().TaskTracker().Stop(repo_name);
+                JustMRStatistics::Instance().IncrementExecutedCounter();
             },
             [logger, repo_name](auto const& msg, bool fatal) {
                 (*logger)(fmt::format("While setting the workspace root for "
-                                      "repository {} of type file:\n{}",
-                                      repo_name,
+                                      "repository {} of type \"file\":\n{}",
+                                      nlohmann::json(repo_name).dump(),
                                       msg),
                           fatal);
             });
@@ -255,6 +268,8 @@ void FileCheckout(ExpressionPtr const& repo_desc,
             nlohmann::json::array({"file", fpath.string()});  // explicit array
         SetReposTakeOver(&cfg, repos, repo_name);
         (*setter)(std::move(cfg));
+        // report local path
+        JustMRStatistics::Instance().IncrementLocalPathsCounter();
     }
 }
 
@@ -271,15 +286,15 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
     auto repo_desc_repositories = repo_desc->At("repositories");
     if (not repo_desc_repositories) {
         (*logger)(
-            "DistdirCheckout: Mandatory field \'repositories\' is missing",
+            "DistdirCheckout: Mandatory field \"repositories\" is missing",
             /*fatal=*/true);
         return;
     }
     if (not repo_desc_repositories->get()->IsList()) {
-        (*logger)(
-            "DistdirCheckout: Unsupported value for mandatory field "
-            "\'repositories\'",
-            /*fatal=*/true);
+        (*logger)(fmt::format("DistdirCheckout: Unsupported value {} for "
+                              "mandatory field \"repositories\"",
+                              repo_desc_repositories->get()->ToString()),
+                  /*fatal=*/true);
         return;
     }
     // map of distfile to content
@@ -295,17 +310,17 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
         // check that repo name exists
         auto repos_dist_repo_name = repos->At(dist_repo_name);
         if (not repos_dist_repo_name) {
-            (*logger)(fmt::format("DistdirCheckout: no repository named {}",
-                                  dist_repo_name),
+            (*logger)(fmt::format("DistdirCheckout: No repository named {}",
+                                  nlohmann::json(dist_repo_name).dump()),
                       /*fatal=*/true);
             return;
         }
         auto repo_desc = repos_dist_repo_name->get()->At("repository");
         if (not repo_desc) {
             (*logger)(
-                fmt::format("DistdirCheckout: mandatory key \'repository\' "
+                fmt::format("DistdirCheckout: Mandatory key \"repository\" "
                             "missing for repository {}",
-                            dist_repo_name),
+                            nlohmann::json(dist_repo_name).dump()),
                 /*fatal=*/true);
             return;
         }
@@ -313,35 +328,36 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
             JustMR::Utils::ResolveRepo(repo_desc->get(), repos);
         if (not resolved_repo_desc) {
             (*logger)(
-                fmt::format("DistdirCheckout: found cyclic dependency for "
+                fmt::format("DistdirCheckout: Found cyclic dependency for "
                             "repository {}",
-                            dist_repo_name),
+                            nlohmann::json(dist_repo_name).dump()),
                 /*fatal=*/true);
             return;
         }
         auto repo_type = (*resolved_repo_desc)->At("type");
         if (not repo_type) {
             (*logger)(
-                fmt::format("DistdirCheckout: mandatory key \'type\' missing "
+                fmt::format("DistdirCheckout: Mandatory key \"type\" missing "
                             "for repository {}",
-                            dist_repo_name),
+                            nlohmann::json(dist_repo_name).dump()),
                 /*fatal=*/true);
             return;
         }
         if (not repo_type->get()->IsString()) {
-            (*logger)(fmt::format("DistdirCheckout: unsupported value for key "
-                                  "\'type\' for repository {}",
-                                  dist_repo_name),
+            (*logger)(fmt::format("DistdirCheckout: Unsupported value {} for "
+                                  "key \"type\" for repository {}",
+                                  repo_type->get()->ToString(),
+                                  nlohmann::json(dist_repo_name).dump()),
                       /*fatal=*/true);
             return;
         }
         // get repo_type
         auto repo_type_str = repo_type->get()->String();
         if (not kCheckoutTypeMap.contains(repo_type_str)) {
-            (*logger)(fmt::format("DistdirCheckout: unknown type {} for "
+            (*logger)(fmt::format("DistdirCheckout: Unknown type {} for "
                                   "repository {}",
-                                  repo_type_str,
-                                  dist_repo_name),
+                                  nlohmann::json(repo_type_str).dump(),
+                                  nlohmann::json(dist_repo_name).dump()),
                       /*fatal=*/true);
             return;
         }
@@ -351,30 +367,30 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
             auto repo_desc_content = (*resolved_repo_desc)->At("content");
             if (not repo_desc_content) {
                 (*logger)(
-                    "DistdirCheckout: Mandatory field \'content\' is "
+                    "DistdirCheckout: Mandatory field \"content\" is "
                     "missing",
                     /*fatal=*/true);
                 return;
             }
             if (not repo_desc_content->get()->IsString()) {
-                (*logger)(
-                    "DistdirCheckout: Unsupported value for mandatory "
-                    "field \'content\'",
-                    /*fatal=*/true);
+                (*logger)(fmt::format("DistdirCheckout: Unsupported value {} "
+                                      "for mandatory field \"content\"",
+                                      repo_desc_content->get()->ToString()),
+                          /*fatal=*/true);
                 return;
             }
             auto repo_desc_fetch = (*resolved_repo_desc)->At("fetch");
             if (not repo_desc_fetch) {
                 (*logger)(
-                    "DistdirCheckout: Mandatory field \'fetch\' is missing",
+                    "DistdirCheckout: Mandatory field \"fetch\" is missing",
                     /*fatal=*/true);
                 return;
             }
             if (not repo_desc_fetch->get()->IsString()) {
-                (*logger)(
-                    "DistdirCheckout: Unsupported value for mandatory "
-                    "field \'fetch\'",
-                    /*fatal=*/true);
+                (*logger)(fmt::format("DistdirCheckout: Unsupported value {} "
+                                      "for mandatory field \"fetch\"",
+                                      repo_desc_fetch->get()->ToString()),
+                          /*fatal=*/true);
                 return;
             }
             auto repo_desc_distfile =
@@ -395,8 +411,10 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
                     : std::nullopt, /* sha256 */
                 repo_desc_sha512->IsString()
                     ? std::make_optional(repo_desc_sha512->String())
-                    : std::nullopt /* sha512 */
-            };                     /* archive */
+                    : std::nullopt, /* sha512 */
+                dist_repo_name,     /* origin */
+                true                /* origin_from_distdir */
+            };                      /* archive */
 
             // add to distdir content map
             auto repo_distfile =
@@ -415,7 +433,7 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
             .HexString();
     // get the WS root as git tree
     DistdirInfo distdir_info = {
-        distdir_content_id, distdir_content, dist_repos_to_fetch};
+        distdir_content_id, distdir_content, dist_repos_to_fetch, repo_name};
     distdir_git_map->ConsumeAfterKeysReady(
         ts,
         {std::move(distdir_info)},
@@ -428,8 +446,100 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
         },
         [logger, repo_name](auto const& msg, bool fatal) {
             (*logger)(fmt::format("While setting the workspace root for "
-                                  "repository {} of type distdir:\n{}",
-                                  repo_name,
+                                  "repository {} of type \"distdir\":\n{}",
+                                  nlohmann::json(repo_name).dump(),
+                                  msg),
+                      fatal);
+        });
+}
+
+/// \brief Perform checkout for a git tree type repository.
+/// Guarantees the logger is called exactly once with fatal if a failure occurs.
+void GitTreeCheckout(ExpressionPtr const& repo_desc,
+                     ExpressionPtr&& repos,
+                     std::string const& repo_name,
+                     gsl::not_null<TreeIdGitMap*> const& tree_id_git_map,
+                     gsl::not_null<TaskSystem*> const& ts,
+                     ReposToSetupMap::SetterPtr const& setter,
+                     ReposToSetupMap::LoggerPtr const& logger) {
+    // enforce mandatory fields
+    auto repo_desc_hash = repo_desc->At("id");
+    if (not repo_desc_hash) {
+        (*logger)("GitTreeCheckout: Mandatory field \"id\" is missing",
+                  /*fatal=*/true);
+        return;
+    }
+    if (not repo_desc_hash->get()->IsString()) {
+        (*logger)(fmt::format("GitTreeCheckout: Unsupported value {} for "
+                              "mandatory field \"id\"",
+                              repo_desc_hash->get()->ToString()),
+                  /*fatal=*/true);
+        return;
+    }
+    auto repo_desc_cmd = repo_desc->At("cmd");
+    if (not repo_desc_cmd) {
+        (*logger)("GitTreeCheckout: Mandatory field \"cmd\" is missing",
+                  /*fatal=*/true);
+        return;
+    }
+    if (not repo_desc_cmd->get()->IsList()) {
+        (*logger)(fmt::format("GitTreeCheckout: Unsupported value {} for "
+                              "mandatory field \"cmd\"",
+                              repo_desc_cmd->get()->ToString()),
+                  /*fatal=*/true);
+        return;
+    }
+    std::vector<std::string> cmd{};
+    for (auto const& token : repo_desc_cmd->get()->List()) {
+        if (token.IsNotNull() and token->IsString()) {
+            cmd.emplace_back(token->String());
+        }
+        else {
+            (*logger)(fmt::format("GitTreeCheckout: Unsupported entry {} in "
+                                  "mandatory field \"cmd\"",
+                                  token->ToString()),
+                      /*fatal=*/true);
+            return;
+        }
+    }
+    std::map<std::string, std::string> env{};
+    auto repo_desc_env = repo_desc->Get("env", Expression::none_t{});
+    if (repo_desc_env.IsNotNull() and repo_desc_env->IsMap()) {
+        for (auto const& envar : repo_desc_env->Map().Items()) {
+            if (envar.second.IsNotNull() and envar.second->IsString()) {
+                env.insert({envar.first, envar.second->String()});
+            }
+            else {
+                (*logger)(fmt::format("GitTreeCheckout: Unsupported value {} "
+                                      "for key {} in optional field \"envs\"",
+                                      envar.second->ToString(),
+                                      nlohmann::json(envar.first).dump()),
+                          /*fatal=*/true);
+                return;
+            }
+        }
+    }
+    // populate struct
+    TreeIdInfo tree_id_info = {
+        repo_desc_hash->get()->String(), /* hash */
+        std::move(env),                  /* env_vars */
+        std::move(cmd)                   /* command */
+    };
+    // get the WS root as git tree
+    tree_id_git_map->ConsumeAfterKeysReady(
+        ts,
+        {std::move(tree_id_info)},
+        [repos = std::move(repos), repo_name, setter](auto const& values) {
+            auto ws_root = *values[0];
+            nlohmann::json cfg({});
+            cfg["workspace_root"] = ws_root;
+            SetReposTakeOver(&cfg, repos, repo_name);
+            (*setter)(std::move(cfg));
+        },
+        [logger, repo_name](auto const& msg, bool fatal) {
+            (*logger)(fmt::format("While setting the workspace root for "
+                                  "repository {} of type \"git tree\":\n{}",
+                                  nlohmann::json(repo_name).dump(),
                                   msg),
                       fatal);
         });
@@ -445,6 +555,7 @@ auto CreateReposToSetupMap(std::shared_ptr<Configuration> const& config,
                            gsl::not_null<FilePathGitMap*> const& fpath_git_map,
                            gsl::not_null<ContentCASMap*> const& content_cas_map,
                            gsl::not_null<DistdirGitMap*> const& distdir_git_map,
+                           gsl::not_null<TreeIdGitMap*> const& tree_id_git_map,
                            std::size_t jobs) -> ReposToSetupMap {
     auto setup_repo = [config,
                        main,
@@ -453,7 +564,8 @@ auto CreateReposToSetupMap(std::shared_ptr<Configuration> const& config,
                        content_git_map,
                        fpath_git_map,
                        content_cas_map,
-                       distdir_git_map](auto ts,
+                       distdir_git_map,
+                       tree_id_git_map](auto ts,
                                         auto setter,
                                         auto logger,
                                         auto /* unused */,
@@ -469,41 +581,42 @@ auto CreateReposToSetupMap(std::shared_ptr<Configuration> const& config,
             // repository requires checkout
             auto repo_desc_key = repos->At(key);
             if (not repo_desc_key) {
-                (*logger)(fmt::format("Config: missing config entry "
-                                      "for repository {}",
-                                      key),
+                (*logger)(fmt::format(
+                              "Config: Missing config entry for repository {}",
+                              nlohmann::json(key).dump()),
                           /*fatal=*/true);
                 return;
             }
             auto repo_desc = repo_desc_key->get()->At("repository");
             if (not repo_desc) {
-                (*logger)(fmt::format("Config: mandatory key \'repository\' "
+                (*logger)(fmt::format("Config: Mandatory key \"repository\" "
                                       "missing for repository {}",
-                                      key),
+                                      nlohmann::json(key).dump()),
                           /*fatal=*/true);
                 return;
             }
             auto resolved_repo_desc =
                 JustMR::Utils::ResolveRepo(repo_desc->get(), repos);
             if (not resolved_repo_desc) {
-                (*logger)(fmt::format("Config: found cyclic dependency for "
+                (*logger)(fmt::format("Config: Found cyclic dependency for "
                                       "repository {}",
-                                      key),
+                                      nlohmann::json(key).dump()),
                           /*fatal=*/true);
                 return;
             }
             auto repo_type = (*resolved_repo_desc)->At("type");
             if (not repo_type) {
-                (*logger)(fmt::format("Config: mandatory key \'type\' missing "
+                (*logger)(fmt::format("Config: Mandatory key \"type\" missing "
                                       "for repository {}",
-                                      key),
+                                      nlohmann::json(key).dump()),
                           /*fatal=*/true);
                 return;
             }
             if (not repo_type->get()->IsString()) {
-                (*logger)(fmt::format("Config: unsupported value for key "
-                                      "\'type\' for repository {}",
-                                      key),
+                (*logger)(fmt::format("Config: Unsupported value {} for key "
+                                      "\"type\" for repository {}",
+                                      repo_type->get()->ToString(),
+                                      nlohmann::json(key).dump()),
                           /*fatal=*/true);
                 return;
             }
@@ -511,20 +624,19 @@ auto CreateReposToSetupMap(std::shared_ptr<Configuration> const& config,
             auto repo_type_str = repo_type->get()->String();
             if (not kCheckoutTypeMap.contains(repo_type_str)) {
                 (*logger)(
-                    fmt::format("Config: unknown type {} for repository {}",
-                                repo_type_str,
-                                key),
+                    fmt::format("Config: Unknown type {} for repository {}",
+                                nlohmann::json(repo_type_str).dump(),
+                                nlohmann::json(key).dump()),
                     /*fatal=*/true);
                 return;
             }
             // setup a wrapped_logger
             auto wrapped_logger = std::make_shared<AsyncMapConsumerLogger>(
                 [logger, repo_name = key](auto const& msg, bool fatal) {
-                    (*logger)(
-                        fmt::format("While checking out repository {}:\n{}",
-                                    repo_name,
-                                    msg),
-                        fatal);
+                    (*logger)(fmt::format("While setting up repository {}:\n{}",
+                                          nlohmann::json(repo_name).dump(),
+                                          msg),
+                              fatal);
                 });
             // do checkout
             switch (kCheckoutTypeMap.at(repo_type_str)) {
@@ -564,6 +676,16 @@ auto CreateReposToSetupMap(std::shared_ptr<Configuration> const& config,
                                     std::move(repos),
                                     key,
                                     distdir_git_map,
+                                    ts,
+                                    setter,
+                                    wrapped_logger);
+                    break;
+                }
+                case CheckoutType::GitTree: {
+                    GitTreeCheckout(*resolved_repo_desc,
+                                    std::move(repos),
+                                    key,
+                                    tree_id_git_map,
                                     ts,
                                     setter,
                                     wrapped_logger);

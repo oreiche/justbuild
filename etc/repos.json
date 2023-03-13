@@ -19,7 +19,6 @@
       , "libcurl": "com_github_curl_curl"
       , "bzip2": "bzip2"
       , "libarchive": "com_github_libarchive_libarchive"
-      , "credentials": "test-credentials"
       }
     , "bootstrap": {"link": ["-lpthread"]}
     , "bootstrap_local": {"link": ["-lpthread"]}
@@ -173,10 +172,10 @@
   , "json":
     { "repository":
       { "type": "zip"
-      , "content": "eb7ab4ad48f9fb6758cff4a39b76f35abead5881"
-      , "fetch": "https://github.com/nlohmann/json/releases/download/v3.9.1/include.zip"
-      , "sha256": "6bea5877b1541d353bd77bdfbdb2696333ae5ed8f9e8cc22df657192218cad91"
-      , "sha512": "24984da33c5bf80eb276712d4bdc698c2724e72dc0f4c70e87527fb6b16e21f535f5a022d52c7ed2f59dcfe4a4e5b61a56101b61def09b31c827689f6c7ec673"
+      , "content": "a0cf5f0e098b6a8748eb1c106b0b1994b92fead9"
+      , "fetch": "https://github.com/nlohmann/json/releases/download/v3.11.2/include.zip"
+      , "sha256": "e5c7a9f49a16814be27e4ed0ee900ecd0092bfb7dbfca65b5a421b774dccaaed"
+      , "sha512": "99d9e6d588cabe8913a37437f86acb5d4b8b98bce12423e633c11c13b61e6c7f92ef8f9a4e991baa590329ee2b5c09ca9db9894bee1e54bdd68e8d09d83cc245"
       , "subdir": "include/nlohmann"
       }
     , "target_root": "import targets"
@@ -241,6 +240,10 @@
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.protobuf"
     , "bindings": {"rules": "rules-protobuf", "zlib": "zlib"}
+    , "local_bootstrap":
+      { "copy":
+        ["bin/protoc", "include/google/protobuf", "proto/google/protobuf"]
+      }
     }
   , "bazel_remote_apis":
     { "repository":
@@ -374,15 +377,17 @@
       , "re2": "re2"
       , "cares": "com_github_cares_cares"
       }
+    , "local_bootstrap":
+      {"copy": ["bin/grpc_cpp_plugin", "include/grpc", "include/grpcpp"]}
     }
   , "com_github_libgit2_libgit2":
     { "repository":
       { "type": "archive"
-      , "content": "8e2e6a6faa3708b448ad891fbd3aa7673c65bcd2"
-      , "fetch": "https://github.com/libgit2/libgit2/archive/refs/tags/v1.2.0.tar.gz"
-      , "sha256": "701a5086a968a46f25e631941b99fc23e4755ca2c56f59371ce1d94b9a0cc643"
-      , "sha512": "428188de153fdf8ff5bf78949f4a3a89fba57b87a8b641f92fed501df6a8cfdb72e0ffe0bf61a98adf210a2867134eb4421ea4b8d8219331aabc3daddd92f5fc"
-      , "subdir": "libgit2-1.2.0"
+      , "content": "3673ddf85118955a7611a93968f9d1af35e7815c"
+      , "fetch": "https://github.com/libgit2/libgit2/archive/refs/tags/v1.5.0.tar.gz"
+      , "sha256": "8de872a0f201b33d9522b817c92e14edb4efad18dae95cf156cf240b2efff93e"
+      , "sha512": "7a32b27cd32bd03ce7be6c127317f82a4ac6f16615c3234699676781f4858d057edb0410b2fe36fd2e634b00748a8b0be17f23809e09a7602ba48185134300f7"
+      , "subdir": "libgit2-1.5.0"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.git2"
@@ -393,7 +398,7 @@
       , "patches": "patches"
       }
     , "bootstrap": {"include_dir": "include", "include_name": "."}
-    , "local_bootstrap": {"local_path": "include"}
+    , "local_bootstrap": {"local_path": "include", "copy": ["git2.h", "git2"]}
     }
   , "catch2":
     { "repository":
@@ -412,11 +417,11 @@
   , "com_github_curl_curl":
     { "repository":
       { "type": "archive"
-      , "content": "ad8994cddb93ba26e041d23130b08d2d9438ea0b"
-      , "fetch": "https://github.com/curl/curl/releases/download/curl-7_85_0/curl-7.85.0.tar.gz"
-      , "sha256": "78a06f918bd5fde3c4573ef4f9806f56372b32ec1829c9ec474799eeee641c27"
-      , "sha512": "bbad693bcde9c55e5942499950d76011f53ad43d3270eee2c8db486bcf46f5fc92b32dd8752caf4c5976fe493d083e2d34fa299cb96fb8e76d8f5fcc2cc56a36"
-      , "subdir": "curl-7.85.0"
+      , "content": "23ecab2d4e4d9f35aabb15d361f4fcb2c55febb8"
+      , "fetch": "https://github.com/curl/curl/releases/download/curl-7_88_1/curl-7.88.1.tar.gz"
+      , "sha256": "cdb38b72e36bc5d33d5b8810f8018ece1baa29a8f215b4495e495ded82bbf3c7"
+      , "sha512": "67701d458548712bbfaa55f2ebefbf87cdbba01b7b1200f608b1c3af67e8dd8e243fa89f256446d217d658a5a1242331d8b0168ab600351e74ee0e2511e79dae"
+      , "subdir": "curl-7.88.1"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.curl"
@@ -431,11 +436,11 @@
   , "com_github_libarchive_libarchive":
     { "repository":
       { "type": "archive"
-      , "content": "51ca0c8a60735a5f8e6f8e3731cf9e32ac0b25cb"
-      , "fetch": "https://github.com/libarchive/libarchive/releases/download/v3.6.1/libarchive-3.6.1.tar.gz"
-      , "sha256": "c676146577d989189940f1959d9e3980d28513d74eedfbc6b7f15ea45fe54ee2"
-      , "sha512": "58f7ac0c52116f73326a07dec10ff232be33b318862078785dc39f1fb2f8773b5194eabfa14764bb51ce6a5a1aa8820526e7f4c76087a6f4fcbe7789a22275b4"
-      , "subdir": "libarchive-3.6.1"
+      , "content": "2dafab016d6338086925fd04dbaa6a18bd24cb31"
+      , "fetch": "https://github.com/libarchive/libarchive/releases/download/v3.6.2/libarchive-3.6.2.tar.gz"
+      , "sha256": "ba6d02f15ba04aba9c23fd5f236bb234eab9d5209e95d1c4df85c44d5f19b9b3"
+      , "sha512": "24e476465054a29a2d48adf3c197a171b5361fa5038729a1f14d578c6701424de4e5dd6a2b20a6b697969ab43bdd8afc1585f8de0465c266f455d7eaa19e5048"
+      , "subdir": "libarchive-3.6.2"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.archive"
@@ -447,7 +452,5 @@
       }
     , "bootstrap": {"drop": true}
     }
-  , "test-credentials":
-    {"repository": {"type": "file", "path": "test/etc/credentials"}}
   }
 }

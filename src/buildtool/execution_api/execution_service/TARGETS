@@ -8,12 +8,16 @@
   , "deps":
     [ ["src/buildtool/execution_api/local", "local"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/common", "bazel_types"]
     ]
   , "private-deps":
-    [ ["src/buildtool/compatibility", "compatibility"]
-    , ["@", "fmt", "", "fmt"]
-    , ["src/buildtool/execution_api/local", "garbage_collector"]
+    [ ["@", "fmt", "", "fmt"]
+    , ["@", "gsl-lite", "", "gsl-lite"]
+    , ["src/buildtool/storage", "storage"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    , "operation_cache"
     ]
+  , "private-ldflags": ["-pthread"]
   }
 , "ac_server":
   { "type": ["@", "rules", "CC", "library"]
@@ -25,9 +29,9 @@
   , "deps":
     [ ["src/buildtool/execution_api/local", "local"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/common", "bazel_types"]
     ]
-  , "private-deps":
-    [["src/buildtool/execution_api/local", "garbage_collector"]]
+  , "private-deps": [["src/buildtool/storage", "storage"]]
   }
 , "cas_server":
   { "type": ["@", "rules", "CC", "library"]
@@ -39,11 +43,12 @@
   , "deps":
     [ ["src/buildtool/execution_api/local", "local"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/common", "bazel_types"]
     ]
   , "private-deps":
     [ ["src/buildtool/compatibility", "compatibility"]
     , ["@", "fmt", "", "fmt"]
-    , ["src/buildtool/execution_api/local", "garbage_collector"]
+    , ["src/buildtool/storage", "storage"]
     ]
   }
 , "server_implementation":
@@ -58,6 +63,7 @@
     , "cas_server"
     , "bytestream_server"
     , "capabilities_server"
+    , "operations_server"
     , ["src/buildtool/execution_api/remote", "config"]
     , ["src/buildtool/auth", "auth"]
     , ["@", "json", "", "json"]
@@ -82,7 +88,7 @@
     , ["src/buildtool/execution_api/common", "bytestream-common"]
     , ["src/utils/cpp", "tmp_dir"]
     , ["@", "fmt", "", "fmt"]
-    , ["src/buildtool/execution_api/local", "garbage_collector"]
+    , ["src/buildtool/storage", "storage"]
     ]
   }
 , "capabilities_server":
@@ -92,7 +98,28 @@
   , "srcs": ["capabilities_server.cpp"]
   , "proto": [["@", "bazel_remote_apis", "", "remote_execution_proto"]]
   , "stage": ["src", "buildtool", "execution_api", "execution_service"]
-  , "deps": [["src/buildtool/execution_api/local", "local"]]
-  , "private-deps": [["src/buildtool/logging", "logging"]]
+  , "deps": [["src/buildtool/common", "bazel_types"]]
+  , "private-deps":
+    [ ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/compatibility", "compatibility"]
+    ]
+  }
+, "operation_cache":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["operation_cache"]
+  , "hdrs": ["operation_cache.hpp"]
+  , "srcs": ["operation_cache.cpp"]
+  , "deps": [["src/buildtool/logging", "logging"]]
+  , "stage": ["src", "buildtool", "execution_api", "execution_service"]
+  , "proto": [["@", "googleapis", "", "google_longrunning_operations_proto"]]
+  }
+, "operations_server":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["operations_server"]
+  , "hdrs": ["operations_server.hpp"]
+  , "srcs": ["operations_server.cpp"]
+  , "deps": [["src/buildtool/logging", "logging"], "operation_cache"]
+  , "proto": [["@", "googleapis", "", "google_longrunning_operations_proto"]]
+  , "stage": ["src", "buildtool", "execution_api", "execution_service"]
   }
 }

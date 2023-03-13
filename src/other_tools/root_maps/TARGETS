@@ -10,13 +10,14 @@
     ]
   , "stage": ["src", "other_tools", "root_maps"]
   , "private-deps":
-    [ ["src/other_tools/just_mr", "utils"]
-    , ["src/other_tools/ops_maps", "critical_git_op_map"]
+    [ ["src/other_tools/ops_maps", "critical_git_op_map"]
     , ["src/buildtool/execution_api/common", "common"]
     , ["src/buildtool/execution_api/local", "config"]
     , ["src/buildtool/execution_api/local", "local"]
     , ["src/utils/cpp", "tmp_dir"]
     , ["src/buildtool/file_system", "file_storage"]
+    , ["src/other_tools/just_mr/progress_reporting", "progress"]
+    , ["src/other_tools/just_mr/progress_reporting", "statistics"]
     ]
   }
 , "commit_git_map":
@@ -32,7 +33,11 @@
     ]
   , "stage": ["src", "other_tools", "root_maps"]
   , "private-deps":
-    [["src/buildtool/file_system", "git_repo"], ["src/utils/cpp", "tmp_dir"]]
+    [ ["src/other_tools/git_operations", "git_repo_remote"]
+    , ["src/utils/cpp", "tmp_dir"]
+    , ["src/other_tools/just_mr/progress_reporting", "progress"]
+    , ["src/other_tools/just_mr/progress_reporting", "statistics"]
+    ]
   }
 , "fpath_git_map":
   { "type": ["@", "rules", "CC", "library"]
@@ -61,9 +66,33 @@
     ]
   , "stage": ["src", "other_tools", "root_maps"]
   , "private-deps":
-    [ ["src/utils/cpp", "archive_ops"]
+    [ ["src/other_tools/utils", "archive_ops"]
     , ["src/buildtool/execution_api/local", "local"]
     , ["src/buildtool/file_system", "file_storage"]
+    , ["src/other_tools/just_mr/progress_reporting", "progress"]
+    , ["src/other_tools/just_mr/progress_reporting", "statistics"]
+    ]
+  }
+, "tree_id_git_map":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["tree_id_git_map"]
+  , "hdrs": ["tree_id_git_map.hpp"]
+  , "srcs": ["tree_id_git_map.cpp"]
+  , "deps":
+    [ ["@", "json", "", "json"]
+    , ["src/other_tools/ops_maps", "critical_git_op_map"]
+    ]
+  , "stage": ["src", "other_tools", "root_maps"]
+  , "private-deps":
+    [ ["src/other_tools/ops_maps", "critical_git_op_map"]
+    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/system", "system_command"]
+    , ["src/other_tools/git_operations", "git_repo_remote"]
+    , ["src/other_tools/just_mr", "utils"]
+    , ["src/other_tools/just_mr/progress_reporting", "progress"]
+    , ["src/other_tools/just_mr/progress_reporting", "statistics"]
+    , ["src/other_tools/ops_maps", "content_cas_map"]
+    , ["src/other_tools/ops_maps", "import_to_git_map"]
     ]
   }
 }

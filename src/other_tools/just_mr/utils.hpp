@@ -19,8 +19,8 @@
 
 #include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
-#include "src/buildtool/execution_api/local/config.hpp"
 #include "src/buildtool/main/constants.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
 /* Paths and constants required by just-mr */
@@ -29,12 +29,11 @@ std::unordered_set<std::string> const kLocationTypes{"workspace",
                                                      "home",
                                                      "system"};
 auto const kDefaultJustPath = "just";
-auto const kDefaultRCPath = LocalExecutionConfig::GetUserHome() / ".just-mrrc";
-auto const kDefaultBuildRoot = LocalExecutionConfig::GetUserDir();
+auto const kDefaultRCPath = StorageConfig::GetUserHome() / ".just-mrrc";
+auto const kDefaultBuildRoot = StorageConfig::kDefaultBuildRoot;
 auto const kDefaultCheckoutLocationsFile =
-    LocalExecutionConfig::GetUserHome() / ".just-local.json";
-auto const kDefaultDistdirs =
-    LocalExecutionConfig::GetUserHome() / ".distfiles";
+    StorageConfig::GetUserHome() / ".just-local.json";
+auto const kDefaultDistdirs = StorageConfig::GetUserHome() / ".distfiles";
 
 std::vector<std::string> const kAltDirs = {"target_root",
                                            "rule_root",
@@ -48,17 +47,19 @@ std::vector<std::string> const kTakeOver = {"bindings",
 struct JustSubCmdFlags {
     bool config;
     bool build_root;
+    bool launch;
 };
+
 // ordered, so that we have replicability
 std::map<std::string, JustSubCmdFlags> const kKnownJustSubcommands{
-    {"version", {false, false}},
-    {"describe", {true, false}},
-    {"analyse", {true, true}},
-    {"build", {true, true}},
-    {"install", {true, true}},
-    {"rebuild", {true, true}},
-    {"install-cas", {false, true}},
-    {"gc", {false, true}}};
+    {"version", {false /*config*/, false /*build_root*/, false /*launch*/}},
+    {"describe", {true /*config*/, false /*build_root*/, false /*launch*/}},
+    {"analyse", {true /*config*/, true /*build_root*/, false /*launch*/}},
+    {"build", {true /*config*/, true /*build_root*/, true /*launch*/}},
+    {"install", {true /*config*/, true /*build_root*/, true /*launch*/}},
+    {"rebuild", {true /*config*/, true /*build_root*/, true /*launch*/}},
+    {"install-cas", {false /*config*/, true /*build_root*/, false /*launch*/}},
+    {"gc", {false /*config*/, true /*build_root*/, false /*launch*/}}};
 
 nlohmann::json const kDefaultConfigLocations = nlohmann::json::array(
     {{{"root", "workspace"}, {"path", "repos.json"}},
@@ -67,7 +68,7 @@ nlohmann::json const kDefaultConfigLocations = nlohmann::json::array(
      {{"root", "system"}, {"path", "etc/just-repos.json"}}});
 
 /// \brief Checkout type enum
-enum class CheckoutType : std::uint8_t { Git, Archive, File, Distdir };
+enum class CheckoutType : std::uint8_t { Git, Archive, File, Distdir, GitTree };
 
 /// \brief Checkout type map
 std::unordered_map<std::string, CheckoutType> const kCheckoutTypeMap = {
@@ -75,7 +76,8 @@ std::unordered_map<std::string, CheckoutType> const kCheckoutTypeMap = {
     {"archive", CheckoutType::Archive},
     {"zip", CheckoutType::Archive},  // treated the same as "archive"
     {"file", CheckoutType::File},
-    {"distdir", CheckoutType::Distdir}};
+    {"distdir", CheckoutType::Distdir},
+    {"git tree", CheckoutType::GitTree}};
 
 namespace JustMR {
 
@@ -112,7 +114,13 @@ struct Paths {
     std::vector<std::filesystem::path> distdirs{};
 };
 
+struct CAInfo {
+    bool no_ssl_verify{false};
+    std::optional<std::filesystem::path> ca_bundle{std::nullopt};
+};
+
 using PathsPtr = std::shared_ptr<JustMR::Paths>;
+using CAInfoPtr = std::shared_ptr<JustMR::CAInfo>;
 
 namespace Utils {
 

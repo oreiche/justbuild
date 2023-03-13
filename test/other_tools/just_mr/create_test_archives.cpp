@@ -17,7 +17,7 @@
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_config.hpp"
 #include "src/buildtool/logging/log_sink_cmdline.hpp"
-#include "src/utils/cpp/archive_ops.hpp"
+#include "src/other_tools/utils/archive_ops.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
 namespace {
@@ -98,7 +98,7 @@ auto main() -> int {
     // 1. move to correct directory
     {
         auto anchor = FileSystemManager::ChangeDirectory(tmp_dir->GetPath());
-        // 2. create the archvies wrt to current directory
+        // 2. create the archives wrt to current directory
         std::optional<std::string> res{std::nullopt};
         res = ArchiveOps::CreateArchive(
             ArchiveType::kArchiveTypeZip, "zip_repo.zip", "root");

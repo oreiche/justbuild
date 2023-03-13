@@ -24,26 +24,29 @@
 #include "src/buildtool/build_engine/base_maps/entity_name.hpp"
 #include "src/buildtool/build_engine/expression/evaluator.hpp"
 #include "src/buildtool/build_engine/expression/expression.hpp"
-#include "src/buildtool/build_engine/target_map/target_cache.hpp"
-#include "src/buildtool/build_engine/target_map/target_cache_entry.hpp"
-#include "src/buildtool/build_engine/target_map/target_cache_key.hpp"
 #include "src/buildtool/build_engine/target_map/target_map.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
 #include "src/buildtool/common/cli.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
-#include "src/buildtool/execution_api/local/garbage_collector.hpp"
+#include "src/buildtool/execution_api/local/config.hpp"
 #include "src/buildtool/main/analyse.hpp"
 #include "src/buildtool/main/constants.hpp"
 #include "src/buildtool/main/describe.hpp"
 #include "src/buildtool/main/exit_codes.hpp"
 #include "src/buildtool/main/install_cas.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/garbage_collector.hpp"
+#include "src/buildtool/storage/target_cache.hpp"
+#include "src/buildtool/storage/target_cache_entry.hpp"
+#include "src/buildtool/storage/target_cache_key.hpp"
 #ifndef BOOTSTRAP_BUILD_TOOL
 #include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/execution_api/execution_service/operation_cache.hpp"
 #include "src/buildtool/execution_api/execution_service/server_implementation.hpp"
-#include "src/buildtool/execution_api/local/garbage_collector.hpp"
 #include "src/buildtool/graph_traverser/graph_traverser.hpp"
-#include "src/buildtool/progress_reporting/base_progress_reporter.hpp"
+#include "src/buildtool/progress_reporting/progress_reporter.hpp"
+#include "src/buildtool/storage/garbage_collector.hpp"
 #endif
 #include "src/buildtool/logging/log_config.hpp"
 #include "src/buildtool/logging/log_sink_cmdline.hpp"
@@ -181,6 +184,7 @@ auto SetupTraverseCommandArguments(
 auto SetupGcCommandArguments(
     gsl::not_null<CLI::App*> const& app,
     gsl::not_null<CommandLineArguments*> const& clargs) {
+    SetupLogArguments(app, &clargs->log);
     SetupCacheArguments(app, &clargs->endpoint);
 }
 
@@ -287,8 +291,10 @@ void SetupLogging(LogArguments const& clargs) {
     LogConfig::SetLogLimit(clargs.log_limit);
     LogConfig::SetSinks({LogSinkCmdLine::CreateFactory(not clargs.plain_log)});
     for (auto const& log_file : clargs.log_files) {
-        LogConfig::AddSink(
-            LogSinkFile::CreateFactory(log_file, LogSinkFile::Mode::Overwrite));
+        LogConfig::AddSink(LogSinkFile::CreateFactory(
+            log_file,
+            clargs.log_append ? LogSinkFile::Mode::Append
+                              : LogSinkFile::Mode::Overwrite));
     }
 }
 
@@ -296,10 +302,11 @@ void SetupLogging(LogArguments const& clargs) {
 void SetupExecutionConfig(EndpointArguments const& eargs,
                           BuildArguments const& bargs,
                           RebuildArguments const& rargs) {
+    using StorageConfig = StorageConfig;
     using LocalConfig = LocalExecutionConfig;
     using RemoteConfig = RemoteExecutionConfig;
     if (not(not eargs.local_root or
-            (LocalConfig::SetBuildRoot(*eargs.local_root))) or
+            (StorageConfig::SetBuildRoot(*eargs.local_root))) or
         not(not bargs.local_launcher or
             LocalConfig::SetLauncher(*bargs.local_launcher))) {
         Logger::Log(LogLevel::Error, "failed to configure local execution.");
@@ -424,6 +431,9 @@ void SetupExecutionServiceConfig(ExecutionServiceArguments const& args) {
             std::exit(kExitFailure);
         }
     }
+    if (args.op_exponent) {
+        OperationCache::SetExponent(*args.op_exponent);
+    }
 }
 
 void SetupHashFunction() {
@@ -484,21 +494,20 @@ void SetupHashFunction() {
         }
     }
 
-    if (not clargs.defines.empty()) {
+    for (auto const& s : clargs.defines) {
         try {
-            auto map =
-                Expression::FromJson(nlohmann::json::parse(clargs.defines));
+            auto map = Expression::FromJson(nlohmann::json::parse(s));
             if (not map->IsMap()) {
                 Logger::Log(LogLevel::Error,
-                            "Defines {} does not contain a map.",
-                            clargs.defines);
+                            "Defines entry {} does not contain a map.",
+                            nlohmann::json(s).dump());
                 std::exit(kExitFailure);
             }
             config = config.Update(map);
         } catch (std::exception const& e) {
             Logger::Log(LogLevel::Error,
-                        "Parsing defines {} failed with error:\n{}",
-                        clargs.defines,
+                        "Parsing defines entry {} failed with error:\n{}",
+                        nlohmann::json(s).dump(),
                         e.what());
             std::exit(kExitFailure);
         }
@@ -550,7 +559,7 @@ void SetupHashFunction() {
             Base::EntityName{Base::NamedTarget{main_repo, current_module, ""}},
             [&clargs](std::string const& parse_err) {
                 Logger::Log(LogLevel::Error,
-                            "Parsing target name {} failed with:\n{}.",
+                            "Parsing target name {} failed with:\n{}",
                             clargs.target->dump(),
                             parse_err);
             });
@@ -1203,24 +1212,27 @@ void WriteTargetCacheEntries(
     gsl::not_null<IExecutionApi*> const& local_api,
     gsl::not_null<IExecutionApi*> const& remote_api) {
     auto ts = TaskSystem{jobs};
-    TargetCache::Instance().SetLocalApi(local_api);
-    TargetCache::Instance().SetRemoteApi(remote_api);
+    auto downloader = [&local_api, &remote_api](auto infos) {
+        return remote_api->RetrieveToCas(infos, local_api);
+    };
     for (auto const& [key, target] : cache_targets) {
-        ts.QueueTask([&key = key, &target = target, &extra_infos]() {
-            if (auto entry =
-                    TargetCacheEntry::FromTarget(target, extra_infos)) {
-                if (not TargetCache::Instance().Store(key, *entry)) {
+        ts.QueueTask(
+            [&key = key, &target = target, &extra_infos, &downloader]() {
+                if (auto entry =
+                        TargetCacheEntry::FromTarget(target, extra_infos)) {
+                    if (not Storage::Instance().TargetCache().Store(
+                            key, *entry, downloader)) {
+                        Logger::Log(LogLevel::Warning,
+                                    "Failed writing target cache entry for {}",
+                                    key.Id().ToString());
+                    }
+                }
+                else {
                     Logger::Log(LogLevel::Warning,
-                                "Failed writing target cache entry for {}",
+                                "Failed creating target cache entry for {}",
                                 key.Id().ToString());
                 }
-            }
-            else {
-                Logger::Log(LogLevel::Warning,
-                            "Failed creating target cache entry for {}",
-                            key.Id().ToString());
-            }
-        });
+            });
     }
 }
 #endif
@@ -1283,7 +1295,7 @@ auto main(int argc, char* argv[]) -> int {
                                         std::move(arguments.build),
                                         std::move(stage_args),
                                         std::move(rebuild_args)},
-                                       BaseProgressReporter::Reporter()};
+                                       ProgressReporter::Reporter()};
 
         if (arguments.cmd == SubCommand::kInstallCas) {
             return FetchAndInstallArtifacts(traverser.GetRemoteApi(),

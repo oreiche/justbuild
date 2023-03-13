@@ -17,10 +17,10 @@
 #include <algorithm>
 
 #include "src/buildtool/execution_api/common/execution_common.hpp"
-#include "src/buildtool/execution_api/local/config.hpp"
-#include "src/buildtool/execution_api/local/local_cas.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
-#include "src/other_tools/just_mr/utils.hpp"
+#include "src/buildtool/storage/storage.hpp"
+#include "src/other_tools/just_mr/progress_reporting/progress.hpp"
+#include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
 #include "src/other_tools/ops_maps/critical_git_op_map.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
@@ -32,12 +32,13 @@ namespace {
     std::shared_ptr<std::unordered_map<std::string, std::string>> const&
         content_list,
     std::filesystem::path const& tmp_dir) noexcept -> bool {
-    auto const& casf = LocalCAS<ObjectType::File>::Instance();
+    auto const& cas = Storage::Instance().CAS();
     return std::all_of(content_list->begin(),
                        content_list->end(),
-                       [&casf, tmp_dir](auto const& kv) {
-                           auto content_path = casf.BlobPath(
-                               ArtifactDigest(kv.second, 0, false));
+                       [&cas, tmp_dir](auto const& kv) {
+                           auto content_path =
+                               cas.BlobPath(ArtifactDigest(kv.second, 0, false),
+                                            /*is_executable=*/false);
                            if (content_path) {
                                return FileSystemManager::CreateFileHardlink(
                                    *content_path,  // from: cas_path/content_id
@@ -102,6 +103,8 @@ auto CreateDistdirGitMap(
                         {"git tree",
                          distdir_tree_id,
                          JustMR::Utils::GetGitCacheRoot().string()}));
+                    // report cache hit
+                    JustMRStatistics::Instance().IncrementCacheHitsCounter();
                 },
                 [logger, target_path = JustMR::Utils::GetGitCacheRoot()](
                     auto const& msg, bool fatal) {
@@ -114,6 +117,9 @@ auto CreateDistdirGitMap(
                 });
         }
         else {
+            // start work reporting
+            JustMRProgress::Instance().TaskTracker().Start(key.origin);
+            JustMRStatistics::Instance().IncrementQueuedCounter();
             // fetch the gathered distdir repos into CAS
             content_cas_map->ConsumeAfterKeysReady(
                 ts,
@@ -121,6 +127,7 @@ auto CreateDistdirGitMap(
                 [distdir_tree_id_file,
                  content_id = key.content_id,
                  content_list = key.content_list,
+                 origin = key.origin,
                  import_to_git_map,
                  ts,
                  setter,
@@ -151,6 +158,7 @@ auto CreateDistdirGitMap(
                         {std::move(c_info)},
                         [tmp_dir,  // keep tmp_dir alive
                          distdir_tree_id_file,
+                         origin,
                          setter,
                          logger](auto const& values) {
                             // check for errors
@@ -176,6 +184,11 @@ auto CreateDistdirGitMap(
                                 {"git tree",
                                  distdir_tree_id,
                                  JustMR::Utils::GetGitCacheRoot().string()}));
+                            // report work done
+                            JustMRProgress::Instance().TaskTracker().Stop(
+                                origin);
+                            JustMRStatistics::Instance()
+                                .IncrementExecutedCounter();
                         },
                         [logger, target_path = tmp_dir->GetPath()](
                             auto const& msg, bool fatal) {

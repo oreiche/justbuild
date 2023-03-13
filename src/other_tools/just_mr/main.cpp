@@ -12,14 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <utility>
+
 #include <nlohmann/json.hpp>
 #include <unistd.h>
 
 #include "src/buildtool/build_engine/expression/configuration.hpp"
 #include "src/buildtool/logging/log_config.hpp"
 #include "src/buildtool/logging/log_sink_cmdline.hpp"
+#include "src/buildtool/logging/log_sink_file.hpp"
+#include "src/buildtool/main/version.hpp"
 #include "src/other_tools/just_mr/cli.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
+#include "src/other_tools/just_mr/progress_reporting/progress.hpp"
+#include "src/other_tools/just_mr/progress_reporting/progress_reporter.hpp"
+#include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
 #include "src/other_tools/ops_maps/git_update_map.hpp"
 #include "src/other_tools/ops_maps/repo_fetch_map.hpp"
 #include "src/other_tools/repo_map/repos_to_setup_map.hpp"
@@ -28,6 +35,7 @@ namespace {
 
 enum class SubCommand {
     kUnknown,
+    kMRVersion,
     kFetch,
     kUpdate,
     kSetup,
@@ -39,6 +47,7 @@ enum class SubCommand {
 struct CommandLineArguments {
     SubCommand cmd{SubCommand::kUnknown};
     MultiRepoCommonArguments common;
+    MultiRepoLogArguments log;
     MultiRepoSetupArguments setup;
     MultiRepoFetchArguments fetch;
     MultiRepoUpdateArguments update;
@@ -55,6 +64,7 @@ void SetupCommonCommandArguments(
     gsl::not_null<CLI::App*> const& app,
     gsl::not_null<CommandLineArguments*> const& clargs) {
     SetupMultiRepoCommonArguments(app, &clargs->common);
+    SetupMultiRepoLogArguments(app, &clargs->log);
 }
 
 /// \brief Setup arguments for subcommand "just-mr fetch".
@@ -80,15 +90,12 @@ void SetupSetupCommandArguments(
     SetupMultiRepoSetupArguments(app, &clargs->setup);
 }
 
-void SetupDefaultLogging() {
-    LogConfig::SetLogLimit(kDefaultLogLevel);
-    LogConfig::SetSinks({LogSinkCmdLine::CreateFactory()});
-}
-
 [[nodiscard]] auto ParseCommandLineArguments(int argc, char const* const* argv)
     -> CommandLineArguments {
     CLI::App app("just-mr");
     app.option_defaults()->take_last();
+    auto* cmd_mrversion = app.add_subcommand(
+        "mrversion", "Print version information in JSON format of this tool.");
     auto* cmd_setup =
         app.add_subcommand("setup", "Setup and generate just configuration");
     auto* cmd_setup_env = app.add_subcommand(
@@ -99,7 +106,7 @@ void SetupDefaultLogging() {
         "update",
         "Advance Git commit IDs and print updated just-mr configuration.");
     auto* cmd_do = app.add_subcommand(
-        "do", "Canonical way of specifying just subcommands. ");
+        "do", "Canonical way of specifying just subcommands.");
     cmd_do->set_help_flag();  // disable help flag
     // define just subcommands
     std::vector<CLI::App*> cmd_just_subcmds{};
@@ -107,7 +114,7 @@ void SetupDefaultLogging() {
     for (auto const& known_subcmd : kKnownJustSubcommands) {
         auto* subcmd = app.add_subcommand(
             known_subcmd.first,
-            "Run setup and call \'just " + known_subcmd.first + "\'.");
+            "Run setup and call \"just " + known_subcmd.first + "\".");
         subcmd->set_help_flag();  // disable help flag
         cmd_just_subcmds.emplace_back(subcmd);
     }
@@ -138,7 +145,10 @@ void SetupDefaultLogging() {
         std::exit(kExitClargsError);
     }
 
-    if (*cmd_setup) {
+    if (*cmd_mrversion) {
+        clargs.cmd = SubCommand::kMRVersion;
+    }
+    else if (*cmd_setup) {
         clargs.cmd = SubCommand::kSetup;
     }
     else if (*cmd_setup_env) {
@@ -171,6 +181,22 @@ void SetupDefaultLogging() {
     return clargs;
 }
 
+void SetupDefaultLogging() {
+    LogConfig::SetLogLimit(kDefaultLogLevel);
+    LogConfig::SetSinks({LogSinkCmdLine::CreateFactory()});
+}
+
+void SetupLogging(MultiRepoLogArguments const& clargs) {
+    LogConfig::SetLogLimit(clargs.log_limit);
+    LogConfig::SetSinks({LogSinkCmdLine::CreateFactory(not clargs.plain_log)});
+    for (auto const& log_file : clargs.log_files) {
+        LogConfig::AddSink(LogSinkFile::CreateFactory(
+            log_file,
+            clargs.log_append ? LogSinkFile::Mode::Append
+                              : LogSinkFile::Mode::Overwrite));
+    }
+}
+
 [[nodiscard]] auto ReadLocation(
     nlohmann::json const& location,
     std::optional<std::filesystem::path> const& ws_root)
@@ -197,7 +223,7 @@ void SetupDefaultLogging() {
         root_path = *ws_root;
     }
     if (root == "home") {
-        root_path = LocalExecutionConfig::GetUserHome();
+        root_path = StorageConfig::GetUserHome();
     }
     if (root == "system") {
         root_path = FileSystemManager::GetCurrentDirectory().root_path();
@@ -236,7 +262,7 @@ void SetupDefaultLogging() {
             root_path = *ws_root;
         }
         if (root_str == "home") {
-            root_path = LocalExecutionConfig::GetUserHome();
+            root_path = StorageConfig::GetUserHome();
         }
         if (root_str == "system") {
             root_path = FileSystemManager::GetCurrentDirectory().root_path();
@@ -350,16 +376,13 @@ void SetupDefaultLogging() {
     if (just_args.IsNotNull()) {
         for (auto const& [cmd_name, cmd_args] : just_args->Map()) {
             // get list of string args for current command
-            clargs->just_cmd.just_args[cmd_name] =
-                [&cmd_args = cmd_args]() -> std::vector<std::string> {
-                std::vector<std::string> args{};
-                auto const& args_list = cmd_args->List();
-                args.resize(args_list.size());
-                for (auto const& arg : args_list) {
-                    args.emplace_back(arg->String());
-                }
-                return args;
-            }();
+            std::vector<std::string> args{};
+            auto const& args_list = cmd_args->List();
+            args.reserve(args_list.size());
+            for (auto const& arg : args_list) {
+                args.emplace_back(arg->String());
+            }
+            clargs->just_cmd.just_args[cmd_name] = std::move(args);
         }
     }
     // read config lookup order
@@ -417,9 +440,51 @@ void SetupDefaultLogging() {
     return config;
 }
 
-void ReachableRepositories(ExpressionPtr const& repos,
-                           std::string const& main,
-                           std::shared_ptr<SetupRepos> const& setup_repos) {
+/// \brief Add repos from a given repo list to the reported repos set if its
+/// type is distdir. Ignore any missing or wrong info.
+void AddDistdirReportedRepos(
+    ExpressionPtr const& repos,
+    std::string const& repo_name,
+    std::shared_ptr<std::unordered_set<std::string>> const&
+        reported_repos_set) {
+    auto repo_desc_key = repos->Get(repo_name, Expression::none_t{});
+    auto repo_desc = repo_desc_key->Get("repository", Expression::none_t{});
+    auto resolved_repo_desc = JustMR::Utils::ResolveRepo(repo_desc, repos);
+    if (not resolved_repo_desc) {
+        return;
+    }
+    auto repo_type = (*resolved_repo_desc)->Get("type", Expression::none_t{});
+    if (not repo_type->IsString()) {
+        return;
+    }
+    // check if the repo is distdir
+    auto repo_type_str = repo_type->String();
+    if (repo_type_str != "distdir") {
+        return;
+    }
+    // get distdir list
+    auto repo_desc_repositories =
+        repo_desc->Get("repositories", Expression::none_t{});
+    if (not repo_desc_repositories->IsList()) {
+        return;
+    }
+    auto distdir_repos = repo_desc_repositories->List();
+    // add to reported set
+    for (auto const& entry : distdir_repos) {
+        if (entry->IsString()) {
+            reported_repos_set->insert(entry->String());
+        }
+    }
+}
+
+/// \brief Get the repo dependency closure for a given main repository.
+/// For progress reporting we include
+void ReachableRepositories(
+    ExpressionPtr const& repos,
+    std::string const& main,
+    std::shared_ptr<SetupRepos> const& setup_repos,
+    std::shared_ptr<std::unordered_set<std::string>> const& reported_repos_set =
+        nullptr) {
     // use temporary sets to avoid duplicates
     std::unordered_set<std::string> include_repos_set{};
     if (repos->IsMap()) {
@@ -429,6 +494,13 @@ void ReachableRepositories(ExpressionPtr const& repos,
                 if (not include_repos_set.contains(repo_name)) {
                     // if not found, add it and repeat for its bindings
                     include_repos_set.insert(repo_name);
+                    // add to reported repos, if needed
+                    if (reported_repos_set) {
+                        reported_repos_set->insert(repo_name);
+                        AddDistdirReportedRepos(
+                            repos, repo_name, reported_repos_set);
+                    }
+                    // check bindings
                     auto repos_repo_name =
                         repos->Get(repo_name, Expression::none_t{});
                     if (not repos_repo_name.IsNotNull()) {
@@ -457,7 +529,14 @@ void ReachableRepositories(ExpressionPtr const& repos,
                     auto layer_val =
                         repos_repo->Get(layer, Expression::none_t{});
                     if (layer_val.IsNotNull() and layer_val->IsString()) {
-                        setup_repos_set.insert(layer_val->String());
+                        auto repo_name = layer_val->String();
+                        setup_repos_set.insert(repo_name);
+                        // add to reported repos, if needed
+                        if (reported_repos_set) {
+                            reported_repos_set->insert(repo_name);
+                            AddDistdirReportedRepos(
+                                repos, repo_name, reported_repos_set);
+                        }
                     }
                 }
             }
@@ -481,16 +560,29 @@ void ReachableRepositories(ExpressionPtr const& repos,
 
 void DefaultReachableRepositories(
     ExpressionPtr const& repos,
-    std::shared_ptr<SetupRepos> const& setup_repos) {
+    std::shared_ptr<SetupRepos> const& setup_repos,
+    std::shared_ptr<std::unordered_set<std::string>> const& reported_repos_set =
+        nullptr) {
     if (repos.IsNotNull() and repos->IsMap()) {
         setup_repos->to_setup = repos->Map().Keys();
         setup_repos->to_include = setup_repos->to_setup;
+        // get reported repos
+        if (reported_repos_set) {
+            *reported_repos_set = std::unordered_set<std::string>(
+                setup_repos->to_setup.begin(), setup_repos->to_setup.end());
+            for (auto const& repo : setup_repos->to_setup) {
+                AddDistdirReportedRepos(repos, repo, reported_repos_set);
+            }
+        }
     }
 }
 
 [[nodiscard]] auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                                   CommandLineArguments const& arguments)
     -> int {
+    // provide report
+    Logger::Log(LogLevel::Info, "Performing repositories fetch");
+
     // find fetch dir
     auto fetch_dir = arguments.fetch.fetch_dir;
     if (not fetch_dir) {
@@ -514,7 +606,7 @@ void DefaultReachableRepositories(
     auto repos = (*config)["repositories"];
     if (not repos.IsNotNull()) {
         Logger::Log(LogLevel::Error,
-                    "Config: mandatory key \"repositories\" "
+                    "Config: Mandatory key \"repositories\" "
                     "missing");
         return kExitFetchError;
     }
@@ -563,11 +655,11 @@ void DefaultReachableRepositories(
                         *arguments.common.just_mr_paths->workspace_root)) {
                     Logger::Log(
                         LogLevel::Warning,
-                        "Writing distributiona files to workspace location {}, "
+                        "Writing distribution files to workspace location {}, "
                         "which is different to the workspace of the requested "
                         "main repository {}.",
-                        fetch_dir->string(),
-                        repo_path_as_path.string());
+                        nlohmann::json(fetch_dir->string()).dump(),
+                        nlohmann::json(repo_path_as_path.string()).dump());
                 }
             }
         }
@@ -583,8 +675,8 @@ void DefaultReachableRepositories(
         auto repo_desc = repos->At(repo_name);
         if (not repo_desc) {
             Logger::Log(LogLevel::Error,
-                        "Config: missing config entry for repository {}",
-                        repo_name);
+                        "Config: Missing config entry for repository {}",
+                        nlohmann::json(repo_name).dump());
             return kExitFetchError;
         }
         auto repo = repo_desc->get()->At("repository");
@@ -593,33 +685,34 @@ void DefaultReachableRepositories(
                 JustMR::Utils::ResolveRepo(repo->get(), repos);
             if (not resolved_repo_desc) {
                 Logger::Log(LogLevel::Error,
-                            "Config: found cyclic dependency for "
+                            "Config: Found cyclic dependency for "
                             "repository {}",
-                            repo_name);
+                            nlohmann::json(repo_name).dump());
                 return kExitFetchError;
             }
             // get repo_type
             auto repo_type = (*resolved_repo_desc)->At("type");
             if (not repo_type) {
                 Logger::Log(LogLevel::Error,
-                            "Config: mandatory key \"type\" missing "
+                            "Config: Mandatory key \"type\" missing "
                             "for repository {}",
-                            repo_name);
+                            nlohmann::json(repo_name).dump());
                 return kExitFetchError;
             }
             if (not repo_type->get()->IsString()) {
                 Logger::Log(LogLevel::Error,
-                            "Config: unsupported value for key \'type\' for "
+                            "Config: Unsupported value {} for key \"type\" for "
                             "repository {}",
-                            repo_name);
+                            repo_type->get()->ToString(),
+                            nlohmann::json(repo_name).dump());
                 return kExitFetchError;
             }
             auto repo_type_str = repo_type->get()->String();
             if (not kCheckoutTypeMap.contains(repo_type_str)) {
                 Logger::Log(LogLevel::Error,
                             "Unknown repository type {} for {}",
-                            repo_type_str,
-                            repo_name);
+                            nlohmann::json(repo_type_str).dump(),
+                            nlohmann::json(repo_name).dump());
                 return kExitFetchError;
             }
             // only do work if repo is archive type
@@ -634,7 +727,8 @@ void DefaultReachableRepositories(
                 if (not repo_desc_content->get()->IsString()) {
                     Logger::Log(
                         LogLevel::Error,
-                        "Unsupported value for mandatory field \'content\'");
+                        "Unsupported value {} for mandatory field \"content\"",
+                        repo_desc_content->get()->ToString());
                     return kExitFetchError;
                 }
                 auto repo_desc_fetch = (*resolved_repo_desc)->At("fetch");
@@ -645,8 +739,9 @@ void DefaultReachableRepositories(
                 }
                 if (not repo_desc_fetch->get()->IsString()) {
                     Logger::Log(LogLevel::Error,
-                                "ArchiveCheckout: Unsupported value for "
-                                "mandatory field \'fetch\'");
+                                "ArchiveCheckout: Unsupported value {} for "
+                                "mandatory field \"fetch\"",
+                                repo_desc_fetch->get()->ToString());
                     return kExitFetchError;
                 }
                 auto repo_desc_subdir =
@@ -675,8 +770,10 @@ void DefaultReachableRepositories(
                             : std::nullopt, /* sha256 */
                         repo_desc_sha512->IsString()
                             ? std::make_optional(repo_desc_sha512->String())
-                            : std::nullopt /* sha512 */
-                    },                     /* archive */
+                            : std::nullopt, /* sha512 */
+                        repo_name,          /* origin */
+                        false               /* origin_from_distdir */
+                    },                      /* archive */
                     repo_type_str,
                     subdir.empty() ? "." : subdir.string()};
                 // add to list
@@ -685,16 +782,45 @@ void DefaultReachableRepositories(
         }
         else {
             Logger::Log(LogLevel::Error,
-                        "Config: missing repository description for {}",
-                        repo_name);
+                        "Config: Missing repository description for {}",
+                        nlohmann::json(repo_name).dump());
             return kExitFetchError;
         }
     }
+
+    // report progress
+    auto nr = repos_to_fetch.size();
+    Logger::Log(LogLevel::Info,
+                "Found {} {} to fetch",
+                nr,
+                nr == 1 ? "archive" : "archives");
+
     // create async maps
     auto content_cas_map = CreateContentCASMap(arguments.common.just_mr_paths,
+                                               arguments.common.ca_info,
                                                arguments.common.jobs);
     auto repo_fetch_map =
         CreateRepoFetchMap(&content_cas_map, *fetch_dir, arguments.common.jobs);
+
+    // set up map for progress tracing
+    auto& repo_set = JustMRProgress::Instance().RepositorySet();
+    repo_set.clear();
+    repo_set.reserve(nr);
+    for (auto const& repo : repos_to_fetch) {
+        auto distfile = (repo.archive.distfile
+                             ? repo.archive.distfile.value()
+                             : std::filesystem::path(repo.archive.fetch_url)
+                                   .filename()
+                                   .string());
+        repo_set.emplace(std::move(distfile));
+    }
+    // set up progress observer
+    std::atomic<bool> done{false};
+    std::condition_variable cv{};
+    auto reporter = JustMRProgressReporter::Reporter();
+    auto observer =
+        std::thread([reporter, &done, &cv]() { reporter(&done, &cv); });
+
     // do the fetch
     bool failed{false};
     {
@@ -718,24 +844,38 @@ void DefaultReachableRepositories(
                 failed = failed or fatal;
             });
     }
+
+    // close progress observer
+    done = true;
+    cv.notify_all();
+    observer.join();
+
     if (failed) {
         return kExitFetchError;
     }
+    // report success
+    Logger::Log(LogLevel::Info, "Fetch completed");
     return kExitSuccess;
 }
 
 [[nodiscard]] auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
                                    CommandLineArguments const& arguments)
     -> int {
+    // provide report
+    Logger::Log(LogLevel::Info, "Performing repositories update");
+
     // Check trivial case
     if (arguments.update.repos_to_update.empty()) {
+        // report success
+        Logger::Log(LogLevel::Info, "No update needed");
+        // print config file
         std::cout << config->ToJson().dump(2) << std::endl;
         return kExitSuccess;
     }
     auto repos = (*config)["repositories"];
     if (not repos.IsNotNull()) {
         Logger::Log(LogLevel::Error,
-                    "Config: mandatory key \"repositories\" "
+                    "Config: Mandatory key \"repositories\" "
                     "missing");
         return kExitUpdateError;
     }
@@ -746,8 +886,8 @@ void DefaultReachableRepositories(
         auto repo_desc_parent = repos->At(repo_name);
         if (not repo_desc_parent) {
             Logger::Log(LogLevel::Error,
-                        "Config: missing config entry for repository {}",
-                        repo_name);
+                        "Config: Missing config entry for repository {}",
+                        nlohmann::json(repo_name).dump());
             return kExitUpdateError;
         }
         auto repo_desc = repo_desc_parent->get()->At("repository");
@@ -756,33 +896,34 @@ void DefaultReachableRepositories(
                 JustMR::Utils::ResolveRepo(repo_desc->get(), repos);
             if (not resolved_repo_desc) {
                 Logger::Log(LogLevel::Error,
-                            fmt::format("Config: found cyclic dependency for "
+                            fmt::format("Config: Found cyclic dependency for "
                                         "repository {}",
-                                        repo_name));
+                                        nlohmann::json(repo_name).dump()));
                 return kExitUpdateError;
             }
             // get repo_type
             auto repo_type = (*resolved_repo_desc)->At("type");
             if (not repo_type) {
                 Logger::Log(LogLevel::Error,
-                            "Config: mandatory key \"type\" missing "
+                            "Config: Mandatory key \"type\" missing "
                             "for repository {}",
-                            repo_name);
+                            nlohmann::json(repo_name).dump());
                 return kExitUpdateError;
             }
             if (not repo_type->get()->IsString()) {
                 Logger::Log(LogLevel::Error,
-                            "Config: unsupported value for key \'type\' for "
+                            "Config: Unsupported value {} for key \"type\" for "
                             "repository {}",
-                            repo_name);
+                            repo_type->get()->ToString(),
+                            nlohmann::json(repo_name).dump());
                 return kExitUpdateError;
             }
             auto repo_type_str = repo_type->get()->String();
             if (not kCheckoutTypeMap.contains(repo_type_str)) {
                 Logger::Log(LogLevel::Error,
                             "Unknown repository type {} for {}",
-                            repo_type_str,
-                            repo_name);
+                            nlohmann::json(repo_type_str).dump(),
+                            nlohmann::json(repo_name).dump());
                 return kExitUpdateError;
             }
             // only do work if repo is git type
@@ -790,30 +931,32 @@ void DefaultReachableRepositories(
                 auto repo_desc_repository =
                     (*resolved_repo_desc)->At("repository");
                 if (not repo_desc_repository) {
-                    Logger::Log(LogLevel::Error,
-                                "Mandatory field \"repository\" is missing");
+                    Logger::Log(
+                        LogLevel::Error,
+                        "Config: Mandatory field \"repository\" is missing");
                     return kExitUpdateError;
                 }
                 if (not repo_desc_repository->get()->IsString()) {
-                    Logger::Log(
-                        LogLevel::Error,
-                        "Config: unsupported value for key \'repository\' for "
-                        "repository {}",
-                        repo_name);
+                    Logger::Log(LogLevel::Error,
+                                "Config: Unsupported value {} for key "
+                                "\"repository\" for repository {}",
+                                repo_desc_repository->get()->ToString(),
+                                nlohmann::json(repo_name).dump());
                     return kExitUpdateError;
                 }
                 auto repo_desc_branch = (*resolved_repo_desc)->At("branch");
                 if (not repo_desc_branch) {
-                    Logger::Log(LogLevel::Error,
-                                "Mandatory field \"branch\" is missing");
+                    Logger::Log(
+                        LogLevel::Error,
+                        "Config: Mandatory field \"branch\" is missing");
                     return kExitUpdateError;
                 }
                 if (not repo_desc_branch->get()->IsString()) {
-                    Logger::Log(
-                        LogLevel::Error,
-                        "Config: unsupported value for key \'branch\' for "
-                        "repository {}",
-                        repo_name);
+                    Logger::Log(LogLevel::Error,
+                                "Config: Unsupported value {} for key "
+                                "\"branch\" for repository {}",
+                                repo_desc_branch->get()->ToString(),
+                                nlohmann::json(repo_name).dump());
                     return kExitUpdateError;
                 }
                 repos_to_update.emplace_back(
@@ -822,16 +965,16 @@ void DefaultReachableRepositories(
             }
             else {
                 Logger::Log(LogLevel::Error,
-                            "Config: argument {} is not the name of a git type "
-                            "repository",
-                            repo_name);
+                            "Config: Argument {} is not the name of a \"git\" "
+                            "type repository",
+                            nlohmann::json(repo_name).dump());
                 return kExitUpdateError;
             }
         }
         else {
             Logger::Log(LogLevel::Error,
-                        "Config: missing repository description for {}",
-                        repo_name);
+                        "Config: Missing repository description for {}",
+                        nlohmann::json(repo_name).dump());
             return kExitUpdateError;
         }
     }
@@ -842,7 +985,8 @@ void DefaultReachableRepositories(
         return kExitUpdateError;
     }
     // Init and open git repo
-    auto git_repo = GitRepo::InitAndOpen(tmp_dir->GetPath(), /*is_bare=*/true);
+    auto git_repo =
+        GitRepoRemote::InitAndOpen(tmp_dir->GetPath(), /*is_bare=*/true);
     if (not git_repo) {
         Logger::Log(LogLevel::Error,
                     "Failed to initialize repository in tmp dir {} for git "
@@ -850,11 +994,36 @@ void DefaultReachableRepositories(
                     tmp_dir->GetPath().string());
         return kExitUpdateError;
     }
+
+    // report progress
+    auto nr = repos_to_update.size();
+    Logger::Log(LogLevel::Info,
+                "Discovered {} Git {} to update",
+                nr,
+                nr == 1 ? "repository" : "repositories");
+
     // Initialize resulting config to be updated
     auto mr_config = config->ToJson();
-    // Create and call git commit update map
+    // Create async map
     auto git_update_map =
         CreateGitUpdateMap(git_repo->GetGitCAS(), arguments.common.jobs);
+
+    // set up map for progress tracing
+    auto& repo_set = JustMRProgress::Instance().RepositorySet();
+    repo_set.clear();
+    repo_set.reserve(nr);
+    for (auto const& repo : repos_to_update) {
+        auto id = fmt::format("{}:{}", repo.first, repo.second);
+        repo_set.emplace(std::move(id));
+    }
+    // set up progress observer
+    std::atomic<bool> done{false};
+    std::condition_variable cv{};
+    auto reporter = JustMRProgressReporter::Reporter();
+    auto observer =
+        std::thread([reporter, &done, &cv]() { reporter(&done, &cv); });
+
+    // do the update
     bool failed{false};
     {
         TaskSystem ts{arguments.common.jobs};
@@ -878,9 +1047,17 @@ void DefaultReachableRepositories(
                 failed = failed or fatal;
             });
     }
+
+    // close progress observer
+    done = true;
+    cv.notify_all();
+    observer.join();
+
     if (failed) {
         return kExitUpdateError;
     }
+    // report success
+    Logger::Log(LogLevel::Info, "Update completed");
     // print mr_config to stdout
     std::cout << mr_config.dump(2) << std::endl;
     return kExitSuccess;
@@ -890,6 +1067,8 @@ void DefaultReachableRepositories(
                                   CommandLineArguments const& arguments,
                                   bool interactive)
     -> std::optional<std::filesystem::path> {
+    // provide report
+    Logger::Log(LogLevel::Info, "Performing repositories setup");
     // set anchor dir to setup_root; current dir will be reverted when anchor
     // goes out of scope
     auto cwd_anchor = FileSystemManager::ChangeDirectory(
@@ -914,7 +1093,8 @@ void DefaultReachableRepositories(
             else {
                 Logger::Log(
                     LogLevel::Error,
-                    "Unsupported value for field 'main' in configuration.");
+                    "Unsupported value {} for field \"main\" in configuration.",
+                    main_from_config->ToString());
             }
         }
     }
@@ -923,7 +1103,8 @@ void DefaultReachableRepositories(
         mr_config["main"] = *main;
     }
     // get default repos to setup and to include
-    DefaultReachableRepositories(repos, setup_repos);
+    auto repos_to_report = std::make_shared<std::unordered_set<std::string>>();
+    DefaultReachableRepositories(repos, setup_repos, repos_to_report);
     // check if main is to be taken as first repo name lexicographically
     if (not main and not setup_repos->to_setup.empty()) {
         main = *std::min_element(setup_repos->to_setup.begin(),
@@ -931,13 +1112,21 @@ void DefaultReachableRepositories(
     }
     // final check on which repos are to be set up
     if (main and not arguments.setup.sub_all) {
-        ReachableRepositories(repos, *main, setup_repos);
+        ReachableRepositories(repos, *main, setup_repos, repos_to_report);
     }
+
+    // report progress
+    auto nr = repos_to_report->size();
+    Logger::Log(LogLevel::Info,
+                "Found {} {} to set up",
+                nr,
+                nr == 1 ? "repository" : "repositories");
 
     // setup the required async maps
     auto crit_git_op_ptr = std::make_shared<CriticalGitOpGuard>();
     auto critical_git_op_map = CreateCriticalGitOpMap(crit_git_op_ptr);
     auto content_cas_map = CreateContentCASMap(arguments.common.just_mr_paths,
+                                               arguments.common.ca_info,
                                                arguments.common.jobs);
     auto import_to_git_map =
         CreateImportToGitMap(&critical_git_op_map, arguments.common.jobs);
@@ -957,6 +1146,9 @@ void DefaultReachableRepositories(
                                                &import_to_git_map,
                                                &critical_git_op_map,
                                                arguments.common.jobs);
+    auto tree_id_git_map = CreateTreeIdGitMap(&critical_git_op_map,
+                                              *arguments.common.local_launcher,
+                                              arguments.common.jobs);
     auto repos_to_setup_map = CreateReposToSetupMap(config,
                                                     main,
                                                     interactive,
@@ -965,7 +1157,22 @@ void DefaultReachableRepositories(
                                                     &fpath_git_map,
                                                     &content_cas_map,
                                                     &distdir_git_map,
+                                                    &tree_id_git_map,
                                                     arguments.common.jobs);
+
+    // set up map for progress tracing
+    auto& repo_set = JustMRProgress::Instance().RepositorySet();
+    repo_set.clear();
+    repo_set.reserve(nr);
+    for (auto const& repo : *repos_to_report) {
+        repo_set.emplace(repo);
+    }
+    // set up progress observer
+    std::atomic<bool> done{false};
+    std::condition_variable cv{};
+    auto reporter = JustMRProgressReporter::Reporter();
+    auto observer =
+        std::thread([reporter, &done, &cv]() { reporter(&done, &cv); });
 
     // Populate workspace_root and TAKE_OVER fields
     bool failed{false};
@@ -1019,6 +1226,12 @@ void DefaultReachableRepositories(
                 failed = failed or fatal;
             });
     }
+
+    // close progress observer
+    done = true;
+    cv.notify_all();
+    observer.join();
+
     if (failed) {
         return std::nullopt;
     }
@@ -1028,7 +1241,8 @@ void DefaultReachableRepositories(
 
 /// \brief Runs execvp for given command. Only returns if execvp fails.
 [[nodiscard]] auto CallJust(std::shared_ptr<Configuration> const& config,
-                            CommandLineArguments const& arguments) -> int {
+                            CommandLineArguments const& arguments,
+                            bool forward_build_root) -> int {
     // check if subcmd_name can be taken from additional args
     auto additional_args_offset = 0U;
     auto subcommand = arguments.just_cmd.subcmd_name;
@@ -1040,6 +1254,7 @@ void DefaultReachableRepositories(
 
     bool use_config{false};
     bool use_build_root{false};
+    bool use_launcher{false};
     std::optional<std::filesystem::path> mr_config_path{std::nullopt};
 
     if (subcommand and kKnownJustSubcommands.contains(*subcommand)) {
@@ -1049,12 +1264,13 @@ void DefaultReachableRepositories(
                 MultiRepoSetup(config, arguments, /*interactive=*/false);
             if (not mr_config_path) {
                 Logger::Log(LogLevel::Error,
-                            "Failed to setup config while calling \'just {}\'",
+                            "Failed to setup config while calling \"just {}\"",
                             *subcommand);
                 return kExitSetupError;
             }
         }
         use_build_root = kKnownJustSubcommands.at(*subcommand).build_root;
+        use_launcher = kKnownJustSubcommands.at(*subcommand).launch;
     }
     // build just command
     std::vector<std::string> cmd = {arguments.common.just_path->string()};
@@ -1065,9 +1281,32 @@ void DefaultReachableRepositories(
         cmd.emplace_back("-C");
         cmd.emplace_back(mr_config_path->string());
     }
-    if (use_build_root) {
+    if (use_build_root and forward_build_root) {
         cmd.emplace_back("--local-build-root");
         cmd.emplace_back(*arguments.common.just_mr_paths->root);
+    }
+    if (use_launcher and arguments.common.local_launcher and
+        (arguments.common.local_launcher != kDefaultLauncher)) {
+        cmd.emplace_back("--local-launcher");
+        cmd.emplace_back(
+            nlohmann::json(*arguments.common.local_launcher).dump());
+    }
+    // forward logging arguments
+    if (not arguments.log.log_files.empty()) {
+        cmd.emplace_back("--log-append");
+        for (auto const& log_file : arguments.log.log_files) {
+            cmd.emplace_back("-f");
+            cmd.emplace_back(log_file.string());
+        }
+    }
+    if (arguments.log.log_limit != kDefaultLogLevel) {
+        cmd.emplace_back("--log-limit");
+        cmd.emplace_back(
+            std::to_string(static_cast<std::underlying_type<LogLevel>::type>(
+                arguments.log.log_limit)));
+    }
+    if (arguments.log.plain_log) {
+        cmd.emplace_back("--plain-log");
     }
     // add args read from just-mrrc
     if (subcommand and arguments.just_cmd.just_args.contains(*subcommand)) {
@@ -1084,9 +1323,8 @@ void DefaultReachableRepositories(
         cmd.emplace_back(*it);
     }
 
-    Logger::Log(LogLevel::Info,
-                "Setup finished, exec \'{}\'",
-                nlohmann::json(cmd).dump());
+    Logger::Log(
+        LogLevel::Info, "Setup finished, exec {}", nlohmann::json(cmd).dump());
 
     // create argv
     std::vector<char*> argv{};
@@ -1111,6 +1349,12 @@ auto main(int argc, char* argv[]) -> int {
         // get the user-defined arguments
         auto arguments = ParseCommandLineArguments(argc, argv);
 
+        if (arguments.cmd == SubCommand::kMRVersion) {
+            std::cout << version() << std::endl;
+            return kExitSuccess;
+        }
+
+        SetupLogging(arguments.log);
         auto config_file = ReadJustMRRC(&arguments);
         if (arguments.common.repository_config) {
             config_file = arguments.common.repository_config;
@@ -1128,7 +1372,9 @@ auto main(int argc, char* argv[]) -> int {
         if (not arguments.common.just_path) {
             arguments.common.just_path = kDefaultJustPath;
         }
+        bool forward_build_root = true;
         if (not arguments.common.just_mr_paths->root) {
+            forward_build_root = false;
             arguments.common.just_mr_paths->root =
                 std::filesystem::weakly_canonical(
                     std::filesystem::absolute(kDefaultBuildRoot));
@@ -1170,9 +1416,9 @@ auto main(int argc, char* argv[]) -> int {
             arguments.common.explicit_distdirs.begin(),
             arguments.common.explicit_distdirs.end());
 
-        // Setup LocalExecutionConfig to store the local_build_root properly
+        // Setup LocalStorageConfig to store the local_build_root properly
         // and make the cas and git cache roots available
-        if (not LocalExecutionConfig::SetBuildRoot(
+        if (not StorageConfig::SetBuildRoot(
                 *arguments.common.just_mr_paths->root)) {
             Logger::Log(LogLevel::Error,
                         "Failed to configure local build root.");
@@ -1191,10 +1437,17 @@ auto main(int argc, char* argv[]) -> int {
             arguments.common.main = arguments.setup.sub_main;
         }
 
+        // check for errors in setting up local launcher arg
+        if (not arguments.common.local_launcher) {
+            Logger::Log(LogLevel::Error,
+                        "Failed to configure local execution.");
+            return kExitGenericFailure;
+        }
+
         // Run subcommands known to just and `do`
         if (arguments.cmd == SubCommand::kJustDo or
             arguments.cmd == SubCommand::kJustSubCmd) {
-            return CallJust(config, arguments);
+            return CallJust(config, arguments, forward_build_root);
         }
 
         // Run subcommand `setup` or `setup-env`
@@ -1208,6 +1461,9 @@ auto main(int argc, char* argv[]) -> int {
             if (not mr_config_path) {
                 return kExitSetupError;
             }
+            // report success
+            Logger::Log(LogLevel::Info, "Setup completed");
+            // print config file to stdout
             std::cout << mr_config_path->string() << std::endl;
             return kExitSuccess;
         }

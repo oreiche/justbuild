@@ -12,6 +12,18 @@ A feature release on top of `1.0.0`, backwards compatible.
   and mutual TLS
 - `just-mr` is now available as C++ binary and supports fetching in parallel
 
+### Important changes
+
+- The option `-D` now accumulates instead of ignoring all but the
+  latest occurrence. This is an incompatible change of the command
+  line, but not affecting the backwards compatibility of the build.
+
+- The option `-L` of `just-mr` now is an alternative name for option
+  `--local-launcher` instead of `--checkout-locations`, and thus
+  matching its meaning in `just`. This is an incompatible change of
+  the command line, but not affecting the backwards compatibility of
+  the build.
+
 ### Other changes
 
 - `just analyse` now supports a new option `--dump-export-targets`
@@ -20,7 +32,7 @@ A feature release on top of `1.0.0`, backwards compatible.
 
 Initial stable release.
 
-### Important changes sice `1.0.0~beta6`
+### Important changes since `1.0.0~beta6`
 
 - built-in rule "tree" added
 - clean up of user-defined rules for C++
@@ -30,7 +42,7 @@ Initial stable release.
 
 ### Important changes since `1.0.0~beta5`
 
-- The "confgiure" built-in rule now evaluates "target". Also,
+- The "configure" built-in rule now evaluates "target". Also,
   a bug in the computation of the effective configuration
   was fixed.
 - Option `--dump-vars` added to `just analyse`

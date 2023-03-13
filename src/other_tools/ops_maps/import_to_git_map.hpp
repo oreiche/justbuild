@@ -18,7 +18,7 @@
 #include <filesystem>
 #include <string>
 
-#include "src/buildtool/file_system/git_repo.hpp"
+#include "src/other_tools/git_operations/git_repo_remote.hpp"
 #include "src/other_tools/ops_maps/critical_git_op_map.hpp"
 #include "src/utils/cpp/path.hpp"
 
@@ -60,15 +60,5 @@ using ImportToGitMap =
 [[nodiscard]] auto CreateImportToGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     std::size_t jobs) -> ImportToGitMap;
-
-// Helper function
-void KeepCommitAndSetTree(
-    gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
-    std::string const& commit,
-    std::filesystem::path const& target,
-    GitCASPtr const& git_cas,
-    gsl::not_null<TaskSystem*> const& ts,
-    ImportToGitMap::SetterPtr const& setter,
-    ImportToGitMap::LoggerPtr const& logger);
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_OPS_MAPS_IMPORT_TO_GIT_MAP_HPP

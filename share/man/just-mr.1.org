@@ -47,7 +47,7 @@ See *just-mr-repository-config(5)* for more details on the input format.
    in the *just-mrrc(5)* file.\\
    Default: path ~".cache/just"~ in user's home directory.
 
-   *-L*, *--checkout-locations* PATH\\
+   *--checkout-locations* PATH\\
    Specification file for checkout locations. This file contains a JSON object,
    for which under the key ~"<version control>"~ of key ~"checkouts"~ we get
    pairs of repository URLs as keys and absolute paths as values. Currently
@@ -56,6 +56,11 @@ See *just-mr-repository-config(5)* for more details on the input format.
    the filesystem containing the checkout of the respective repository. This
    options overwrites any values set in the *just-mrrc(5)* file.\\
    Default: file path ~".just-local.json"~ in user's home directory.
+
+   *-L*, *--local-launcher* <JSON_ARRAY>\\
+   JSON array with the list of strings representing the launcher to
+   prepend actions' commands before being executed locally.\\
+   Default: ~["env", "--"]~.
 
    *--distdir* PATH\\
    Directory to look for distfiles before fetching. If given, this will be the
@@ -67,6 +72,28 @@ See *just-mr-repository-config(5)* for more details on the input format.
 
    *--main* NAME\\
    The repository to take the target from.\\
+
+   *-f,--log-file* PATH\\
+   Path to local log file. ~just-mr~ will store the information printed
+   on stderr in the log file along with the thread id and timestamp
+   when the output has been generated.
+
+   *--log-limit* NUM\\
+   Log limit (higher is more verbose) in interval [0,6] (Default: 3).
+
+   *--plain-log*\\
+   Do not use ANSI escape sequences to highlight messages.
+
+   *--log-append*\\
+   Append messages to log file instead of overwriting existing.
+
+   *--no-fetch-ssl-verify*\\
+   Disable the default peer SSL certificate verification step when fetching
+   archives (for which we verify the hash anyway) from remote.
+
+   *--fetch-cacert* PATH\\
+   Path to the CA certificate bundle containing one or more certificates to be
+   used to peer verify archive fetches from remote.
 
    *--just* PATH\\
    Name of the just binary in ~PATH~ or path to the just binary.\\
@@ -80,6 +107,13 @@ See *just-mr-repository-config(5)* for more details on the input format.
    Option to prevent reading any *just-mrrc(5)* file.
 
 * SUBCOMMANDS
+
+** mrversion
+
+Print on stdout a JSON object providing version information for
+this tool itself; the ~version~ subcommand calls the ~version~
+subcommand of just. The version information for just-mr is in the
+same format that also ~just~ uses.
 
 ** setup|setup-env
 
@@ -148,6 +182,13 @@ be provided in the configuration or on the command line. If no main repository
 is provided, the lexicographical first repository from the configuration is
 used.
 
+All logging arguments given to ~just-mr~ are passed to ~just~ as early arguments.
+If log files are provided, an unconditional ~--log-append~ argument is passed as
+well, which ensures no log messages will get overwritten.
+
+The ~--local-launcher~ argument is passed to ~just~ as early argument for those
+/known/ subcommands that accept it (build, install, rebuild).
+
 ** version|describe|analyse|build|install|install-cas|rebuild|gc
 
 This subcommand is the explicit way of specifying /known/ just subcommands and
@@ -159,7 +200,13 @@ applies.
 The exit status of ~just-mr~ is one of the following values:
   - 0: the command completed successfully
   - 64: setup succeeded, but exec failed
-  - 65: any other error occurred in just-mr
+  - 65: any unspecified error occurred in just-mr
+  - 66: unknown subcommand
+  - 67: error parsing the command-line arguments
+  - 68: error parsing the configuration
+  - 69: error during fetch
+  - 70: error during update
+  - 71: error during setup
 
 Any other exit code that does not have bit 64 set is a status value from ~just~,
 if ~just-mr~ is used as a launcher. See *just(1)* for more details.

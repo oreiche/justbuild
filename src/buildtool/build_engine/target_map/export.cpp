@@ -18,10 +18,8 @@
 
 #include "src/buildtool/build_engine/base_maps/field_reader.hpp"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
-#include "src/buildtool/build_engine/target_map/target_cache.hpp"
-#include "src/buildtool/build_engine/target_map/target_cache_key.hpp"
 #include "src/buildtool/common/statistics.hpp"
-#include "src/buildtool/execution_api/local/local_cas.hpp"
+#include "src/buildtool/storage/storage.hpp"
 
 namespace {
 auto const kExpectedFields = std::unordered_set<std::string>{"config_doc",
@@ -77,6 +75,18 @@ void FinalizeExport(
                                       true);
     (*setter)(std::move(analysis_result));
 }
+
+[[nodiscard]] auto ComputeTargetCacheKey(
+    BuildMaps::Base::EntityName const& exported_target,
+    Configuration const& target_config) -> std::optional<TargetCacheKey> {
+    static auto const& repos = RepositoryConfig::Instance();
+    auto const& target_name = exported_target.GetNamedTarget();
+    if (auto repo_key = repos.RepositoryKey(target_name.repository)) {
+        return TargetCacheKey::Create(*repo_key, target_name, target_config);
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 void ExportRule(
@@ -130,10 +140,10 @@ void ExportRule(
     auto target_config = effective_config.Update(fixed_config);
 
     auto target_cache_key =
-        TargetCacheKey::Create(*exported_target, target_config);
+        ComputeTargetCacheKey(*exported_target, target_config);
     if (target_cache_key) {
         if (auto target_cache_value =
-                TargetCache::Instance().Read(*target_cache_key)) {
+                Storage::Instance().TargetCache().Read(*target_cache_key)) {
             auto const& [entry, info] = *target_cache_value;
             if (auto result = entry.ToResult()) {
                 auto deps_info = TargetGraphInformation{

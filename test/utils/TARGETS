@@ -53,6 +53,8 @@
   , "deps":
     [ ["@", "catch2", "", "catch2"]
     , ["src/buildtool/execution_api/remote", "config"]
+    , ["src/buildtool/storage", "storage"]
+    , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/compatibility", "compatibility"]
     , "log_config"
     , "test_env"
@@ -63,6 +65,12 @@
   { "type": "install"
   , "tainted": ["test"]
   , "files": {"utils/run_test_server.py": ["test/utils", "run_test_server.py"]}
+  }
+, "shell_quoting":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["shell_quoting"]
+  , "hdrs": ["shell_quoting.hpp"]
+  , "stage": ["test", "utils"]
   }
 , "TESTS":
   { "type": "install"

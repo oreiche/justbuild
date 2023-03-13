@@ -25,12 +25,10 @@
 #include "fmt/core.h"
 #include "gsl-lite/gsl-lite.hpp"
 #include "nlohmann/json.hpp"
+#include "src/buildtool/common/clidefaults.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/other_tools/just_mr/utils.hpp"
-
-constexpr auto kDefaultLogLevel = LogLevel::Progress;
-constexpr auto kDefaultTimeout = std::chrono::milliseconds{300000};
 
 /// \brief Arguments common to all just-mr subcommands
 struct MultiRepoCommonArguments {
@@ -38,11 +36,20 @@ struct MultiRepoCommonArguments {
     std::optional<std::filesystem::path> checkout_locations_file{std::nullopt};
     std::vector<std::string> explicit_distdirs{};
     JustMR::PathsPtr just_mr_paths = std::make_shared<JustMR::Paths>();
+    std::optional<std::vector<std::string>> local_launcher{std::nullopt};
+    JustMR::CAInfoPtr ca_info = std::make_shared<JustMR::CAInfo>();
     std::optional<std::filesystem::path> just_path{std::nullopt};
     std::optional<std::string> main{std::nullopt};
     std::optional<std::filesystem::path> rc_path{std::nullopt};
     bool norc{false};
     std::size_t jobs{std::max(1U, std::thread::hardware_concurrency())};
+};
+
+struct MultiRepoLogArguments {
+    std::vector<std::filesystem::path> log_files{};
+    LogLevel log_limit{kDefaultLogLevel};
+    bool plain_log{false};
+    bool log_append{false};
 };
 
 struct MultiRepoSetupArguments {
@@ -85,14 +92,26 @@ static inline void SetupMultiRepoCommonArguments(
            "Root for CAS, repository space, etc.")
         ->type_name("PATH");
     app->add_option_function<std::string>(
-           "-L",
+           "--checkout-locations",
            [clargs](auto const& checkout_locations_raw) {
                clargs->checkout_locations_file =
                    std::filesystem::weakly_canonical(
                        std::filesystem::absolute(checkout_locations_raw));
            },
            "Specification file for checkout locations.")
-        ->type_name("CHECKOUT_LOCATION");
+        ->type_name("CHECKOUT_LOCATIONS");
+    app->add_option_function<std::string>(
+           "-L, --local-launcher",
+           [clargs](auto const& launcher_raw) {
+               clargs->local_launcher =
+                   nlohmann::json::parse(launcher_raw)
+                       .template get<std::vector<std::string>>();
+           },
+           "JSON array with the list of strings representing the launcher to "
+           "prepend actions' commands before being executed locally.")
+        ->type_name("JSON")
+        ->run_callback_for_default()
+        ->default_val(nlohmann::json(kDefaultLauncher).dump());
     app->add_option_function<std::string>(
            "--distdir",
            [clargs](auto const& distdir_raw) {
@@ -104,6 +123,19 @@ static inline void SetupMultiRepoCommonArguments(
         ->type_name("PATH")
         ->trigger_on_parse();  // run callback on all instances while parsing,
                                // not after all parsing is done
+    app->add_flag("--no-fetch-ssl-verify",
+                  clargs->ca_info->no_ssl_verify,
+                  "Do not perform SSL verification when fetching archives from "
+                  "remote.");
+    app->add_option_function<std::string>(
+           "--fetch-cacert",
+           [clargs](auto const& cacert_raw) {
+               clargs->ca_info->ca_bundle = std::filesystem::weakly_canonical(
+                   std::filesystem::absolute(cacert_raw));
+           },
+           "CA certificate bundle to use for SSL verification when fetching "
+           "archives from remote.")
+        ->type_name("CA_BUNDLE");
     app->add_option("--just", clargs->just_path, "Path to the just binary.")
         ->type_name("PATH");
     app->add_option("--main",
@@ -123,6 +155,38 @@ static inline void SetupMultiRepoCommonArguments(
                     clargs->jobs,
                     "Number of jobs to run (Default: Number of cores).")
         ->type_name("NUM");
+}
+
+static inline auto SetupMultiRepoLogArguments(
+    gsl::not_null<CLI::App*> const& app,
+    gsl::not_null<MultiRepoLogArguments*> const& clargs) {
+    app->add_option_function<std::string>(
+           "-f,--log-file",
+           [clargs](auto const& log_file_) {
+               clargs->log_files.emplace_back(log_file_);
+           },
+           "Path to local log file.")
+        ->type_name("PATH")
+        ->trigger_on_parse();  // run callback on all instances while parsing,
+                               // not after all parsing is done
+    app->add_option_function<std::underlying_type_t<LogLevel>>(
+           "--log-limit",
+           [clargs](auto const& limit) {
+               clargs->log_limit = ToLogLevel(limit);
+           },
+           fmt::format("Log limit (higher is more verbose) in interval [{},{}] "
+                       "(Default: {}).",
+                       static_cast<int>(kFirstLogLevel),
+                       static_cast<int>(kLastLogLevel),
+                       static_cast<int>(kDefaultLogLevel)))
+        ->type_name("NUM");
+    app->add_flag("--plain-log",
+                  clargs->plain_log,
+                  "Do not use ANSI escape sequences to highlight messages.");
+    app->add_flag(
+        "--log-append",
+        clargs->log_append,
+        "Append messages to log file instead of overwriting existing.");
 }
 
 static inline void SetupMultiRepoSetupArguments(
