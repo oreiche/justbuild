@@ -30,6 +30,13 @@ jobs:
             apt install --yes wget python3 clang libstdc++-10-dev unzip patch; \
             ./bin/bootstrap.py . /tmp/justbuild"
 
+      - name: Build just-mr
+        run: |
+          docker exec ubuntu bash -c "\
+            set -e; \
+            apt install --yes git; \
+            ./bin/just-mr.py --just /tmp/justbuild/out/bin/just install 'installed just-mr' -o /tmp/justbuild/out/"
+
       - name: Determine package name
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
@@ -75,7 +82,7 @@ jobs:
             set -e; \
             mkdir -p $PKG_NAME/{bin,etc/bash_completion.d}; \
             cp /tmp/justbuild/out/bin/just $PKG_NAME/bin/just; \
-            cp ./bin/just-mr.py $PKG_NAME/bin/just-mr; \
+            cp /tmp/justbuild/out/bin/just-mr $PKG_NAME/bin/just-mr; \
             cp ./bin/just-import-git.py $PKG_NAME/bin/just-import-git; \
             cp ./share/just_complete.bash $PKG_NAME/etc/bash_completion.d/just"
           tar -czvf $PKG_NAME.tar.gz $PKG_NAME
