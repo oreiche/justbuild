@@ -18,6 +18,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Read commit info
+        run: |
+          git fetch https://github.com/just-buildsystem/justbuild master
+          BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
+          COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
+          COMMIT_HASH="$(git log -n1 ${BASE_COMMIT} --format=%h)"
+          echo "COMMIT_TIME=${COMMIT_TIME}" >> $GITHUB_ENV
+          echo "COMMIT_HASH=${COMMIT_HASH}" >> $GITHUB_ENV
+
       - name: Run and prepare docker image
         run: |
           docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
@@ -28,6 +37,7 @@ jobs:
           docker exec ubuntu bash -c "\
             set -e; \
             apt install --yes wget python3 clang libstdc++-10-dev unzip patch; \
+            export JUST_BUILD_CONF='{\"SOURCE_DATE_EPOCH\":\"'${COMMIT_TIME}'\"}'; \
             ./bin/bootstrap.py . /tmp/justbuild"
 
       - name: Build just-mr
@@ -49,10 +59,6 @@ jobs:
               apt install --yes jq; \
               /tmp/justbuild/out/bin/just version | jq -r '(.version | join(\".\"))+.suffix' > version.txt"
             VERSION="$(cat version.txt | tr '~' '-')"
-            git fetch https://github.com/just-buildsystem/justbuild master
-            BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
-            COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
-            COMMIT_HASH="$(git log -n1 ${BASE_COMMIT} --format=%h)"
             TAG_NAME="v${VERSION}-${COMMIT_TIME}-g${COMMIT_HASH}"
           else
             echo "Error: unsupported ref type"
