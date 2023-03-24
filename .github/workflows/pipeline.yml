@@ -45,7 +45,9 @@ jobs:
           docker exec ubuntu bash -c "\
             set -e; \
             apt install --yes git; \
-            ./bin/just-mr.py --just /tmp/justbuild/out/bin/just install 'installed just-mr' -o /tmp/justbuild/out/"
+            export PATH=/tmp/justbuild/out/bin:\$PATH; \
+            echo '{\"SOURCE_DATE_EPOCH\":\"'${COMMIT_TIME}'\"}' > build.conf; \
+            ./bin/just-mr.py install -c build.conf -o /tmp/justbuild/out/ 'installed just-mr'"
 
       - name: Determine package name
         run: |
