@@ -60,7 +60,7 @@ jobs:
           fi
           echo "UNTAGGED=${UNTAGGED}" >> $GITHUB_ENV
           echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_ENV
-          echo "PKG_NAME=justbuild-${TAG_NAME}-x86_86-linux" >> $GITHUB_ENV
+          echo "PKG_NAME=justbuild-${TAG_NAME}-x86_64-linux" >> $GITHUB_ENV
 
       - name: Build man pages
         run: |
