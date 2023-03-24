@@ -1,0 +1,77 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - github-ci
+
+jobs:
+  debug:
+    name: Debug
+    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Run and prepare docker image
+        run: |
+          docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
+          docker exec ubuntu bash -c "\
+            set -e; \
+            apt update; \
+            apt install --yes git jq curl wget clang libstdc++-10-dev patch; \
+            git config --global --add safe.directory /workspace; \
+            export PREFIX=/usr/local; \
+            ./.github/install-just.sh"
+
+      - name: Run all tests in native mode
+        run: |
+          docker exec ubuntu bash -c "\
+            set -e; \
+            echo '{\"DEBUG\":true,\"TEST_ENV\":{}}' > debug-native.conf; \
+            just-mr build -c debug-native.conf test ALL"
+
+      - name: Run all tests in compatible mode
+        run: |
+          docker exec ubuntu bash -c "\
+            set -e; \
+            echo '{\"DEBUG\":true,\"TEST_ENV\":{\"COMPATIBLE\":\"YES\"}}' > debug-compat.conf; \
+            just-mr build -c debug-compat.conf test ALL"
+
+  release:
+    name: Release
+    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Run and prepare docker image
+        run: |
+          docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
+          docker exec ubuntu bash -c "\
+            set -e; \
+            apt update; \
+            apt install --yes git jq curl wget clang libstdc++-10-dev patch; \
+            git config --global --add safe.directory /workspace; \
+            export PREFIX=/usr/local; \
+            ./.github/install-just.sh"
+
+      - name: Run all tests in native mode
+        run: |
+          docker exec ubuntu bash -c "\
+            set -e; \
+            echo '{\"DEBUG\":false,\"TEST_ENV\":{}}' > release-native.conf; \
+            just-mr build -c release-native.conf test ALL"
+
+      - name: Run all tests in compatible mode
+        run: |
+          docker exec ubuntu bash -c "\
+            set -e; \
+            echo '{\"DEBUG\":false,\"TEST_ENV\":{\"COMPATIBLE\":\"YES\"}}' > release-compat.conf; \
+            just-mr build -c release-compat.conf test ALL"
