@@ -41,13 +41,14 @@ struct MultiRepoCommonArguments {
     std::optional<std::filesystem::path> just_path{std::nullopt};
     std::optional<std::string> main{std::nullopt};
     std::optional<std::filesystem::path> rc_path{std::nullopt};
+    std::optional<std::filesystem::path> git_path{std::nullopt};
     bool norc{false};
     std::size_t jobs{std::max(1U, std::thread::hardware_concurrency())};
 };
 
 struct MultiRepoLogArguments {
     std::vector<std::filesystem::path> log_files{};
-    LogLevel log_limit{kDefaultLogLevel};
+    std::optional<LogLevel> log_limit{};
     bool plain_log{false};
     bool log_append{false};
 };
@@ -109,9 +110,7 @@ static inline void SetupMultiRepoCommonArguments(
            },
            "JSON array with the list of strings representing the launcher to "
            "prepend actions' commands before being executed locally.")
-        ->type_name("JSON")
-        ->run_callback_for_default()
-        ->default_val(nlohmann::json(kDefaultLauncher).dump());
+        ->type_name("JSON");
     app->add_option_function<std::string>(
            "--distdir",
            [clargs](auto const& distdir_raw) {
@@ -150,6 +149,10 @@ static inline void SetupMultiRepoCommonArguments(
            },
            "Use just-mrrc file from custom path.")
         ->type_name("RCFILE");
+    app->add_option("--git",
+                    clargs->git_path,
+                    "Path to the git binary. (Default: \"git\")")
+        ->type_name("PATH");
     app->add_flag("--norc", clargs->norc, "Do not use any just-mrrc file.");
     app->add_option("-j, --jobs",
                     clargs->jobs,

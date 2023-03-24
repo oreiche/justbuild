@@ -36,6 +36,8 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                   std::filesystem::path const& repo_root,
                   GitCASPtr const& git_cas,
                   gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
+                  std::string const& git_bin,
+                  std::vector<std::string> const& launcher,
                   gsl::not_null<TaskSystem*> const& ts,
                   CommitGitMap::SetterPtr const& ws_setter,
                   CommitGitMap::LoggerPtr const& logger) {
@@ -59,9 +61,7 @@ void EnsureCommit(GitRepoInfo const& repo_info,
         return;
     }
     if (not is_commit_present.value()) {
-        // start work reporting
         JustMRProgress::Instance().TaskTracker().Start(repo_info.origin);
-        JustMRStatistics::Instance().IncrementQueuedCounter();
         // if commit not there, fetch it
         auto tmp_dir = JustMR::Utils::CreateTypedTmpDir("fetch");
         if (not tmp_dir) {
@@ -78,6 +78,8 @@ void EnsureCommit(GitRepoInfo const& repo_info,
         if (not git_repo->FetchViaTmpRepo(tmp_dir->GetPath(),
                                           repo_info.repo_url,
                                           repo_info.branch,
+                                          git_bin,
+                                          launcher,
                                           wrapped_logger)) {
             return;
         }
@@ -147,11 +149,10 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                     return;
                 }
                 // set the workspace root
-                (*ws_setter)(
-                    nlohmann::json::array({"git tree", *subtree, repo_root}));
-                // report work done
                 JustMRProgress::Instance().TaskTracker().Stop(repo_info.origin);
-                JustMRStatistics::Instance().IncrementExecutedCounter();
+                (*ws_setter)(std::pair(
+                    nlohmann::json::array({"git tree", *subtree, repo_root}),
+                    false));
             },
             [logger, target_path = repo_root](auto const& msg, bool fatal) {
                 (*logger)(fmt::format("While running critical Git op "
@@ -176,9 +177,8 @@ void EnsureCommit(GitRepoInfo const& repo_info,
             return;
         }
         // set the workspace root
-        (*ws_setter)(nlohmann::json::array({"git tree", *subtree, repo_root}));
-        // report cache hit
-        JustMRStatistics::Instance().IncrementCacheHitsCounter();
+        (*ws_setter)(std::pair(
+            nlohmann::json::array({"git tree", *subtree, repo_root}), true));
     }
 }
 
@@ -188,12 +188,17 @@ void EnsureCommit(GitRepoInfo const& repo_info,
 auto CreateCommitGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     JustMR::PathsPtr const& just_mr_paths,
+    std::string const& git_bin,
+    std::vector<std::string> const& launcher,
     std::size_t jobs) -> CommitGitMap {
-    auto commit_to_git = [critical_git_op_map, just_mr_paths](auto ts,
-                                                              auto setter,
-                                                              auto logger,
-                                                              auto /* unused */,
-                                                              auto const& key) {
+    auto commit_to_git = [critical_git_op_map,
+                          just_mr_paths,
+                          git_bin,
+                          launcher](auto ts,
+                                    auto setter,
+                                    auto logger,
+                                    auto /* unused */,
+                                    auto const& key) {
         // get root for repo (making sure that if repo is a path, it is
         // absolute)
         std::string fetch_repo = key.repo_url;
@@ -217,8 +222,14 @@ auto CreateCommitGitMap(
         critical_git_op_map->ConsumeAfterKeysReady(
             ts,
             {std::move(op_key)},
-            [key, repo_root, critical_git_op_map, ts, setter, logger](
-                auto const& values) {
+            [key,
+             repo_root,
+             critical_git_op_map,
+             git_bin,
+             launcher,
+             ts,
+             setter,
+             logger](auto const& values) {
                 GitOpValue op_result = *values[0];
                 // check flag
                 if (not op_result.result) {
@@ -240,6 +251,8 @@ auto CreateCommitGitMap(
                              repo_root,
                              op_result.git_cas,
                              critical_git_op_map,
+                             git_bin,
+                             launcher,
                              ts,
                              setter,
                              wrapped_logger);
@@ -252,5 +265,6 @@ auto CreateCommitGitMap(
                           fatal);
             });
     };
-    return AsyncMapConsumer<GitRepoInfo, nlohmann::json>(commit_to_git, jobs);
+    return AsyncMapConsumer<GitRepoInfo, std::pair<nlohmann::json, bool>>(
+        commit_to_git, jobs);
 }

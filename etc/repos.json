@@ -20,8 +20,8 @@
       , "bzip2": "bzip2"
       , "libarchive": "com_github_libarchive_libarchive"
       }
-    , "bootstrap": {"link": ["-lpthread"]}
-    , "bootstrap_local": {"link": ["-lpthread"]}
+    , "bootstrap": {"link": ["-pthread"]}
+    , "bootstrap_local": {"link": ["-pthread"]}
     }
   , "just-distfiles":
     { "repository":
@@ -42,7 +42,6 @@
         , "com_github_cares_cares"
         , "com_github_grpc_grpc"
         , "com_github_libgit2_libgit2"
-        , "bzip2"
         ]
       }
     , "target_root": "import targets"
@@ -142,12 +141,11 @@
   , "gsl-lite":
     { "repository":
       { "type": "archive"
-      , "content": "ecbc51f342f7ad97ed4c236f36d2fb2279240d7b"
-      , "distfile": "0.37.0.tar.gz"
-      , "fetch": "https://github.com/gsl-lite/gsl-lite/archive/0.37.0.tar.gz"
-      , "sha256": "a31d51b73742bb234acab8d2411223cf299e760ed713f0840ffed0dabe57ca38"
-      , "sha512": "7cc94a252933bb9c66d58387e2093173c7aa810f854b38b5a9148dafb20346a9a01351f528c4e987f6abf919132dc4bd50189a58d543b476635d6f20887c7543"
-      , "subdir": "gsl-lite-0.37.0/include/gsl"
+      , "content": "6a2245941d8a713897f439c35512593683f6ad48"
+      , "fetch": "https://github.com/gsl-lite/gsl-lite/archive/v0.40.0.tar.gz"
+      , "sha256": "65af4ec8a1050dac4f1ca4622881bb02a9c3978a9baec289fb56e25412d6cac7"
+      , "sha512": "afd65009bf33f54cd1caf1988b725e618bee4f4f779825ae1df55017034c6fff75feaa737a358a7f5e690757637f4d281c2f22d06c39efb81dacd7d1949251df"
+      , "subdir": "gsl-lite-0.40.0/include/gsl"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.gsl"
@@ -157,11 +155,11 @@
   , "cli11":
     { "repository":
       { "type": "archive"
-      , "content": "58c912141164a5c0f0139bfa91343fefe151d525"
-      , "fetch": "https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.2.0.tar.gz"
-      , "sha256": "d60440dc4d43255f872d174e416705f56ba40589f6eb07727f76376fb8378fd6"
-      , "sha512": "ee8994c99dd8119e612be0339252b863d6db9d85a10c15a6e60e56c6f387bbefaf479679bc85aed2cb6539aeb82b3e7543673a5b97eb04b61793b6946582241d"
-      , "subdir": "CLI11-2.2.0/"
+      , "content": "f2eee8c3fe04347bbb65cbb555c83d4c8d6a7034"
+      , "fetch": "https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.3.2.tar.gz"
+      , "sha256": "aac0ab42108131ac5d3344a9db0fdf25c4db652296641955720a4fbe52334e22"
+      , "sha512": "f48b289d52034c47b90db58c035a123b464bed488cf31bcdbe10a692214a5c05e62b99d6fb7c4b065f42df862ecf3813f11dd533b3697939d761e99d2b89c2ec"
+      , "subdir": "CLI11-2.3.2/"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.cli11"
@@ -218,13 +216,13 @@
     , "bindings": {"rules": "rules-boringssl"}
     , "bootstrap":
       { "build": "SYS=`uname -s | tr 'A-Z' 'a-z'` && ARCH=`uname -m` && {cc} {cflags} -I . -I src/include -c *.c src/crypto/*.c  src/crypto/*/*.c $SYS-$ARCH/crypto/fipsmodule/*.S && {ar} cqs libcrypto.a *.o"
-      , "link": ["-lcrypto", "-lpthread"]
+      , "link": ["-lcrypto", "-pthread"]
       , "include_dir": "src/include/openssl"
       , "include_name": "openssl"
       }
     , "local_bootstrap":
       { "local_path": "include/openssl"
-      , "link": ["-lcrypto", "-lpthread"]
+      , "link": ["-lcrypto", "-pthread"]
       , "link_dirs": ["lib"]
       }
     }
@@ -329,6 +327,7 @@
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.bzip2"
     , "bindings": {"rules": "rules-bzip2"}
+    , "bootstrap": {"drop": true}
     }
   , "re2":
     { "repository":
@@ -383,11 +382,11 @@
   , "com_github_libgit2_libgit2":
     { "repository":
       { "type": "archive"
-      , "content": "3673ddf85118955a7611a93968f9d1af35e7815c"
-      , "fetch": "https://github.com/libgit2/libgit2/archive/refs/tags/v1.5.0.tar.gz"
-      , "sha256": "8de872a0f201b33d9522b817c92e14edb4efad18dae95cf156cf240b2efff93e"
-      , "sha512": "7a32b27cd32bd03ce7be6c127317f82a4ac6f16615c3234699676781f4858d057edb0410b2fe36fd2e634b00748a8b0be17f23809e09a7602ba48185134300f7"
-      , "subdir": "libgit2-1.5.0"
+      , "content": "0c7c845401ae9ad63c5617da6df7e84145b699a0"
+      , "fetch": "https://github.com/libgit2/libgit2/archive/refs/tags/v1.5.2.tar.gz"
+      , "sha256": "57638ac0e319078f56a7e17570be754515e5b1276d3750904b4214c92e8fa196"
+      , "sha512": "0de5e82953482bf57e9cd221406581a12c6acfbeeea0cebbb9b701d288804ec085b7c0902ba1f04ad7cdaaead9d472be21ffe8d730050db5c77101a93448fb3a"
+      , "subdir": "libgit2-1.5.2"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.git2"
@@ -403,11 +402,11 @@
   , "catch2":
     { "repository":
       { "type": "archive"
-      , "content": "a154ae9e2daad22c95cff6186b18637d4e5f338c"
-      , "fetch": "https://github.com/catchorg/Catch2/archive/v2.13.1.tar.gz"
-      , "sha256": "36bcc9e6190923961be11e589d747e606515de95f10779e29853cfeae560bd6c"
-      , "sha512": "2c5394d4ca8346d7d64203048f4ba503c2f813aa2ea7d065ffb9c63f532b7f18daee3e1a4a37314575e33f14259182edd1db030ed254b97a2e3f11d295555397"
-      , "subdir": "Catch2-2.13.1/single_include/catch2"
+      , "content": "fd54249eeb20894ece50696a84ef674a0052b6da"
+      , "fetch": "https://github.com/catchorg/Catch2/archive/refs/tags/v3.3.2.tar.gz"
+      , "sha256": "8361907f4d9bff3ae7c1edb027f813659f793053c99b67837a0c0375f065bae2"
+      , "sha512": "3d0c5666509a19be54ea0c48a3c8e1c4a951a2d991a7c9f7fe6d326661464538f1ab9dc573b1b2647f49fb6bef45bbd866142a4ce0fba38545ad182b8d55f61f"
+      , "subdir": "Catch2-3.3.2"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.catch2"

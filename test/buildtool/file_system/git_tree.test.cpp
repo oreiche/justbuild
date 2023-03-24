@@ -14,7 +14,7 @@
 
 #include <thread>
 
-#include "catch2/catch.hpp"
+#include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/git_tree.hpp"
 #include "test/utils/container_matchers.hpp"
@@ -506,7 +506,6 @@ TEST_CASE("Iterate tree entries", "[git_tree]") {
 
     std::vector<std::string> names{};
     for (auto const& [name, entry] : *tree_root) {
-        CHECK(entry);
         names.emplace_back(name);
     }
     CHECK_THAT(names,

@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "build/bazel/remote/execution/v2/remote_execution.grpc.pb.h"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
@@ -37,12 +38,6 @@ class BazelAcClient {
         bool inline_stdout,
         bool inline_stderr,
         std::vector<std::string> const& inline_output_files) noexcept
-        -> std::optional<bazel_re::ActionResult>;
-
-    [[nodiscard]] auto UpdateActionResult(std::string const& instance_name,
-                                          bazel_re::Digest const& digest,
-                                          bazel_re::ActionResult const& result,
-                                          int priority) noexcept
         -> std::optional<bazel_re::ActionResult>;
 
   private:

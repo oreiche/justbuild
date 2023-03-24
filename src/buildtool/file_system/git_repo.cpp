@@ -14,6 +14,8 @@
 
 #include "src/buildtool/file_system/git_repo.hpp"
 
+#include <thread>
+
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/hex_string.hpp"
 #include "src/utils/cpp/path.hpp"
@@ -295,7 +297,10 @@ GitRepo::GitRepo(std::filesystem::path const& repo_path) noexcept {
         auto cas = std::make_shared<GitCAS>();
         // open repo, but retain it
         git_repository* repo_ptr{nullptr};
-        if (git_repository_open(&repo_ptr, repo_path.c_str()) != 0) {
+        if (git_repository_open_ext(&repo_ptr,
+                                    repo_path.c_str(),
+                                    GIT_REPOSITORY_OPEN_NO_SEARCH,
+                                    nullptr) != 0) {
             Logger::Log(LogLevel::Error,
                         "opening git repository {} failed with:\n{}",
                         repo_path.string(),
@@ -356,9 +361,18 @@ auto GitRepo::InitAndOpen(std::filesystem::path const& repo_path,
 
         auto git_state = GitContext();  // initialize libgit2
 
+        // check if init is actually needed
+        if (git_repository_open_ext(nullptr,
+                                    repo_path.c_str(),
+                                    GIT_REPOSITORY_OPEN_NO_SEARCH,
+                                    nullptr) == 0) {
+            return GitRepo(repo_path);  // success
+        }
+
         git_repository* tmp_repo{nullptr};
-        size_t max_attempts = 3;  // number of tries
+        size_t max_attempts = kGitLockNumTries;  // number of tries
         int err = 0;
+        std::string err_mess{};
         while (max_attempts > 0) {
             --max_attempts;
             err = git_repository_init(
@@ -366,6 +380,11 @@ auto GitRepo::InitAndOpen(std::filesystem::path const& repo_path,
             if (err == 0) {
                 git_repository_free(tmp_repo);
                 return GitRepo(repo_path);  // success
+            }
+            err_mess = GitLastError();  // store last error message
+            // only retry if failure is due to locking
+            if (err != GIT_ELOCKED) {
+                break;
             }
             git_repository_free(tmp_repo);  // cleanup before next attempt
             // check if init hasn't already happened in another process
@@ -376,13 +395,13 @@ auto GitRepo::InitAndOpen(std::filesystem::path const& repo_path,
                 return GitRepo(repo_path);  // success
             }
             // repo still not created, so sleep and try again
-            std::this_thread::sleep_for(std::chrono::milliseconds(kWaitTime));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kGitLockWaitTime));
         }
-        Logger::Log(
-            LogLevel::Error,
-            "initializing git repository {} failed with error code:\n{}",
-            (repo_path / "").string(),
-            err);
+        Logger::Log(LogLevel::Error,
+                    "initializing git repository {} failed with:\n{}",
+                    (repo_path / "").string(),
+                    err_mess);
     } catch (std::exception const& ex) {
         Logger::Log(LogLevel::Error,
                     "initializing git repository {} failed with:\n{}",
@@ -575,10 +594,19 @@ auto GitRepo::KeepTag(std::string const& commit,
         // create tag
         git_oid oid;
         auto name = fmt::format("keep-{}", commit);
-
-        size_t max_attempts = 3;  // number of tries
-        int err = 0;
         git_strarray tag_names{};
+
+        // check if tag hasn't already been added by another process
+        if (git_tag_list_match(&tag_names, name.c_str(), repo_.get()) == 0 and
+            tag_names.count > 0) {
+            git_strarray_dispose(&tag_names);
+            return true;  // success!
+        }
+        git_strarray_dispose(&tag_names);  // free any allocated unused space
+
+        size_t max_attempts = kGitLockNumTries;  // number of tries
+        int err = 0;
+        std::string err_mess{};
         while (max_attempts > 0) {
             --max_attempts;
             err = git_tag_create(&oid,
@@ -591,6 +619,11 @@ auto GitRepo::KeepTag(std::string const& commit,
             if (err == 0) {
                 return true;  // success!
             }
+            err_mess = GitLastError();  // store last error message
+            // only retry if failure is due to locking
+            if (err != GIT_ELOCKED) {
+                break;
+            }
             // check if tag hasn't already been added by another process
             if (git_tag_list_match(&tag_names, name.c_str(), repo_.get()) ==
                     0 and
@@ -598,12 +631,17 @@ auto GitRepo::KeepTag(std::string const& commit,
                 git_strarray_dispose(&tag_names);
                 return true;  // success!
             }
+            git_strarray_dispose(
+                &tag_names);  // free any allocated unused space
             // tag still not in, so sleep and try again
-            std::this_thread::sleep_for(std::chrono::milliseconds(kWaitTime));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kGitLockWaitTime));
         }
-        (*logger)(fmt::format("tag creation in git repository {} failed",
-                              GetGitCAS()->git_path_.string()),
-                  true /*fatal*/);
+        (*logger)(
+            fmt::format("tag creation in git repository {} failed with:\n{}",
+                        GetGitCAS()->git_path_.string(),
+                        err_mess),
+            true /*fatal*/);
         return false;
     } catch (std::exception const& ex) {
         Logger::Log(LogLevel::Error, "keep tag failed with:\n{}", ex.what());

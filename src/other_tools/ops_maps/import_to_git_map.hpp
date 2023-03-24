@@ -59,6 +59,8 @@ using ImportToGitMap =
 
 [[nodiscard]] auto CreateImportToGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
+    std::string const& git_bin,
+    std::vector<std::string> const& launcher,
     std::size_t jobs) -> ImportToGitMap;
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_OPS_MAPS_IMPORT_TO_GIT_MAP_HPP

@@ -61,9 +61,19 @@ namespace {
 }
 
 #ifndef BOOTSTRAP_BUILD_TOOL
-auto FetchAndInstallArtifacts(gsl::not_null<IExecutionApi*> const& api,
-                              FetchArguments const& clargs) -> bool {
+auto FetchAndInstallArtifacts(
+    gsl::not_null<IExecutionApi*> const& api,
+    gsl::not_null<IExecutionApi*> const& alternative_api,
+    FetchArguments const& clargs) -> bool {
     auto object_info = ObjectInfoFromLiberalString(clargs.object_id);
+
+    if (clargs.remember) {
+        if (not api->RetrieveToCas({object_info}, alternative_api)) {
+            Logger::Log(LogLevel::Warning,
+                        "Failed to copy artifact {} to local CAS",
+                        object_info.ToString());
+        }
+    }
 
     if (clargs.output_path) {
         auto output_path = (*clargs.output_path / "").parent_path();
@@ -72,7 +82,8 @@ auto FetchAndInstallArtifacts(gsl::not_null<IExecutionApi*> const& api,
         }
 
         if (not FileSystemManager::CreateDirectory(output_path.parent_path()) or
-            not api->RetrieveToPaths({object_info}, {output_path})) {
+            not api->RetrieveToPaths(
+                {object_info}, {output_path}, alternative_api)) {
             Logger::Log(LogLevel::Error, "failed to retrieve artifact.");
             return false;
         }

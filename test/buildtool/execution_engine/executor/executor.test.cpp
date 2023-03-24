@@ -16,7 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "catch2/catch.hpp"
+#include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/common/artifact_factory.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_engine/executor/executor.hpp"
@@ -133,10 +133,9 @@ class TestApi : public IExecutionApi {
         -> IExecutionAction::Ptr final {
         return IExecutionAction::Ptr{new TestAction(config_)};
     }
-    auto RetrieveToPaths(
-        std::vector<Artifact::ObjectInfo> const& /*unused*/,
-        std::vector<std::filesystem::path> const& /*unused*/) noexcept
-        -> bool final {
+    auto RetrieveToPaths(std::vector<Artifact::ObjectInfo> const& /*unused*/,
+                         std::vector<std::filesystem::path> const& /*unused*/,
+                         IExecutionApi* /* unused */) noexcept -> bool final {
         return false;  // not needed by Executor
     }
     auto RetrieveToFds(std::vector<Artifact::ObjectInfo> const& /*unused*/,

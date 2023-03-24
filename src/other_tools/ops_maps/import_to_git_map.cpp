@@ -85,12 +85,15 @@ void KeepCommitAndSetTree(
 
 auto CreateImportToGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
+    std::string const& git_bin,
+    std::vector<std::string> const& launcher,
     std::size_t jobs) -> ImportToGitMap {
-    auto import_to_git = [critical_git_op_map](auto ts,
-                                               auto setter,
-                                               auto logger,
-                                               auto /*unused*/,
-                                               auto const& key) {
+    auto import_to_git = [critical_git_op_map, git_bin, launcher](
+                             auto ts,
+                             auto setter,
+                             auto logger,
+                             auto /*unused*/,
+                             auto const& key) {
         // Perform initial commit at location: init + add . + commit
         GitOpKey op_key = {
             {
@@ -106,6 +109,8 @@ auto CreateImportToGitMap(
             {std::move(op_key)},
             [critical_git_op_map,
              target_path = key.target_path,
+             git_bin,
+             launcher,
              ts,
              setter,
              logger](auto const& values) {
@@ -134,6 +139,8 @@ auto CreateImportToGitMap(
                      commit = *op_result.result,
                      target_path,
                      git_cas = op_result.git_cas,
+                     git_bin,
+                     launcher,
                      ts,
                      setter,
                      logger](auto const& values) {
@@ -154,9 +161,10 @@ auto CreateImportToGitMap(
                                       /*fatal=*/true);
                             return;
                         }
-                        // define temp repo path
-                        auto tmp_repo_path = CreateUniquePath(target_path);
-                        if (not tmp_repo_path) {
+                        // create tmp directory
+                        auto tmp_dir =
+                            JustMR::Utils::CreateTypedTmpDir("import-to-git");
+                        if (not tmp_dir) {
                             (*logger)(
                                 fmt::format("Could not create unique path "
                                             "for target {}",
@@ -175,12 +183,13 @@ auto CreateImportToGitMap(
                                                     msg),
                                         fatal);
                                 });
-                        auto success =
-                            just_git_repo->FetchViaTmpRepo(*tmp_repo_path,
-                                                           target_path.string(),
-                                                           std::nullopt,
-                                                           wrapped_logger);
-                        if (not success) {
+                        if (not just_git_repo->FetchViaTmpRepo(
+                                tmp_dir->GetPath(),
+                                target_path.string(),
+                                std::nullopt,
+                                git_bin,
+                                launcher,
+                                wrapped_logger)) {
                             return;
                         }
                         // setup a wrapped_logger

@@ -16,6 +16,7 @@
 #define INCLUDED_SRC_OTHER_TOOLS_ROOT_MAPS_COMMIT_GIT_MAP_HPP
 
 #include <string>
+#include <utility>
 
 #include "nlohmann/json.hpp"
 #include "src/other_tools/just_mr/utils.hpp"
@@ -49,12 +50,16 @@ struct hash<GitRepoInfo> {
 };
 }  // namespace std
 
-/// \brief Maps a Git repository commit hash to its tree workspace root.
-using CommitGitMap = AsyncMapConsumer<GitRepoInfo, nlohmann::json>;
+/// \brief Maps a Git repository commit hash to its tree workspace root,
+/// together with the information whether it was a cache hit.
+using CommitGitMap =
+    AsyncMapConsumer<GitRepoInfo, std::pair<nlohmann::json, bool>>;
 
 [[nodiscard]] auto CreateCommitGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     JustMR::PathsPtr const& just_mr_paths,
+    std::string const& git_bin,
+    std::vector<std::string> const& launcher,
     std::size_t jobs) -> CommitGitMap;
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_ROOT_MAPS_COMMIT_GIT_MAP_HPP

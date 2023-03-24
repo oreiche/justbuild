@@ -14,7 +14,9 @@
 
 #include "src/other_tools/root_maps/tree_id_git_map.hpp"
 
+#include "fmt/core.h"
 #include "src/buildtool/execution_api/common/execution_common.hpp"
+#include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/system/system_command.hpp"
 #include "src/other_tools/git_operations/git_repo_remote.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
@@ -54,13 +56,13 @@ void KeepCommitAndSetRoot(
                 return;
             }
             // set the workspace root
-            (*ws_setter)(nlohmann::json::array(
-                {"git tree",
-                 tree_id_info.hash,
-                 JustMR::Utils::GetGitCacheRoot().string()}));
-            // report work done
-            JustMRProgress::Instance().TaskTracker().Stop(tree_id_info.origin);
-            JustMRStatistics::Instance().IncrementExecutedCounter();
+            JustMRProgress::Instance().TaskTracker().Start(tree_id_info.origin);
+            (*ws_setter)(
+                std::pair(nlohmann::json::array(
+                              {"git tree",
+                               tree_id_info.hash,
+                               JustMR::Utils::GetGitCacheRoot().string()}),
+                          false));
         },
         [logger, commit, target_path = tmp_dir->GetPath()](auto const& msg,
                                                            bool fatal) {
@@ -77,13 +79,15 @@ void KeepCommitAndSetRoot(
 
 auto CreateTreeIdGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
+    std::string const& git_bin,
     std::vector<std::string> const& launcher,
     std::size_t jobs) -> TreeIdGitMap {
-    auto tree_to_git = [critical_git_op_map, launcher](auto ts,
-                                                       auto setter,
-                                                       auto logger,
-                                                       auto /*unused*/,
-                                                       auto const& key) {
+    auto tree_to_git = [critical_git_op_map, git_bin, launcher](
+                           auto ts,
+                           auto setter,
+                           auto logger,
+                           auto /*unused*/,
+                           auto const& key) {
         // first, check whether tree exists already in CAS
         // ensure Git cache
         // define Git operation to be done
@@ -98,7 +102,7 @@ auto CreateTreeIdGitMap(
         critical_git_op_map->ConsumeAfterKeysReady(
             ts,
             {std::move(op_key)},
-            [critical_git_op_map, launcher, key, ts, setter, logger](
+            [critical_git_op_map, git_bin, launcher, key, ts, setter, logger](
                 auto const& values) {
                 GitOpValue op_result = *values[0];
                 // check flag
@@ -133,9 +137,7 @@ auto CreateTreeIdGitMap(
                     return;
                 }
                 if (not *tree_found) {
-                    // start work reporting;
                     JustMRProgress::Instance().TaskTracker().Start(key.origin);
-                    JustMRStatistics::Instance().IncrementQueuedCounter();
                     // create temporary location for command execution root
                     auto tmp_dir = JustMR::Utils::CreateTypedTmpDir("git-tree");
                     if (not tmp_dir) {
@@ -184,9 +186,14 @@ auto CreateTreeIdGitMap(
                         ts,
                         {std::move(op_key)},
                         [tmp_dir,  // keep tmp_dir alive
+                         out_dir,  // keep stdout/stderr of command alive
                          critical_git_op_map,
                          just_git_cas = op_result.git_cas,
+                         cmdline,
+                         command_output,
                          key,
+                         git_bin,
+                         launcher,
                          ts,
                          setter,
                          logger](auto const& values) {
@@ -226,12 +233,31 @@ auto CreateTreeIdGitMap(
                                 return;
                             }
                             if (not *tree_check) {
+                                std::string out_str{};
+                                std::string err_str{};
+                                auto cmd_out = FileSystemManager::ReadFile(
+                                    command_output->stdout_file);
+                                auto cmd_err = FileSystemManager::ReadFile(
+                                    command_output->stderr_file);
+                                if (cmd_out) {
+                                    out_str = *cmd_out;
+                                }
+                                if (cmd_err) {
+                                    err_str = *cmd_err;
+                                }
+                                std::string output{};
+                                if (!out_str.empty() || !err_str.empty()) {
+                                    output = fmt::format(
+                                        ".\nOutput of command:\n{}{}",
+                                        out_str,
+                                        err_str);
+                                }
                                 (*logger)(
-                                    fmt::format(
-                                        "Given command\n{}\ndid not create "
-                                        "specified tree {}",
-                                        nlohmann::json(key.command).dump(),
-                                        key.hash),
+                                    fmt::format("Executing {} did not create "
+                                                "specified tree {}{}",
+                                                nlohmann::json(cmdline).dump(),
+                                                key.hash,
+                                                output),
                                     /*fatal=*/true);
                                 return;
                             }
@@ -247,8 +273,10 @@ auto CreateTreeIdGitMap(
                                 return;
                             }
                             // define temp repo path
-                            auto tmp_repo_path = CreateUniquePath(target_path);
-                            if (not tmp_repo_path) {
+                            auto tmp_dir =
+                                JustMR::Utils::CreateTypedTmpDir("git-tree");
+                            ;
+                            if (not tmp_dir) {
                                 (*logger)(fmt::format("Could not create unique "
                                                       "path for target {}",
                                                       target_path.string()),
@@ -267,12 +295,13 @@ auto CreateTreeIdGitMap(
                                                 msg),
                                             fatal);
                                     });
-                            auto success = just_git_repo->FetchViaTmpRepo(
-                                *tmp_repo_path,
-                                target_path.string(),
-                                std::nullopt,
-                                wrapped_logger);
-                            if (not success) {
+                            if (not just_git_repo->FetchViaTmpRepo(
+                                    tmp_dir->GetPath(),
+                                    target_path.string(),
+                                    std::nullopt,
+                                    git_bin,
+                                    launcher,
+                                    wrapped_logger)) {
                                 return;
                             }
                             // setup a wrapped_logger
@@ -309,12 +338,12 @@ auto CreateTreeIdGitMap(
                 }
                 else {
                     // tree found, so return the git tree root as-is
-                    (*setter)(nlohmann::json::array(
-                        {"git tree",
-                         key.hash,
-                         JustMR::Utils::GetGitCacheRoot().string()}));
-                    // report cache hit
-                    JustMRStatistics::Instance().IncrementCacheHitsCounter();
+                    (*setter)(std::pair(
+                        nlohmann::json::array(
+                            {"git tree",
+                             key.hash,
+                             JustMR::Utils::GetGitCacheRoot().string()}),
+                        true));
                 }
             },
             [logger, target_path = JustMR::Utils::GetGitCacheRoot()](
@@ -327,5 +356,6 @@ auto CreateTreeIdGitMap(
                           fatal);
             });
     };
-    return AsyncMapConsumer<TreeIdInfo, nlohmann::json>(tree_to_git, jobs);
+    return AsyncMapConsumer<TreeIdInfo, std::pair<nlohmann::json, bool>>(
+        tree_to_git, jobs);
 }

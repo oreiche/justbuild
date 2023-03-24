@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <filesystem>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -19,6 +20,7 @@
 
 #include "src/buildtool/build_engine/expression/configuration.hpp"
 #include "src/buildtool/logging/log_config.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/log_sink_cmdline.hpp"
 #include "src/buildtool/logging/log_sink_file.hpp"
 #include "src/buildtool/main/version.hpp"
@@ -92,7 +94,8 @@ void SetupSetupCommandArguments(
 
 [[nodiscard]] auto ParseCommandLineArguments(int argc, char const* const* argv)
     -> CommandLineArguments {
-    CLI::App app("just-mr");
+    CLI::App app(
+        "just-mr, a multi-repository configuration tool and launcher for just");
     app.option_defaults()->take_last();
     auto* cmd_mrversion = app.add_subcommand(
         "mrversion", "Print version information in JSON format of this tool.");
@@ -187,7 +190,12 @@ void SetupDefaultLogging() {
 }
 
 void SetupLogging(MultiRepoLogArguments const& clargs) {
-    LogConfig::SetLogLimit(clargs.log_limit);
+    if (clargs.log_limit) {
+        LogConfig::SetLogLimit(*clargs.log_limit);
+    }
+    else {
+        LogConfig::SetLogLimit(kDefaultLogLevel);
+    }
     LogConfig::SetSinks({LogSinkCmdLine::CreateFactory(not clargs.plain_log)});
     for (auto const& log_file : clargs.log_files) {
         LogConfig::AddSink(LogSinkFile::CreateFactory(
@@ -286,7 +294,8 @@ void SetupLogging(MultiRepoLogArguments const& clargs) {
     // set default if rcpath not given
     if (not clargs->common.norc) {
         if (not rc_path) {
-            rc_path = kDefaultRCPath;
+            rc_path = std::filesystem::weakly_canonical(
+                std::filesystem::absolute(kDefaultRCPath));
         }
         else {
             if (not FileSystemManager::IsFile(*rc_path)) {
@@ -371,6 +380,14 @@ void SetupLogging(MultiRepoLogArguments const& clargs) {
             clargs->common.just_path = just->first;
         }
     }
+    // read git binary path; overwritten if user provided it already
+    if (not clargs->common.git_path) {
+        auto git = ReadLocation(rc_config["git"],
+                                clargs->common.just_mr_paths->workspace_root);
+        if (git) {
+            clargs->common.git_path = git->first;
+        }
+    }
     // read additional just args; user can append, but does not overwrite
     auto just_args = rc_config["just args"];
     if (just_args.IsNotNull()) {
@@ -383,6 +400,73 @@ void SetupLogging(MultiRepoLogArguments const& clargs) {
                 args.emplace_back(arg->String());
             }
             clargs->just_cmd.just_args[cmd_name] = std::move(args);
+        }
+    }
+    // read default for local launcher
+    if (not clargs->common.local_launcher) {
+        auto launcher = rc_config["local launcher"];
+        if (launcher.IsNotNull()) {
+            if (not launcher->IsList()) {
+                Logger::Log(LogLevel::Error,
+                            "Configuration-file provided launcher {} is not a "
+                            "list of strings",
+                            launcher->ToString());
+                std::exit(kExitConfigError);
+            }
+            std::vector<std::string> default_launcher{};
+            default_launcher.reserve(launcher->List().size());
+            for (auto const& entry : launcher->List()) {
+                if (not entry->IsString()) {
+                    Logger::Log(LogLevel::Error,
+                                "Configuration-file provided launcher {} is "
+                                "not a list of strings",
+                                launcher->ToString());
+                    std::exit(kExitConfigError);
+                }
+                default_launcher.emplace_back(entry->String());
+            }
+            clargs->common.local_launcher = default_launcher;
+        }
+        else {
+            clargs->common.local_launcher = kDefaultLauncher;
+        }
+    }
+    // Set log limit, if specified and not set on the command line
+    if (not clargs->log.log_limit) {
+        auto limit = rc_config["log limit"];
+        if (limit.IsNotNull()) {
+            if (not limit->IsNumber()) {
+                Logger::Log(LogLevel::Error,
+                            "Configuration-file specified log-limit has to be "
+                            "a number, but found {}",
+                            limit->ToString());
+                std::exit(kExitConfigError);
+            }
+            clargs->log.log_limit = ToLogLevel(limit->Number());
+            LogConfig::SetLogLimit(*clargs->log.log_limit);
+        }
+    }
+    // Add additional log sinks specified in the rc file.
+    auto log_files = rc_config["log files"];
+    if (log_files.IsNotNull()) {
+        if (not log_files->IsList()) {
+            Logger::Log(LogLevel::Error,
+                        "Configuration-provided log files have to be a list of "
+                        "location objects, but found {}",
+                        log_files->ToString());
+            std::exit(kExitConfigError);
+        }
+        for (auto const& log_file : log_files->List()) {
+            auto path =
+                ReadLocation(log_file->ToJson(),
+                             clargs->common.just_mr_paths->workspace_root);
+            if (path) {
+                LogConfig::AddSink(LogSinkFile::CreateFactory(
+                    path->first,
+                    clargs->log.log_append ? LogSinkFile::Mode::Append
+                                           : LogSinkFile::Mode::Overwrite));
+                clargs->log.log_files.emplace_back(path->first);
+            }
         }
     }
     // read config lookup order
@@ -440,51 +524,11 @@ void SetupLogging(MultiRepoLogArguments const& clargs) {
     return config;
 }
 
-/// \brief Add repos from a given repo list to the reported repos set if its
-/// type is distdir. Ignore any missing or wrong info.
-void AddDistdirReportedRepos(
-    ExpressionPtr const& repos,
-    std::string const& repo_name,
-    std::shared_ptr<std::unordered_set<std::string>> const&
-        reported_repos_set) {
-    auto repo_desc_key = repos->Get(repo_name, Expression::none_t{});
-    auto repo_desc = repo_desc_key->Get("repository", Expression::none_t{});
-    auto resolved_repo_desc = JustMR::Utils::ResolveRepo(repo_desc, repos);
-    if (not resolved_repo_desc) {
-        return;
-    }
-    auto repo_type = (*resolved_repo_desc)->Get("type", Expression::none_t{});
-    if (not repo_type->IsString()) {
-        return;
-    }
-    // check if the repo is distdir
-    auto repo_type_str = repo_type->String();
-    if (repo_type_str != "distdir") {
-        return;
-    }
-    // get distdir list
-    auto repo_desc_repositories =
-        repo_desc->Get("repositories", Expression::none_t{});
-    if (not repo_desc_repositories->IsList()) {
-        return;
-    }
-    auto distdir_repos = repo_desc_repositories->List();
-    // add to reported set
-    for (auto const& entry : distdir_repos) {
-        if (entry->IsString()) {
-            reported_repos_set->insert(entry->String());
-        }
-    }
-}
-
 /// \brief Get the repo dependency closure for a given main repository.
 /// For progress reporting we include
-void ReachableRepositories(
-    ExpressionPtr const& repos,
-    std::string const& main,
-    std::shared_ptr<SetupRepos> const& setup_repos,
-    std::shared_ptr<std::unordered_set<std::string>> const& reported_repos_set =
-        nullptr) {
+void ReachableRepositories(ExpressionPtr const& repos,
+                           std::string const& main,
+                           std::shared_ptr<SetupRepos> const& setup_repos) {
     // use temporary sets to avoid duplicates
     std::unordered_set<std::string> include_repos_set{};
     if (repos->IsMap()) {
@@ -494,12 +538,6 @@ void ReachableRepositories(
                 if (not include_repos_set.contains(repo_name)) {
                     // if not found, add it and repeat for its bindings
                     include_repos_set.insert(repo_name);
-                    // add to reported repos, if needed
-                    if (reported_repos_set) {
-                        reported_repos_set->insert(repo_name);
-                        AddDistdirReportedRepos(
-                            repos, repo_name, reported_repos_set);
-                    }
                     // check bindings
                     auto repos_repo_name =
                         repos->Get(repo_name, Expression::none_t{});
@@ -521,7 +559,7 @@ void ReachableRepositories(
 
         // Add overlay repositories
         std::unordered_set<std::string> setup_repos_set{include_repos_set};
-        for (auto const& repo : setup_repos->to_include) {
+        for (auto const& repo : include_repos_set) {
             auto repos_repo = repos->Get(repo, Expression::none_t{});
             if (repos_repo.IsNotNull()) {
                 // copy over any present alternative root dirs
@@ -531,12 +569,6 @@ void ReachableRepositories(
                     if (layer_val.IsNotNull() and layer_val->IsString()) {
                         auto repo_name = layer_val->String();
                         setup_repos_set.insert(repo_name);
-                        // add to reported repos, if needed
-                        if (reported_repos_set) {
-                            reported_repos_set->insert(repo_name);
-                            AddDistdirReportedRepos(
-                                repos, repo_name, reported_repos_set);
-                        }
                     }
                 }
             }
@@ -560,20 +592,10 @@ void ReachableRepositories(
 
 void DefaultReachableRepositories(
     ExpressionPtr const& repos,
-    std::shared_ptr<SetupRepos> const& setup_repos,
-    std::shared_ptr<std::unordered_set<std::string>> const& reported_repos_set =
-        nullptr) {
+    std::shared_ptr<SetupRepos> const& setup_repos) {
     if (repos.IsNotNull() and repos->IsMap()) {
         setup_repos->to_setup = repos->Map().Keys();
         setup_repos->to_include = setup_repos->to_setup;
-        // get reported repos
-        if (reported_repos_set) {
-            *reported_repos_set = std::unordered_set<std::string>(
-                setup_repos->to_setup.begin(), setup_repos->to_setup.end());
-            for (auto const& repo : setup_repos->to_setup) {
-                AddDistdirReportedRepos(repos, repo, reported_repos_set);
-            }
-        }
     }
 }
 
@@ -802,19 +824,8 @@ void DefaultReachableRepositories(
     auto repo_fetch_map =
         CreateRepoFetchMap(&content_cas_map, *fetch_dir, arguments.common.jobs);
 
-    // set up map for progress tracing
-    auto& repo_set = JustMRProgress::Instance().RepositorySet();
-    repo_set.clear();
-    repo_set.reserve(nr);
-    for (auto const& repo : repos_to_fetch) {
-        auto distfile = (repo.archive.distfile
-                             ? repo.archive.distfile.value()
-                             : std::filesystem::path(repo.archive.fetch_url)
-                                   .filename()
-                                   .string());
-        repo_set.emplace(std::move(distfile));
-    }
     // set up progress observer
+    JustMRProgress::Instance().SetTotal(repos_to_fetch.size());
     std::atomic<bool> done{false};
     std::condition_variable cv{};
     auto reporter = JustMRProgressReporter::Reporter();
@@ -1006,17 +1017,13 @@ void DefaultReachableRepositories(
     auto mr_config = config->ToJson();
     // Create async map
     auto git_update_map =
-        CreateGitUpdateMap(git_repo->GetGitCAS(), arguments.common.jobs);
+        CreateGitUpdateMap(git_repo->GetGitCAS(),
+                           arguments.common.git_path->string(),
+                           *arguments.common.local_launcher,
+                           arguments.common.jobs);
 
-    // set up map for progress tracing
-    auto& repo_set = JustMRProgress::Instance().RepositorySet();
-    repo_set.clear();
-    repo_set.reserve(nr);
-    for (auto const& repo : repos_to_update) {
-        auto id = fmt::format("{}:{}", repo.first, repo.second);
-        repo_set.emplace(std::move(id));
-    }
     // set up progress observer
+    JustMRProgress::Instance().SetTotal(repos_to_update.size());
     std::atomic<bool> done{false};
     std::condition_variable cv{};
     auto reporter = JustMRProgressReporter::Reporter();
@@ -1103,8 +1110,7 @@ void DefaultReachableRepositories(
         mr_config["main"] = *main;
     }
     // get default repos to setup and to include
-    auto repos_to_report = std::make_shared<std::unordered_set<std::string>>();
-    DefaultReachableRepositories(repos, setup_repos, repos_to_report);
+    DefaultReachableRepositories(repos, setup_repos);
     // check if main is to be taken as first repo name lexicographically
     if (not main and not setup_repos->to_setup.empty()) {
         main = *std::min_element(setup_repos->to_setup.begin(),
@@ -1112,15 +1118,8 @@ void DefaultReachableRepositories(
     }
     // final check on which repos are to be set up
     if (main and not arguments.setup.sub_all) {
-        ReachableRepositories(repos, *main, setup_repos, repos_to_report);
+        ReachableRepositories(repos, *main, setup_repos);
     }
-
-    // report progress
-    auto nr = repos_to_report->size();
-    Logger::Log(LogLevel::Info,
-                "Found {} {} to set up",
-                nr,
-                nr == 1 ? "repository" : "repositories");
 
     // setup the required async maps
     auto crit_git_op_ptr = std::make_shared<CriticalGitOpGuard>();
@@ -1129,11 +1128,17 @@ void DefaultReachableRepositories(
                                                arguments.common.ca_info,
                                                arguments.common.jobs);
     auto import_to_git_map =
-        CreateImportToGitMap(&critical_git_op_map, arguments.common.jobs);
+        CreateImportToGitMap(&critical_git_op_map,
+                             arguments.common.git_path->string(),
+                             *arguments.common.local_launcher,
+                             arguments.common.jobs);
 
-    auto commit_git_map = CreateCommitGitMap(&critical_git_op_map,
-                                             arguments.common.just_mr_paths,
-                                             arguments.common.jobs);
+    auto commit_git_map =
+        CreateCommitGitMap(&critical_git_op_map,
+                           arguments.common.just_mr_paths,
+                           arguments.common.git_path->string(),
+                           *arguments.common.local_launcher,
+                           arguments.common.jobs);
     auto content_git_map = CreateContentGitMap(&content_cas_map,
                                                &import_to_git_map,
                                                &critical_git_op_map,
@@ -1146,9 +1151,11 @@ void DefaultReachableRepositories(
                                                &import_to_git_map,
                                                &critical_git_op_map,
                                                arguments.common.jobs);
-    auto tree_id_git_map = CreateTreeIdGitMap(&critical_git_op_map,
-                                              *arguments.common.local_launcher,
-                                              arguments.common.jobs);
+    auto tree_id_git_map =
+        CreateTreeIdGitMap(&critical_git_op_map,
+                           arguments.common.git_path->string(),
+                           *arguments.common.local_launcher,
+                           arguments.common.jobs);
     auto repos_to_setup_map = CreateReposToSetupMap(config,
                                                     main,
                                                     interactive,
@@ -1160,14 +1167,11 @@ void DefaultReachableRepositories(
                                                     &tree_id_git_map,
                                                     arguments.common.jobs);
 
-    // set up map for progress tracing
-    auto& repo_set = JustMRProgress::Instance().RepositorySet();
-    repo_set.clear();
-    repo_set.reserve(nr);
-    for (auto const& repo : *repos_to_report) {
-        repo_set.emplace(repo);
-    }
     // set up progress observer
+    Logger::Log(LogLevel::Info,
+                "Found {} repositories to set up",
+                setup_repos->to_setup.size());
+    JustMRProgress::Instance().SetTotal(setup_repos->to_setup.size());
     std::atomic<bool> done{false};
     std::condition_variable cv{};
     auto reporter = JustMRProgressReporter::Reporter();
@@ -1299,11 +1303,12 @@ void DefaultReachableRepositories(
             cmd.emplace_back(log_file.string());
         }
     }
-    if (arguments.log.log_limit != kDefaultLogLevel) {
+    if (arguments.log.log_limit and
+        *arguments.log.log_limit != kDefaultLogLevel) {
         cmd.emplace_back("--log-limit");
         cmd.emplace_back(
             std::to_string(static_cast<std::underlying_type<LogLevel>::type>(
-                arguments.log.log_limit)));
+                *arguments.log.log_limit)));
     }
     if (arguments.log.plain_log) {
         cmd.emplace_back("--plain-log");
@@ -1371,6 +1376,9 @@ auto main(int argc, char* argv[]) -> int {
         // the defaults
         if (not arguments.common.just_path) {
             arguments.common.just_path = kDefaultJustPath;
+        }
+        if (not arguments.common.git_path) {
+            arguments.common.git_path = kDefaultGitPath;
         }
         bool forward_build_root = true;
         if (not arguments.common.just_mr_paths->root) {
