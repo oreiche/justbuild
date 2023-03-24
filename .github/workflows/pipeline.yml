@@ -8,8 +8,8 @@ on:
       - github-ci
 
 jobs:
-  x86_64-linux:
-    name: x86_64 Linux
+  linux:
+    name: Linux
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-20.04
     steps:
@@ -30,24 +30,61 @@ jobs:
       - name: Run and prepare docker image
         run: |
           docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
-          docker exec ubuntu apt update
+          docker exec ubuntu bash -c "\
+            set -e; \
+            apt update; \
+            apt install --yes git; \
+            git config --global --add safe.directory /workspace"
 
-      - name: Bootstrap justbuild
+      - name: Bootstrap just for x86_64
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
             apt install --yes wget python3 clang libstdc++-10-dev unzip patch; \
             export JUST_BUILD_CONF='{\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}'; \
-            ./bin/bootstrap.py . /tmp/justbuild"
+            ./bin/bootstrap.py . /tmp/justbuild_x86_64"
 
-      - name: Build just-mr
+      - name: Build just-mr for x86_64
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            apt install --yes git; \
-            export PATH=/tmp/justbuild/out/bin:\$PATH; \
+            export PATH=/tmp/justbuild_x86_64/out/bin:\$PATH; \
             echo '{\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > build.conf; \
-            ./bin/just-mr.py install -c build.conf -o /tmp/justbuild/out/ 'installed just-mr'"
+            ./bin/just-mr.py install -c build.conf -o /tmp/justbuild_x86_64/out/ 'installed just-mr'"
+
+      - name: Build just for arm64
+        run: |
+          docker exec ubuntu bash -c "\
+            set -e; \
+            apt install --yes g++-10 g++-10-aarch64-linux-gnu; \
+            update-alternatives --install /usr/bin/x86_64-linux-gnu-gcc x86_64-linux-gnu-gcc /usr/bin/x86_64-linux-gnu-gcc-10 30; \
+            update-alternatives --install /usr/bin/x86_64-linux-gnu-g++ x86_64-linux-gnu-g++ /usr/bin/x86_64-linux-gnu-g++-10 30; \
+            update-alternatives --install /usr/bin/aarch64-linux-gnu-gcc aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-10 30; \
+            update-alternatives --install /usr/bin/aarch64-linux-gnu-g++ aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-10 30; \
+            echo '{\"COMPILER_FAMILY\":\"gnu\",\"ARCH\":\"x86_64\",\"TARGET_ARCH\":\"arm64\",\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > gcc-arm64.conf; \
+            export PATH=/tmp/justbuild_x86_64/out/bin:\$PATH; \
+            just-mr install -c gcc-arm64.conf -o /tmp/justbuild_arm64/out/ 'installed just'"
+
+      - name: Build just-mr for arm64
+        run: |
+          docker exec ubuntu bash -c "\
+            set -e; \
+            export PATH=/tmp/justbuild_x86_64/out/bin:\$PATH; \
+            just-mr install -c gcc-arm64.conf -o /tmp/justbuild_arm64/out/ 'installed just-mr'"
+
+      - name: Build man pages
+        run: |
+          docker exec ubuntu bash -c "\
+            set -e; \
+            apt install --yes pandoc; \
+            mkdir -p /tmp/justbuild_noarch/share/man/man{1,5}; \
+            pandoc -s -t man ./share/man/just.1.org -o /tmp/justbuild_noarch/share/man/man1/just.1; \
+            pandoc -s -t man ./share/man/just-mr.1.org -o /tmp/justbuild_noarch/share/man/man1/just-mr.1; \
+            pandoc -s -t man ./share/man/just-import-git.1.org -o /tmp/justbuild_noarch/share/man/man1/just-import-git.1; \
+            pandoc -s -t man ./share/man/just-mrrc.5.org -o /tmp/justbuild_noarch/share/man/man5/just-mrrc.5; \
+            pandoc -s -t man ./share/man/just-graph-file.5.org -o /tmp/justbuild_noarch/share/man/man5/just-graph-file.5; \
+            pandoc -s -t man ./share/man/just-repository-config.5.org -o /tmp/justbuild_noarch/share/man/man5/just-repository-config.5; \
+            pandoc -s -t man ./share/man/just-mr-repository-config.5.org -o /tmp/justbuild_noarch/share/man/man5/just-mr-repository-config.5"
 
       - name: Determine package name
         run: |
@@ -59,7 +96,7 @@ jobs:
             docker exec ubuntu bash -c "\
               set -e; \
               apt install --yes jq; \
-              /tmp/justbuild/out/bin/just version | jq -r '(.version | join(\".\"))+.suffix' > version.txt"
+              /tmp/justbuild_x86_64/out/bin/just version | jq -r '(.version | join(\".\"))+.suffix' > version.txt"
             VERSION="$(cat version.txt | tr '~' '-')"
             TAG_NAME="v${VERSION}-${COMMIT_TIME}-g${COMMIT_HASH}"
           else
@@ -68,35 +105,28 @@ jobs:
           fi
           echo "UNTAGGED=${UNTAGGED}" >> $GITHUB_ENV
           echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_ENV
-          echo "PKG_NAME=justbuild-${TAG_NAME}-x86_64-linux" >> $GITHUB_ENV
+          echo "PKG_NAME=justbuild-${TAG_NAME}" >> $GITHUB_ENV
 
-      - name: Build man pages
+      - name: Create packages
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            apt install --yes pandoc; \
-            mkdir -p $PKG_NAME/share/man/man{1,5}; \
-            pandoc -s -t man ./share/man/just.1.org -o $PKG_NAME/share/man/man1/just.1; \
-            pandoc -s -t man ./share/man/just-mr.1.org -o $PKG_NAME/share/man/man1/just-mr.1; \
-            pandoc -s -t man ./share/man/just-import-git.1.org -o $PKG_NAME/share/man/man1/just-import-git.1; \
-            pandoc -s -t man ./share/man/just-mrrc.5.org -o $PKG_NAME/share/man/man5/just-mrrc.5; \
-            pandoc -s -t man ./share/man/just-graph-file.5.org -o $PKG_NAME/share/man/man5/just-graph-file.5; \
-            pandoc -s -t man ./share/man/just-repository-config.5.org -o $PKG_NAME/share/man/man5/just-repository-config.5; \
-            pandoc -s -t man ./share/man/just-mr-repository-config.5.org -o $PKG_NAME/share/man/man5/just-mr-repository-config.5"
-
-      - name: Create package
-        run: |
+            mkdir -p /tmp/justbuild_noarch/{bin,etc/bash_completion.d}; \
+            cp ./bin/just-import-git.py /tmp/justbuild_noarch/bin/just-import-git; \
+            cp ./share/just_complete.bash /tmp/justbuild_noarch/etc/bash_completion.d/just"
           docker exec ubuntu bash -c "\
             set -e; \
-            mkdir -p $PKG_NAME/{bin,etc/bash_completion.d}; \
-            cp /tmp/justbuild/out/bin/just $PKG_NAME/bin/just; \
-            cp /tmp/justbuild/out/bin/just-mr $PKG_NAME/bin/just-mr; \
-            cp ./bin/just-import-git.py $PKG_NAME/bin/just-import-git; \
-            cp ./share/just_complete.bash $PKG_NAME/etc/bash_completion.d/just"
-          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME.tar.gz $PKG_NAME
-          sha256sum $PKG_NAME.tar.gz | tee SHA256SUMS
+            cp -r /tmp/justbuild_noarch $PKG_NAME-x86_64-linux; \
+            cp /tmp/justbuild_x86_64/out/bin/{just,just-mr} $PKG_NAME-x86_64-linux/bin/"
+          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME-x86_64-linux.tar.gz $PKG_NAME-x86_64-linux
+          docker exec ubuntu bash -c "\
+            set -e; \
+            cp -r /tmp/justbuild_noarch $PKG_NAME-aarch64-linux; \
+            cp /tmp/justbuild_arm64/out/bin/{just,just-mr} $PKG_NAME-aarch64-linux/bin/"
+          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME-aarch64-linux.tar.gz $PKG_NAME-aarch64-linux
+          sha256sum $PKG_NAME-*.tar.gz | tee SHA256SUMS
 
-      - name: Upload package checksum
+      - name: Upload package checksums
         uses: actions/upload-artifact@v3
         with:
           name: SHA256SUMS
