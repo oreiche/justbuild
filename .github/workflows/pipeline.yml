@@ -37,7 +37,7 @@ jobs:
           docker exec ubuntu bash -c "\
             set -e; \
             apt install --yes wget python3 clang libstdc++-10-dev unzip patch; \
-            export JUST_BUILD_CONF='{\"SOURCE_DATE_EPOCH\":\"'${COMMIT_TIME}'\"}'; \
+            export JUST_BUILD_CONF='{\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}'; \
             ./bin/bootstrap.py . /tmp/justbuild"
 
       - name: Build just-mr
@@ -46,7 +46,7 @@ jobs:
             set -e; \
             apt install --yes git; \
             export PATH=/tmp/justbuild/out/bin:\$PATH; \
-            echo '{\"SOURCE_DATE_EPOCH\":\"'${COMMIT_TIME}'\"}' > build.conf; \
+            echo '{\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > build.conf; \
             ./bin/just-mr.py install -c build.conf -o /tmp/justbuild/out/ 'installed just-mr'"
 
       - name: Determine package name
