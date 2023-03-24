@@ -93,7 +93,7 @@ jobs:
             cp /tmp/justbuild/out/bin/just-mr $PKG_NAME/bin/just-mr; \
             cp ./bin/just-import-git.py $PKG_NAME/bin/just-import-git; \
             cp ./share/just_complete.bash $PKG_NAME/etc/bash_completion.d/just"
-          tar -czvf $PKG_NAME.tar.gz $PKG_NAME
+          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME.tar.gz $PKG_NAME
           sha256sum $PKG_NAME.tar.gz | tee SHA256SUMS
 
       - name: Upload package checksum
