@@ -8,8 +8,8 @@ on:
       - github-ci
 
 jobs:
-  linux:
-    name: Linux
+  linux-x86_64:
+    name: Linux x86_64
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-20.04
     steps:
@@ -23,9 +23,7 @@ jobs:
           git fetch https://github.com/just-buildsystem/justbuild master
           BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
           COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
-          COMMIT_HASH="$(git log -n1 ${BASE_COMMIT} --format=%h)"
           echo "COMMIT_TIME=${COMMIT_TIME}" >> $GITHUB_ENV
-          echo "COMMIT_HASH=${COMMIT_HASH}" >> $GITHUB_ENV
 
       - name: Run and prepare docker image
         run: |
@@ -33,14 +31,13 @@ jobs:
           docker exec ubuntu bash -c "\
             set -e; \
             apt update; \
-            apt install --yes git; \
+            apt install --yes git wget python3 clang libstdc++-10-dev unzip patch; \
             git config --global --add safe.directory /workspace"
 
       - name: Bootstrap just for x86_64
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            apt install --yes wget python3 clang libstdc++-10-dev unzip patch; \
             export JUST_BUILD_CONF='{\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}'; \
             ./bin/bootstrap.py . /tmp/justbuild_x86_64"
 
@@ -52,39 +49,171 @@ jobs:
             echo '{\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > build.conf; \
             ./bin/just-mr.py install -c build.conf -o /tmp/justbuild_x86_64/out/ 'installed just-mr'"
 
-      - name: Build just for arm64
+      - name: Collect x86_64 Linux binaries
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            apt install --yes g++-10 g++-10-aarch64-linux-gnu; \
+            mkdir -p justbuild-x86_64-linux/bin; \
+            cp /tmp/justbuild_x86_64/out/bin/{just,just-mr} justbuild-x86_64-linux/bin/"
+          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-x86_64-linux.tar.gz justbuild-x86_64-linux
+
+      - name: Upload x86_64 Linux binaries
+        uses: actions/upload-artifact@v3
+        with:
+          name: justbuild-x86_64-linux
+          path: justbuild-x86_64-linux.tar.gz
+          retention-days: 1
+
+  linux-arm64:
+    name: Linux arm64
+    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
+    runs-on: ubuntu-20.04
+    needs: linux-x86_64
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Retrieve x86_64 Linux binaries
+        uses: actions/download-artifact@v3
+        with:
+          name: justbuild-x86_64-linux
+
+      - name: Unpack x86_64 Linux binaries
+        run: |
+          tar -xzvf justbuild-x86_64-linux.tar.gz
+
+      - name: Read commit info
+        run: |
+          git fetch https://github.com/just-buildsystem/justbuild master
+          BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
+          COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
+          echo "COMMIT_TIME=${COMMIT_TIME}" >> $GITHUB_ENV
+
+      - name: Run and prepare docker image
+        run: |
+          docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
+          docker exec ubuntu bash -c "\
+            set -e; \
+            apt update; \
+            apt install --yes git g++-10 g++-10-aarch64-linux-gnu patch; \
             update-alternatives --install /usr/bin/x86_64-linux-gnu-gcc x86_64-linux-gnu-gcc /usr/bin/x86_64-linux-gnu-gcc-10 30; \
             update-alternatives --install /usr/bin/x86_64-linux-gnu-g++ x86_64-linux-gnu-g++ /usr/bin/x86_64-linux-gnu-g++-10 30; \
             update-alternatives --install /usr/bin/aarch64-linux-gnu-gcc aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-10 30; \
             update-alternatives --install /usr/bin/aarch64-linux-gnu-g++ aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-10 30; \
+            git config --global --add safe.directory /workspace"
+
+      - name: Build just for arm64
+        run: |
+          docker exec ubuntu bash -c "\
+            set -e; \
             echo '{\"COMPILER_FAMILY\":\"gnu\",\"ARCH\":\"x86_64\",\"TARGET_ARCH\":\"arm64\",\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > gcc-arm64.conf; \
-            export PATH=/tmp/justbuild_x86_64/out/bin:\$PATH; \
-            just-mr install -c gcc-arm64.conf -o /tmp/justbuild_arm64/out/ 'installed just'"
+            export PATH=\$(pwd)/justbuild-x86_64-linux/bin:\$PATH; \
+            just-mr install -c gcc-arm64.conf -o justbuild-arm64-linux 'installed just'"
 
       - name: Build just-mr for arm64
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            export PATH=/tmp/justbuild_x86_64/out/bin:\$PATH; \
-            just-mr install -c gcc-arm64.conf -o /tmp/justbuild_arm64/out/ 'installed just-mr'"
+            echo '{\"COMPILER_FAMILY\":\"gnu\",\"ARCH\":\"x86_64\",\"TARGET_ARCH\":\"arm64\",\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > gcc-arm64.conf; \
+            export PATH=\$(pwd)/justbuild-x86_64-linux/bin:\$PATH; \
+            just-mr install -c gcc-arm64.conf -o justbuild-arm64-linux 'installed just-mr'"
+
+      - name: Collect arm64 Linux binaries
+        run: |
+          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-arm64-linux.tar.gz justbuild-arm64-linux
+
+      - name: Upload arm64 Linux binaries
+        uses: actions/upload-artifact@v3
+        with:
+          name: justbuild-arm64-linux
+          path: justbuild-arm64-linux.tar.gz
+          retention-days: 1
+
+  linux-noarch:
+    name: Linux noarch
+    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Run and prepare docker image
+        run: |
+          docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
+          docker exec ubuntu bash -c "\
+            set -e; \
+            apt update; \
+            apt install --yes pandoc"
 
       - name: Build man pages
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            apt install --yes pandoc; \
-            mkdir -p /tmp/justbuild_noarch/share/man/man{1,5}; \
-            pandoc -s -t man ./share/man/just.1.org -o /tmp/justbuild_noarch/share/man/man1/just.1; \
-            pandoc -s -t man ./share/man/just-mr.1.org -o /tmp/justbuild_noarch/share/man/man1/just-mr.1; \
-            pandoc -s -t man ./share/man/just-import-git.1.org -o /tmp/justbuild_noarch/share/man/man1/just-import-git.1; \
-            pandoc -s -t man ./share/man/just-mrrc.5.org -o /tmp/justbuild_noarch/share/man/man5/just-mrrc.5; \
-            pandoc -s -t man ./share/man/just-graph-file.5.org -o /tmp/justbuild_noarch/share/man/man5/just-graph-file.5; \
-            pandoc -s -t man ./share/man/just-repository-config.5.org -o /tmp/justbuild_noarch/share/man/man5/just-repository-config.5; \
-            pandoc -s -t man ./share/man/just-mr-repository-config.5.org -o /tmp/justbuild_noarch/share/man/man5/just-mr-repository-config.5"
+            mkdir -p justbuild-noarch-linux/share/man/man{1,5}; \
+            pandoc -s -t man ./share/man/just.1.org -o justbuild-noarch-linux/share/man/man1/just.1; \
+            pandoc -s -t man ./share/man/just-mr.1.org -o justbuild-noarch-linux/share/man/man1/just-mr.1; \
+            pandoc -s -t man ./share/man/just-import-git.1.org -o justbuild-noarch-linux/share/man/man1/just-import-git.1; \
+            pandoc -s -t man ./share/man/just-mrrc.5.org -o justbuild-noarch-linux/share/man/man5/just-mrrc.5; \
+            pandoc -s -t man ./share/man/just-graph-file.5.org -o justbuild-noarch-linux/share/man/man5/just-graph-file.5; \
+            pandoc -s -t man ./share/man/just-repository-config.5.org -o justbuild-noarch-linux/share/man/man5/just-repository-config.5; \
+            pandoc -s -t man ./share/man/just-mr-repository-config.5.org -o justbuild-noarch-linux/share/man/man5/just-mr-repository-config.5"
+
+      - name: Collect noarch Linux files
+        run: |
+          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-noarch-linux.tar.gz justbuild-noarch-linux
+
+      - name: Upload noarch Linux files
+        uses: actions/upload-artifact@v3
+        with:
+          name: justbuild-noarch-linux
+          path: justbuild-noarch-linux.tar.gz
+          retention-days: 1
+
+  linux-packages:
+    name: Linux Packages
+    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
+    runs-on: ubuntu-20.04
+    needs: [linux-x86_64, linux-arm64, linux-noarch]
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Retrieve x86_64 Linux binaries
+        uses: actions/download-artifact@v3
+        with:
+          name: justbuild-x86_64-linux
+
+      - name: Retrieve arm64 Linux binaries
+        uses: actions/download-artifact@v3
+        with:
+          name: justbuild-arm64-linux
+
+      - name: Retrieve noarch Linux files
+        uses: actions/download-artifact@v3
+        with:
+          name: justbuild-noarch-linux
+
+      - name: Unpack x86_64/arm64/noarch Linux binaries and files
+        run: |
+          tar -xzvf justbuild-x86_64-linux.tar.gz
+          tar -xzvf justbuild-arm64-linux.tar.gz
+          tar -xzvf justbuild-noarch-linux.tar.gz
+          rm -f *.tar.gz
+
+      - name: Read commit info
+        run: |
+          git fetch https://github.com/just-buildsystem/justbuild master
+          BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
+          COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
+          COMMIT_HASH="$(git log -n1 ${BASE_COMMIT} --format=%h)"
+          echo "COMMIT_TIME=${COMMIT_TIME}" >> $GITHUB_ENV
+          echo "COMMIT_HASH=${COMMIT_HASH}" >> $GITHUB_ENV
 
       - name: Determine package name
         run: |
@@ -93,10 +222,7 @@ jobs:
             TAG_NAME="${GITHUB_REF_NAME}"
           elif [ "${GITHUB_REF_TYPE}" = "branch" ]; then
             UNTAGGED=true
-            docker exec ubuntu bash -c "\
-              set -e; \
-              apt install --yes jq; \
-              /tmp/justbuild_x86_64/out/bin/just version | jq -r '(.version | join(\".\"))+.suffix' > version.txt"
+            ./justbuild-x86_64-linux/bin/just version | jq -r '(.version | join("."))+.suffix' > version.txt
             VERSION="$(cat version.txt | tr '~' '-')"
             TAG_NAME="v${VERSION}-${COMMIT_TIME}-g${COMMIT_HASH}"
           else
@@ -109,20 +235,10 @@ jobs:
 
       - name: Create packages
         run: |
-          docker exec ubuntu bash -c "\
-            set -e; \
-            mkdir -p /tmp/justbuild_noarch/{bin,etc/bash_completion.d}; \
-            cp ./bin/just-import-git.py /tmp/justbuild_noarch/bin/just-import-git; \
-            cp ./share/just_complete.bash /tmp/justbuild_noarch/etc/bash_completion.d/just"
-          docker exec ubuntu bash -c "\
-            set -e; \
-            cp -r /tmp/justbuild_noarch $PKG_NAME-x86_64-linux; \
-            cp /tmp/justbuild_x86_64/out/bin/{just,just-mr} $PKG_NAME-x86_64-linux/bin/"
+          mkdir -p $PKG_NAME-{x86_64,aarch64}-linux
+          cp -r justbuild-{x86_64,noarch}-linux/* $PKG_NAME-x86_64-linux/.
+          cp -r justbuild-{arm64,noarch}-linux/* $PKG_NAME-aarch64-linux/.
           tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME-x86_64-linux.tar.gz $PKG_NAME-x86_64-linux
-          docker exec ubuntu bash -c "\
-            set -e; \
-            cp -r /tmp/justbuild_noarch $PKG_NAME-aarch64-linux; \
-            cp /tmp/justbuild_arm64/out/bin/{just,just-mr} $PKG_NAME-aarch64-linux/bin/"
           tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME-aarch64-linux.tar.gz $PKG_NAME-aarch64-linux
           sha256sum $PKG_NAME-*.tar.gz | tee SHA256SUMS
 
@@ -144,4 +260,3 @@ jobs:
           tags: false
           draft: false
           overwrite: true
-
