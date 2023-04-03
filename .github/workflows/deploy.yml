@@ -92,7 +92,7 @@ jobs:
 
       - name: Store local cache
         uses: actions/cache/save@v3
-        if: always()
+        if: ${{ (success() || failure()) && (github.ref_type != 'tag') }}
         with:
           path: ~/.cache/just
           key: deploy-${{ runner.os }}-x86_64
@@ -189,7 +189,7 @@ jobs:
 
       - name: Store local cache
         uses: actions/cache/save@v3
-        if: always()
+        if: ${{ (success() || failure()) && (github.ref_type != 'tag') }}
         with:
           path: ~/.cache/just
           key: deploy-${{ runner.os }}-arm64
