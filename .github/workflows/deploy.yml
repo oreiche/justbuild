@@ -151,9 +151,9 @@ jobs:
 
       - name: Build man pages
         run: |
+          mkdir -p justbuild-noarch-linux/share/man/man{1,5}
           docker exec ubuntu bash -c "\
             set -e; \
-            mkdir -p justbuild-noarch-linux/share/man/man{1,5}; \
             pandoc -s -t man ./share/man/just.1.org -o justbuild-noarch-linux/share/man/man1/just.1; \
             pandoc -s -t man ./share/man/just-mr.1.org -o justbuild-noarch-linux/share/man/man1/just-mr.1; \
             pandoc -s -t man ./share/man/just-import-git.1.org -o justbuild-noarch-linux/share/man/man1/just-import-git.1; \
@@ -164,6 +164,8 @@ jobs:
 
       - name: Collect noarch Linux files
         run: |
+          mkdir -p justbuild-noarch-linux/bin
+          cp ./bin/just-import-git.py justbuild-noarch-linux/bin/just-import-git
           tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-noarch-linux.tar.gz justbuild-noarch-linux
 
       - name: Upload noarch Linux files
