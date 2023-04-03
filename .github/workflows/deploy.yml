@@ -7,9 +7,6 @@ on:
     branches:
       - github-ci
 
-permissions:
-  actions: write
-
 jobs:
   linux-x86_64:
     name: Linux x86_64
