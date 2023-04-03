@@ -5,12 +5,21 @@ on:
     branches:
       - github-ci
 
+permissions:
+  actions: write
+
 jobs:
   debug:
     name: Debug
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
+      - name: Restore local cache
+        uses: actions/cache/restore@v3
+        with:
+          path: ~/.cache/just
+          key: tests-${{ runner.os }}-debug
+
       - name: Checkout sources
         uses: actions/checkout@v3
         with:
@@ -18,12 +27,16 @@ jobs:
 
       - name: Run and prepare docker image
         run: |
-          docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
+          docker run -it -d --name ubuntu \
+            -v $GITHUB_WORKSPACE:/workspace \
+            -v ~/.cache/just:/root/.cache/just \
+            -w /workspace ubuntu:20.04
           docker exec ubuntu bash -c "\
             set -e; \
             apt update; \
             apt install --yes git jq curl wget clang libstdc++-10-dev patch; \
             git config --global --add safe.directory /workspace; \
+            git config --global --add safe.directory /root/.cache/just/git; \
             export PREFIX=/usr/local; \
             ./.github/install-just.sh"
 
@@ -41,11 +54,34 @@ jobs:
             echo '{\"DEBUG\":true,\"TEST_ENV\":{\"COMPATIBLE\":\"YES\"}}' > debug-compat.conf; \
             just-mr build -c debug-compat.conf test ALL"
 
+      - name: Run garbage collector and clean cache
+        run: |
+          docker exec ubuntu bash -c "set -e; just gc"
+          gh extension install actions/gh-actions-cache
+          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'tests-${{ runner.os }}-debug')" ]; then
+            gh actions-cache delete "tests-${{ runner.os }}-debug" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Store local cache
+        uses: actions/cache/save@v3
+        if: always()
+        with:
+          path: ~/.cache/just
+          key: tests-${{ runner.os }}-debug
+
   release:
     name: Release
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
+      - name: Restore local cache
+        uses: actions/cache/restore@v3
+        with:
+          path: ~/.cache/just
+          key: tests-${{ runner.os }}-release
+
       - name: Checkout sources
         uses: actions/checkout@v3
         with:
@@ -53,12 +89,16 @@ jobs:
 
       - name: Run and prepare docker image
         run: |
-          docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
+          docker run -it -d --name ubuntu \
+            -v $GITHUB_WORKSPACE:/workspace \
+            -v ~/.cache/just:/root/.cache/just \
+            -w /workspace ubuntu:20.04
           docker exec ubuntu bash -c "\
             set -e; \
             apt update; \
             apt install --yes git jq curl wget clang libstdc++-10-dev patch; \
             git config --global --add safe.directory /workspace; \
+            git config --global --add safe.directory /root/.cache/just/git; \
             export PREFIX=/usr/local; \
             ./.github/install-just.sh"
 
@@ -75,3 +115,21 @@ jobs:
             set -e; \
             echo '{\"DEBUG\":false,\"TEST_ENV\":{\"COMPATIBLE\":\"YES\"}}' > release-compat.conf; \
             just-mr build -c release-compat.conf test ALL"
+
+      - name: Run garbage collector and clean cache
+        run: |
+          docker exec ubuntu bash -c "set -e; just gc"
+          gh extension install actions/gh-actions-cache
+          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'tests-${{ runner.os }}-release')" ]; then
+            gh actions-cache delete "tests-${{ runner.os }}-release" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Store local cache
+        uses: actions/cache/save@v3
+        if: always()
+        with:
+          path: ~/.cache/just
+          key: tests-${{ runner.os }}-release
+

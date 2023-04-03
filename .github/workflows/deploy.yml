@@ -7,12 +7,21 @@ on:
     branches:
       - github-ci
 
+permissions:
+  actions: write
+
 jobs:
   linux-x86_64:
     name: Linux x86_64
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
+      - name: Restore local cache
+        uses: actions/cache/restore@v3
+        with:
+          path: ~/.cache/just
+          key: deploy-${{ runner.os }}-x86_64
+
       - name: Checkout sources
         uses: actions/checkout@v3
         with:
@@ -27,12 +36,16 @@ jobs:
 
       - name: Run and prepare docker image
         run: |
-          docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
+          docker run -it -d --name ubuntu \
+            -v $GITHUB_WORKSPACE:/workspace \
+            -v ~/.cache/just:/root/.cache/just \
+            -w /workspace ubuntu:20.04
           docker exec ubuntu bash -c "\
             set -e; \
             apt update; \
             apt install --yes git wget python3 clang libstdc++-10-dev unzip patch; \
-            git config --global --add safe.directory /workspace"
+            git config --global --add safe.directory /workspace; \
+            git config --global --add safe.directory /root/.cache/just/git"
 
       - name: Bootstrap just for x86_64
         run: |
@@ -64,12 +77,38 @@ jobs:
           path: justbuild-x86_64-linux.tar.gz
           retention-days: 1
 
+      - name: Run garbage collector and clean cache
+        run: |
+          docker exec ubuntu bash -c "\
+            set -e; \
+            export PATH=/tmp/justbuild_x86_64/out/bin:\$PATH; \
+            just gc"
+          gh extension install actions/gh-actions-cache
+          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-x86_64')" ]; then
+            gh actions-cache delete "deploy-${{ runner.os }}-x86_64" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Store local cache
+        uses: actions/cache/save@v3
+        if: always()
+        with:
+          path: ~/.cache/just
+          key: deploy-${{ runner.os }}-x86_64
+
   linux-arm64:
     name: Linux arm64
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     needs: linux-x86_64
     steps:
+      - name: Restore local cache
+        uses: actions/cache/restore@v3
+        with:
+          path: ~/.cache/just
+          key: deploy-${{ runner.os }}-arm64
+
       - name: Checkout sources
         uses: actions/checkout@v3
         with:
@@ -93,7 +132,10 @@ jobs:
 
       - name: Run and prepare docker image
         run: |
-          docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
+          docker run -it -d --name ubuntu \
+            -v $GITHUB_WORKSPACE:/workspace \
+            -v ~/.cache/just:/root/.cache/just \
+            -w /workspace ubuntu:20.04
           docker exec ubuntu bash -c "\
             set -e; \
             apt update; \
@@ -102,7 +144,8 @@ jobs:
             update-alternatives --install /usr/bin/x86_64-linux-gnu-g++ x86_64-linux-gnu-g++ /usr/bin/x86_64-linux-gnu-g++-10 30; \
             update-alternatives --install /usr/bin/aarch64-linux-gnu-gcc aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-10 30; \
             update-alternatives --install /usr/bin/aarch64-linux-gnu-g++ aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-10 30; \
-            git config --global --add safe.directory /workspace"
+            git config --global --add safe.directory /workspace; \
+            git config --global --add safe.directory /root/.cache/just/git"
 
       - name: Build just for arm64
         run: |
@@ -131,10 +174,30 @@ jobs:
           path: justbuild-arm64-linux.tar.gz
           retention-days: 1
 
+      - name: Run garbage collector and clean cache
+        run: |
+          docker exec ubuntu bash -c "\
+            set -e; \
+            export PATH=\$(pwd)/justbuild-x86_64-linux/bin:\$PATH; \
+            just gc"
+          gh extension install actions/gh-actions-cache
+          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-arm64')" ]; then
+            gh actions-cache delete "deploy-${{ runner.os }}-arm64" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Store local cache
+        uses: actions/cache/save@v3
+        if: always()
+        with:
+          path: ~/.cache/just
+          key: deploy-${{ runner.os }}-arm64
+
   linux-noarch:
     name: Linux noarch
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3
@@ -178,7 +241,7 @@ jobs:
   linux-packages:
     name: Linux Packages
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     needs: [linux-x86_64, linux-arm64, linux-noarch]
     steps:
       - name: Checkout sources
