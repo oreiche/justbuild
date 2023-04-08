@@ -1,0 +1,170 @@
+{ "debian11":
+  { "type": "deb"
+  , "image": "debian:bullseye"
+  , "build-depends":
+    [ "clang"
+    , "protobuf-compiler"
+    , "protobuf-compiler-grpc"
+    , "libprotobuf-dev"
+    , "libgrpc++-dev"
+    , "libfmt-dev"
+    , "nlohmann-json3-dev"
+    , "libgit2-dev"
+    , "libssl-dev"
+    , "libarchive-dev"
+    , "libc-ares-dev"
+    , "zlib1g-dev"
+    , "python3"
+    , "pandoc"
+    , "patch"
+    , "unzip"
+    , "pkg-config"
+    ]
+  , "non-local-deps":
+    [ "cli11"
+    , "com_github_microsoft_gsl"
+    , "com_github_curl_curl"
+    , "google_apis"
+    , "bazel_remote_apis"
+    ]
+  , "gen-pkgconfig": []
+  }
+, "debian12":
+  { "type": "deb"
+  , "image": "debian:bookworm"
+  , "build-depends":
+    [ "clang"
+    , "protobuf-compiler"
+    , "protobuf-compiler-grpc"
+    , "libprotobuf-dev"
+    , "libgrpc++-dev"
+    , "libfmt-dev"
+    , "nlohmann-json3-dev"
+    , "libgit2-dev"
+    , "libssl-dev"
+    , "libcli11-dev"
+    , "libmsgsl-dev"
+    , "libarchive-dev"
+    , "libcurl4-openssl-dev"
+    , "python3"
+    , "pandoc"
+    , "patch"
+    , "unzip"
+    , "pkg-config"
+    ]
+  , "non-local-deps": ["google_apis", "bazel_remote_apis"]
+  , "gen-pkgconfig": [{"Name": "gsl", "Cflags": "-I/usr/include"}]
+  }
+, "ubuntu20.04":
+  { "type": "deb"
+  , "image": "ubuntu:20.04"
+  , "build-depends":
+    [ "clang"
+    , "libstdc++-10-dev"
+    , "libssl-dev"
+    , "libarchive-dev"
+    , "libc-ares-dev"
+    , "zlib1g-dev"
+    , "python3"
+    , "pandoc"
+    , "patch"
+    , "unzip"
+    , "pkg-config"
+    ]
+  , "non-local-deps":
+    [ "fmt"
+    , "json"
+    , "cli11"
+    , "protobuf"
+    , "com_github_grpc_grpc"
+    , "com_google_absl"
+    , "upb"
+    , "re2"
+    , "com_github_libgit2_libgit2"
+    , "com_github_microsoft_gsl"
+    , "com_github_curl_curl"
+    , "google_apis"
+    , "bazel_remote_apis"
+    ]
+  , "gen-pkgconfig": []
+  }
+, "ubuntu22.04":
+  { "type": "deb"
+  , "image": "ubuntu:22.04"
+  , "build-depends":
+    [ "clang"
+    , "protobuf-compiler"
+    , "protobuf-compiler-grpc"
+    , "libprotobuf-dev"
+    , "libgrpc++-dev"
+    , "libfmt-dev"
+    , "nlohmann-json3-dev"
+    , "libgit2-dev"
+    , "libssl-dev"
+    , "libcli11-dev"
+    , "libmsgsl-dev"
+    , "libarchive-dev"
+    , "libcurl4-openssl-dev"
+    , "python3"
+    , "pandoc"
+    , "patch"
+    , "unzip"
+    , "pkg-config"
+    ]
+  , "non-local-deps": ["google_apis", "bazel_remote_apis"]
+  , "gen-pkgconfig": [{"Name": "gsl", "Cflags": "-I/usr/include"}]
+  }
+, "static-deb":
+  { "type": "deb"
+  , "image": "ubuntu:20.04"
+  , "build-depends":
+    ["clang", "libstdc++-10-dev", "python3", "pandoc", "patch", "unzip"]
+  , "non-local-deps":
+    [ "fmt"
+    , "ssl"
+    , "json"
+    , "cli11"
+    , "protobuf"
+    , "com_github_grpc_grpc"
+    , "com_google_absl"
+    , "zlib"
+    , "bzip2"
+    , "upb"
+    , "re2"
+    , "com_github_cares_cares"
+    , "com_github_libgit2_libgit2"
+    , "com_github_microsoft_gsl"
+    , "com_github_curl_curl"
+    , "com_github_libarchive_libarchive"
+    , "google_apis"
+    , "bazel_remote_apis"
+    ]
+  , "gen-pkgconfig": []
+  }
+, "static-rpm":
+  { "type": "rpm"
+  , "image": "fedora:33"
+  , "build-depends": ["clang", "python3", "pandoc", "patch", "unzip"]
+  , "non-local-deps":
+    [ "fmt"
+    , "ssl"
+    , "json"
+    , "cli11"
+    , "protobuf"
+    , "com_github_grpc_grpc"
+    , "com_google_absl"
+    , "zlib"
+    , "bzip2"
+    , "upb"
+    , "re2"
+    , "com_github_cares_cares"
+    , "com_github_libgit2_libgit2"
+    , "com_github_microsoft_gsl"
+    , "com_github_curl_curl"
+    , "com_github_libarchive_libarchive"
+    , "google_apis"
+    , "bazel_remote_apis"
+    ]
+  , "gen-pkgconfig": []
+  }
+}
