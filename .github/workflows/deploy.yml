@@ -2,8 +2,6 @@ name: Bootstrap and Deploy
 
 on:
   push:
-    tags:
-      - 'v*'
     branches:
       - github-ci
 
@@ -89,7 +87,7 @@ jobs:
 
       - name: Store local cache
         uses: actions/cache/save@v3
-        if: ${{ (success() || failure()) && (github.ref_type != 'tag') }}
+        if: ${{ !cancelled() }}
         with:
           path: ~/.cache/just
           key: deploy-${{ runner.os }}-x86_64
@@ -186,7 +184,7 @@ jobs:
 
       - name: Store local cache
         uses: actions/cache/save@v3
-        if: ${{ (success() || failure()) && (github.ref_type != 'tag') }}
+        if: ${{ !cancelled() }}
         with:
           path: ~/.cache/just
           key: deploy-${{ runner.os }}-arm64
@@ -268,32 +266,16 @@ jobs:
           tar -xzvf justbuild-noarch-linux.tar.gz
           rm -f *.tar.gz
 
-      - name: Read commit info
+      - name: Determine package name
         run: |
           git fetch https://github.com/just-buildsystem/justbuild master
           BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
-          COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
-          COMMIT_HASH="$(git log -n1 ${BASE_COMMIT} --format=%h)"
-          echo "COMMIT_TIME=${COMMIT_TIME}" >> $GITHUB_ENV
-          echo "COMMIT_HASH=${COMMIT_HASH}" >> $GITHUB_ENV
-
-      - name: Determine package name
-        run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            UNTAGGED=false
-            TAG_NAME="${GITHUB_REF_NAME}"
-          elif [ "${GITHUB_REF_TYPE}" = "branch" ]; then
-            UNTAGGED=true
-            ./justbuild-x86_64-linux/bin/just version | jq -r '(.version | join("."))+.suffix' > version.txt
-            VERSION="$(cat version.txt | tr '~' '-')"
-            TAG_NAME="v${VERSION}-${COMMIT_TIME}-g${COMMIT_HASH}"
-          else
-            echo "Error: unsupported ref type"
-            exit 1
-          fi
+          VERSION="$(.github/just-version.sh ${BASE_COMMIT})"
+          UNTAGGED=$([[ "$VERSION" = *+* ]] && echo true || echo false)
+          TAG_NAME="v$(echo $VERSION | tr '~+' '-')"
           echo "UNTAGGED=${UNTAGGED}" >> $GITHUB_ENV
           echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_ENV
-          echo "PKG_NAME=justbuild-${TAG_NAME}" >> $GITHUB_ENV
+          echo "PKG_NAME=justbuild-${VERSION}" >> $GITHUB_ENV
 
       - name: Create packages
         run: |

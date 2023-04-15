@@ -63,7 +63,7 @@ jobs:
 
       - name: Store local cache
         uses: actions/cache/save@v3
-        if: ${{ (success() || failure()) && (github.ref_type != 'tag') }}
+        if: ${{ !cancelled() }}
         with:
           path: ~/.cache/just
           key: tests-${{ runner.os }}-debug
@@ -125,7 +125,7 @@ jobs:
 
       - name: Store local cache
         uses: actions/cache/save@v3
-        if: ${{ (success() || failure()) && (github.ref_type != 'tag') }}
+        if: ${{ !cancelled() }}
         with:
           path: ~/.cache/just
           key: tests-${{ runner.os }}-release
