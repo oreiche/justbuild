@@ -92,11 +92,13 @@
     , ["@", "absl", "absl/time", "time"]
     ]
   }
-, "gpr":
+, "gpr_combined":
+  {"type": "combined lib", "name": ["gpr"], "deps": ["gpr_base"]}
+, "gpr_internal":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["gpr"]
   , "hdrs": [["./", "include/grpc", "gpr_public_headers"]]
-  , "deps": ["gpr_base"]
+  , "deps": ["gpr_combined"]
   }
 , "atomic":
   { "type": ["@", "rules", "CC", "library"]
@@ -1416,9 +1418,9 @@
     , "grpc_server_backward_compatibility"
     ]
   }
-, "grpc":
+, "grpc_main":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["grpc"]
+  , "name": ["grpc_main"]
   , "srcs":
     [ "src/core/lib/surface/init.cc"
     , "src/core/plugin_registry/grpc_plugin_registry.cc"
@@ -1439,6 +1441,13 @@
     , "grpc_transport_chttp2_client_secure"
     , "grpc_transport_chttp2_server_secure"
     ]
+  }
+, "grpc_combined":
+  {"type": "combined lib", "name": ["grpc"], "deps": ["grpc_main"]}
+, "grpc_internal":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["grpc"]
+  , "deps": ["grpc_combined", "gpr"]
   }
 , "grpc++_sources":
   { "type": ["@", "rules", "data", "staged"]
@@ -1517,28 +1526,10 @@
   , "hdrs":
     [ ["./", "include/grpc++", "grpc++_config_proto_headers"]
     , ["./", "include/grpcpp", "grpcpp_config_proto_headers"]
-    , ["@", "protobuf", ".", "protobuf_headers"]
     ]
+  , "deps": [["@", "protobuf", ".", "libprotobuf"]]
   }
 , "grpc++_codegen_proto":
-  { "type": "export"
-  , "target": "grpc++_codegen_proto (implementation)"
-  , "flexible_config":
-    [ "OS"
-    , "ARCH"
-    , "TARGET_ARCH"
-    , "COMPILER_FAMILY"
-    , "AR"
-    , "CC"
-    , "CFLAGS"
-    , "ADD_CFLAGS"
-    , "CXX"
-    , "CXXFLAGS"
-    , "ADD_CXXFLAGS"
-    , "ENV"
-    ]
-  }
-, "grpc++_codegen_proto (implementation)":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["grpc++_codegen_proto"]
   , "hdrs":
@@ -1559,9 +1550,9 @@
     , "grpc_health_upb"
     ]
   }
-, "grpc++internal":
+, "grpc++_main":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["grpc++"]
+  , "name": ["grpc++_main"]
   , "srcs":
     [ "src/cpp/client/insecure_credentials.cc"
     , "src/cpp/client/secure_credentials.cc"
@@ -1582,18 +1573,82 @@
     , "src/cpp/server/secure_server_credentials.h"
     ]
   , "deps":
-    [ "gpr"
-    , "grpc"
-    , "grpc++_base"
+    [ "grpc++_base"
     , "grpc++_codegen_base"
     , "grpc++_codegen_base_src"
     , "grpc++_codegen_proto"
-    , "grpc_secure"
     ]
+  }
+, "grpc++combined":
+  {"type": "combined lib", "name": ["grpc++"], "deps": ["grpc++_main"]}
+, "grpc++internal":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["grpc++"]
+  , "deps": ["grpc++combined", "grpc"]
   }
 , "grpc++":
   { "type": "export"
   , "target": "grpc++internal"
+  , "flexible_config":
+    [ "OS"
+    , "ARCH"
+    , "HOST_ARCH"
+    , "TARGET_ARCH"
+    , "COMPILER_FAMILY"
+    , "DEBUG"
+    , "CC"
+    , "CXX"
+    , "CFLAGS"
+    , "CXXFLAGS"
+    , "ADD_CFLAGS"
+    , "ADD_CXXFLAGS"
+    , "AR"
+    , "ENV"
+    ]
+  }
+, "grpc":
+  { "type": "export"
+  , "target": "grpc_internal"
+  , "flexible_config":
+    [ "OS"
+    , "ARCH"
+    , "HOST_ARCH"
+    , "TARGET_ARCH"
+    , "COMPILER_FAMILY"
+    , "DEBUG"
+    , "CC"
+    , "CXX"
+    , "CFLAGS"
+    , "CXXFLAGS"
+    , "ADD_CFLAGS"
+    , "ADD_CXXFLAGS"
+    , "AR"
+    , "ENV"
+    ]
+  }
+, "gpr":
+  { "type": "export"
+  , "target": "gpr_internal"
+  , "flexible_config":
+    [ "OS"
+    , "ARCH"
+    , "HOST_ARCH"
+    , "TARGET_ARCH"
+    , "COMPILER_FAMILY"
+    , "DEBUG"
+    , "CC"
+    , "CXX"
+    , "CFLAGS"
+    , "CXXFLAGS"
+    , "ADD_CFLAGS"
+    , "ADD_CXXFLAGS"
+    , "AR"
+    , "ENV"
+    ]
+  }
+, "grpc_cpp_plugin":
+  { "type": "export"
+  , "target": ["src/compiler", "grpc_cpp_plugin"]
   , "flexible_config":
     [ "OS"
     , "ARCH"

@@ -122,6 +122,7 @@
     , "cflags"
     , "private-cflags"
     , "private-ldflags"
+    , "pkg-name"
     ]
   , "config_vars":
     [ "CC"
@@ -180,6 +181,10 @@
       , "its dependencies will be taken care of (as anonymous targets, so no"
       , "duplicate work will be carried out, even if the same proto library"
       , "is used at various places)."
+      ]
+    , "pkg-name":
+      [ "Name to use for pkg-config files. If this field is empty, the field"
+      , "\"name\" is used instead."
       ]
     }
   , "config_doc":
@@ -318,6 +323,14 @@
           }
         ]
       , ["private-ldflags", {"type": "FIELD", "name": "private-ldflags"}]
+      , [ "pkg-name"
+        , { "type": "if"
+          , "cond": {"type": "FIELD", "name": "pkg-name"}
+          , "then":
+            {"type": "join", "$1": {"type": "FIELD", "name": "pkg-name"}}
+          , "else": {"type": "var", "name": "name"}
+          }
+        ]
       , ["public-fieldnames", ["deps", "proto-deps"]]
       , ["private-fieldnames", ["deps", "private-deps", "proto-deps"]]
       ]
@@ -460,6 +473,64 @@
       , ["private-fieldnames", ["private-deps", "private-proto-deps"]]
       ]
     , "body": {"type": "CALL_EXPRESSION", "name": "bin result"}
+    }
+  }
+, "install-with-deps":
+  { "doc":
+    [ "Install target's artifacts with transitive dependencies. Depending on"
+    , "the target, artifacts and dependencies will be installed to"
+    , "subdirectories \"bin\", \"include\", and \"lib\". For library targets,"
+    , "a pkg-config file is generated and provided in \"share/pkgconfig\"."
+    ]
+  , "config_vars": ["PREFIX"]
+  , "target_fields": ["targets"]
+  , "string_fields": ["flat-libs", "prefix", "hdrs-only"]
+  , "imports": {"install result": "install-with-deps result"}
+  , "field_doc":
+    { "targets": ["Targets to install artifacts from."]
+    , "flat-libs":
+      [ "Install libraries flat to the \"lib\" subdirectory. Be aware that"
+      , "conflicts may occur if any of the (transitive) libraries happen to"
+      , "have the same base name."
+      ]
+    , "prefix":
+      [ "The prefix used for pkg-config files. The path will be made absolute"
+      , "and individual directory components are joined with \"/\". If no"
+      , "prefix is specified, the value from the config variable \"PREFIX\" is"
+      , "taken, with the default value being \"/\"."
+      ]
+    , "hdrs-only": ["Only collect headers from deps (without subdirectory)."]
+    }
+  , "config_doc":
+    { "PREFIX":
+      [ "The absolute path that is used as prefix inside generated pkg-config"
+      , "files. The default value for this variable is \"/\". This variable"
+      , "is ignored if the field \"prefix\" is set."
+      ]
+    }
+  , "artifacts_doc":
+    ["Installed artifacts in subdirectories (\"bin\"/\"include\"/\"lib\")."]
+  , "expression":
+    { "type": "let*"
+    , "bindings":
+      [ ["pc-install-dir", "share/pkgconfig"]
+      , ["targets", {"type": "FIELD", "name": "targets"}]
+      , [ "prefix"
+        , { "type": "if"
+          , "cond": {"type": "FIELD", "name": "prefix"}
+          , "then":
+            { "type": "join"
+            , "separator": "/"
+            , "$1":
+              {"type": "++", "$1": [[""], {"type": "FIELD", "name": "prefix"}]}
+            }
+          , "else": {"type": "var", "name": "PREFIX", "default": "/"}
+          }
+        ]
+      , ["flat-libs", {"type": "FIELD", "name": "flat-libs"}]
+      , ["hdrs-only", {"type": "FIELD", "name": "hdrs-only"}]
+      ]
+    , "body": {"type": "CALL_EXPRESSION", "name": "install result"}
     }
   }
 }

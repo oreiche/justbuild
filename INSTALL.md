@@ -72,6 +72,7 @@ before to be present as well).
   this directory and has the expected blob id (computed the same
   way as `git` does). Only if this is not the case, fetching from
   the network is attempted.
+
 Additionally, if the environment variable `DEBUG` is set, the second
 bootstrap phase is carried out sequentially rather than in parallel.
 
@@ -81,7 +82,7 @@ of the empty object, if this variable is set. One configuration parameter
 is the build environment `ENV` that can be used to set an unusual
 value of `PATH`, e.g.,
 ``` sh
-env JUST_BUILD_CONF='{"ENV": {"PATH": "/opt/toolchain/bin"}}' python3 ./bin/boostrap.py
+env JUST_BUILD_CONF='{"ENV": {"PATH": "/opt/toolchain/bin"}}' python3 ./bin/bootstrap.py
 ```
 Additionally, if `SOURCE_DATE_EPOCH` is set in the build environment, it
 is forwarded to the build configuration as well. If, on the other hand,
@@ -98,14 +99,16 @@ to an appropriate location in `PATH`.
 The main task is to ensure all the dependencies are available at
 sufficiently compatible versions. The full list of dependencies
 can be found in `etc/repos.json`. This file also specifies, in
-the `"local_path"` attribute of `"local_bootstrap"`, the location
-relative to `LOCALBASE` (typically `/usr` or `/usr/local`) that
-is taken as root for the logical repository of that dependency.
-If your distribution prefers to install each package in a separate
-directory, you can always take `/` as `LOCALBASE` and adapt these
-paths accordingly. The instructions on how to link those dependencies
-are stored in the targets files in `etc/import.prebuilt`. Depending
-on the packaging, the linking flags might need adaption as well.
+the `"local_path"` attribute of `"pkg_bootstrap"`, the location
+relative to `LOCALBASE` (typically `/usr` or `/usr/local`) that is
+taken as root for the logical repository of that dependency. As,
+however, library dependencies are taken via `pkg-config`, in most
+cases, setting this attribute should not be necessary. The target
+files for the dependencies can be found in `etc/import.pkgconfig`.
+Possibly different names to be used by `pkg-config` can be adapted
+there. If the environment variable `PKG_CONFIG_PATH` is set, the
+bootstrap script forwards it to the build so that `pkg-config` can
+pick up the correct files.
 
 The build command is the same (with the same positional arguments),
 however with the environment variable `PACKAGE` being present
@@ -129,3 +132,8 @@ is used. It also a useful launcher for `just`.
 
 This tool is Python3 script located at `bin/just-mr.py` and can simply be put
 into an appropriate location in `PATH`.
+
+There is also a compiled version of `just-mr`, which is faster,
+works in parallel, and has additional features. It can be obtained
+by building the target `["", "installed just-mr"]` using the
+bootstrapped `just` and the Python3 script `bin/just-mr.py`.

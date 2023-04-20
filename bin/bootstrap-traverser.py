@@ -50,7 +50,10 @@ def build_known(desc, *, root):
 def link(src, dest):
     dest = os.path.normpath(dest)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    os.symlink(src, dest)
+    try:
+        os.link(src, dest)
+    except:
+        os.symlink(src, dest)
 
 def build_local(desc, *, root, config):
     repo_name = desc["data"]["repository"]
@@ -79,7 +82,7 @@ def run_action(action_id, *, config, root, graph):
         return action_dir
     os.makedirs(action_dir)
     action_desc = graph["actions"][action_id]
-    for location, desc in action_desc["input"].items():
+    for location, desc in action_desc.get("input", {}).items():
         link(build(desc, config=config, root=root, graph=graph),
              os.path.join(action_dir, location))
     cmd = action_desc["command"]
