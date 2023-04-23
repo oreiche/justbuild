@@ -21,8 +21,7 @@ VERSION="$MAJOR.$MINOR.$PATCH"
 if [ -n "$SUFFIX" ]; then
   readonly REF=${1:-HEAD}
   readonly COMMIT_TIME=$(git log -n1 --format=%ct ${REF})
-  readonly COMMIT_HASH=$(git log -n1 --format=%h ${REF})
-  VERSION="${VERSION}${SUFFIX}+${COMMIT_TIME}-g${COMMIT_HASH}"
+  VERSION="${VERSION}${SUFFIX}+${COMMIT_TIME}"
 fi
 
 echo $VERSION
