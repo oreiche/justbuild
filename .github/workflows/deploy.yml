@@ -234,11 +234,35 @@ jobs:
           path: justbuild-noarch-linux.tar.gz
           retention-days: 1
 
-  linux-packages:
-    name: Linux Packages
+  deb-package:
+    name: Debian Package
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-22.04
-    needs: [linux-x86_64, linux-arm64, linux-noarch]
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Build Debian package
+        run: |
+          git fetch https://github.com/just-buildsystem/justbuild master
+          BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
+          .github/make-pkg/docker-build.sh ${BASE_COMMIT} static-deb
+          cp ./work_static-deb/justbuild_*.deb .
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v3
+        with:
+          name: justbuild-deb-package
+          path: justbuild_*.deb
+          retention-days: 1
+
+  deploy-packages:
+    name: Deploy Packages
+    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
+    runs-on: ubuntu-22.04
+    needs: [linux-x86_64, linux-arm64, linux-noarch, deb-package]
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3
@@ -260,7 +284,12 @@ jobs:
         with:
           name: justbuild-noarch-linux
 
-      - name: Unpack x86_64/arm64/noarch Linux binaries and files
+      - name: Retrieve Debian package
+        uses: actions/download-artifact@v3
+        with:
+          name: justbuild-deb-package
+
+      - name: Unpack retrieved archives
         run: |
           tar -xzvf justbuild-x86_64-linux.tar.gz
           tar -xzvf justbuild-arm64-linux.tar.gz
@@ -278,14 +307,14 @@ jobs:
           echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_ENV
           echo "PKG_NAME=justbuild-${VERSION}" >> $GITHUB_ENV
 
-      - name: Create packages
+      - name: Create packages and checksums
         run: |
           mkdir -p $PKG_NAME-{x86_64,aarch64}-linux
           cp -r justbuild-{x86_64,noarch}-linux/* $PKG_NAME-x86_64-linux/.
           cp -r justbuild-{arm64,noarch}-linux/* $PKG_NAME-aarch64-linux/.
           tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME-x86_64-linux.tar.gz $PKG_NAME-x86_64-linux
           tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME-aarch64-linux.tar.gz $PKG_NAME-aarch64-linux
-          sha256sum $PKG_NAME-*.tar.gz | tee SHA256SUMS
+          sha256sum $PKG_NAME-*.tar.gz *.deb | tee SHA256SUMS
 
       - name: Upload package checksums
         uses: actions/upload-artifact@v3
@@ -299,7 +328,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          file: "*.tar.gz;SHA256SUMS"
+          file: "*.tar.gz;*.deb;SHA256SUMS"
           tag_name: ${{ env.TAG_NAME }}
           prerelease: ${{ env.UNTAGGED }}
           tags: false
