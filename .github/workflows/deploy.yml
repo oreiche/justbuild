@@ -33,20 +33,20 @@ jobs:
         run: |
           docker run -it -d --name ubuntu \
             -v $GITHUB_WORKSPACE:/workspace \
-            -v ~/.cache/just:/root/.cache/just \
+            -v ~/.cache/just:/tmp/justbuild_x86_64/.just \
             -w /workspace ubuntu:20.04
           docker exec ubuntu bash -c "\
             set -e; \
             apt update; \
             apt install --yes git wget python3 clang libstdc++-10-dev unzip patch; \
             git config --global --add safe.directory /workspace; \
-            git config --global --add safe.directory /root/.cache/just/git"
+            git config --global --add safe.directory /tmp/justbuild_x86_64/.just/git"
 
       - name: Bootstrap just for x86_64
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            export JUST_BUILD_CONF='{\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}'; \
+            export JUST_BUILD_CONF='{\"COMPILER_FAMILY\":\"clang\",\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}'; \
             ./bin/bootstrap.py . /tmp/justbuild_x86_64"
 
       - name: Build just-mr for x86_64
@@ -54,8 +54,11 @@ jobs:
           docker exec ubuntu bash -c "\
             set -e; \
             export PATH=/tmp/justbuild_x86_64/out/bin:\$PATH; \
-            echo '{\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > build.conf; \
-            ./bin/just-mr.py install -c build.conf -o /tmp/justbuild_x86_64/out/ 'installed just-mr'"
+            ./bin/just-mr.py \
+              --local-build-root /tmp/justbuild_x86_64/.just \
+              install \
+              -c /tmp/justbuild_x86_64/build-conf.json \
+              -o /tmp/justbuild_x86_64/out/ 'installed just-mr'"
 
       - name: Collect x86_64 Linux binaries
         run: |
@@ -77,7 +80,7 @@ jobs:
           docker exec ubuntu bash -c "\
             set -e; \
             export PATH=/tmp/justbuild_x86_64/out/bin:\$PATH; \
-            just gc"
+            just gc --local-build-root /tmp/justbuild_x86_64/.just"
           gh extension install actions/gh-actions-cache
           if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-x86_64')" ]; then
             gh actions-cache delete "deploy-${{ runner.os }}-x86_64" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
