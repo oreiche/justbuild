@@ -11,14 +11,13 @@
   , "targets":
     [ ["@", "ssl", "", "crypto"]
     , ["@", "grpc", "", "grpc++"]
-    , ["@", "gsl-lite", "", "gsl-lite"]
+    , ["@", "gsl", "", "gsl"]
     , ["@", "fmt", "", "fmt"]
     , ["@", "cli11", "", "cli11"]
     , ["@", "json", "", "json"]
     , ["@", "catch2", "", "catch2"]
     , ["", "libgit2"]
     , ["", "libcurl"]
-    , ["@", "bzip2", "", "libbz2"]
     , ["", "libarchive"]
     , "proto_bindings"
     ]
