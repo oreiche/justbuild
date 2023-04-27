@@ -258,11 +258,35 @@ jobs:
           path: justbuild_*.deb
           retention-days: 1
 
+  rpm-package:
+    name: RPM Package
+    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Build RPM package
+        run: |
+          git fetch https://github.com/just-buildsystem/justbuild master
+          BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
+          .github/make-pkg/docker-build.sh ${BASE_COMMIT} static-rpm
+          cp ./work_static-rpm/rpmbuild/RPMS/x86_64/justbuild-*.rpm .
+
+      - name: Upload RPM package
+        uses: actions/upload-artifact@v3
+        with:
+          name: justbuild-rpm-package
+          path: justbuild-*.rpm
+          retention-days: 1
+
   deploy-packages:
     name: Deploy Packages
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-22.04
-    needs: [linux-x86_64, linux-arm64, linux-noarch, deb-package]
+    needs: [linux-x86_64, linux-arm64, linux-noarch, deb-package, rpm-package]
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3
@@ -289,6 +313,11 @@ jobs:
         with:
           name: justbuild-deb-package
 
+      - name: Retrieve RPM package
+        uses: actions/download-artifact@v3
+        with:
+          name: justbuild-rpm-package
+
       - name: Unpack retrieved archives
         run: |
           tar -xzvf justbuild-x86_64-linux.tar.gz
@@ -314,7 +343,7 @@ jobs:
           cp -r justbuild-{arm64,noarch}-linux/* $PKG_NAME-aarch64-linux/.
           tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME-x86_64-linux.tar.gz $PKG_NAME-x86_64-linux
           tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME-aarch64-linux.tar.gz $PKG_NAME-aarch64-linux
-          sha256sum $PKG_NAME-*.tar.gz *.deb | tee SHA256SUMS
+          sha256sum $PKG_NAME-*.tar.gz *.deb *.rpm | tee SHA256SUMS
 
       - name: Upload package checksums
         uses: actions/upload-artifact@v3
@@ -328,7 +357,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          file: "*.tar.gz;*.deb;SHA256SUMS"
+          file: "*.tar.gz;*.deb;*.rpm;SHA256SUMS"
           tag_name: ${{ env.TAG_NAME }}
           prerelease: ${{ env.UNTAGGED }}
           tags: false
