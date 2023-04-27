@@ -106,7 +106,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
     # create archive
     cd ${WORKDIR}
-    tar -czvf ${HOME}/rpmbuild/SOURCES/${NAME}-${VERSION}.tar.gz ${NAME}-${VERSION}
+    tar -czf ${HOME}/rpmbuild/SOURCES/${NAME}-${VERSION}.tar.gz ${NAME}-${VERSION}
 
     # run build
     rpmbuild -bb ${HOME}/rpmbuild/SPECS/justbuild.spec
