@@ -11,7 +11,16 @@ readonly NAME="justbuild"
 # paths
 readonly ROOTDIR=$(realpath $(dirname $0))
 readonly WORKDIR=$(pwd)/work_${PLF}
+if [ "${PKG}" = "deb" ]; then
+    CACHEDIR="work_${PLF}/build/.just"
+elif [ "${PKG}" = "rpm" ]; then
+    CACHEDIR="work_${PLF}/rpmbuild/BUILD/build/.just"
+fi
+
+# clean workdir (retain cache)
+if [ -d "${CACHEDIR}" ]; then tar -cf ${PLF}.tar "${CACHEDIR}"; fi
 rm -rf ${WORKDIR}
+if [ -f ${PLF}.tar ]; then tar -xf ${PLF}.tar; rm -f ${PLF}.tar; fi
 
 # obtain time stamp from git commit
 readonly SOURCE_DATE_EPOCH=$(git log -n1 --format=%ct ${REF})
