@@ -3,6 +3,7 @@ name: Bootstrap and Deploy
 on:
   push:
     branches:
+      - testing
       - github-ci
 
 jobs:
@@ -407,6 +408,7 @@ jobs:
 
       - name: Upload package release
         uses: xresloader/upload-to-github-release@v1
+        if: github.ref == 'refs/heads/github-ci'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
