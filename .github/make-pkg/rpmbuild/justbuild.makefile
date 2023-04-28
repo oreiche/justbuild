@@ -20,6 +20,8 @@ define JUST_BUILD_CONF
 , "ARCH": "$(ARCH)"
 , "TARGET_ARCH": "$(TARGET_ARCH)"
 , "SOURCE_DATE_EPOCH": $(SOURCE_DATE_EPOCH)
+, "ADD_CFLAGS": ["-I$(shell pwd)/rpmbuild/includes"]
+, "ADD_CXXFLAGS": ["-I$(shell pwd)/rpmbuild/includes"]
 }
 endef
 export JUST_BUILD_CONF

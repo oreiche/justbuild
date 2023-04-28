@@ -75,6 +75,18 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     wget -nv -P ${DISTFILES} "${URL}"
   done <<< $(echo ${NON_LOCAL_DEPS} | jq -r '.[]')
 
+  # generate missing includes
+  INCLUDES=${AUXDIR}/includes
+  mkdir -p ${INCLUDES}
+  while read HDR_FILE; do
+    if [ -z "${HDR_FILE}" ]; then continue; fi
+    HDR_DIR="$(dirname "${HDR_FILE}")"
+    HDR_DATA="$(jq -r '."'${PLF}'"."gen-includes"."'${HDR_FILE}'" | tostring' \
+                ${ROOTDIR}/platforms.json)"
+    mkdir -p "${INCLUDES}/${HDR_DIR}"
+    echo "${HDR_DATA}" > "${INCLUDES}/${HDR_FILE}"
+  done <<< $(jq -r '."'${PLF}'"."gen-includes" // {} | keys | .[] | tostring' ${ROOTDIR}/platforms.json)
+
   # generate missing pkg-config files
   PKGCONFIG=${AUXDIR}/pkgconfig
   mkdir -p ${PKGCONFIG}
@@ -82,9 +94,10 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
   while read PKG_DESC; do
     if [ -z "${PKG_DESC}" ]; then continue; fi
     PKG_NAME=$(echo ${PKG_DESC} | jq -r '.Name')
+    echo 'gen_includes="'${INCLUDES}'"' > ${PKGCONFIG}/${PKG_NAME}.pc
     echo ${REQ_PC_FIELDS} ${PKG_DESC} \
       | jq -sr 'add | keys_unsorted[] as $k | "\($k): \(.[$k])"' \
-      > ${PKGCONFIG}/${PKG_NAME}.pc
+      >> ${PKGCONFIG}/${PKG_NAME}.pc
   done <<< $(jq -r '."'${PLF}'"."gen-pkgconfig" // [] | .[] | tostring' ${ROOTDIR}/platforms.json)
 
   echo ${NON_LOCAL_DEPS} > ${AUXDIR}/non_local_deps

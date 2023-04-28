@@ -19,6 +19,8 @@ define JUST_BUILD_CONF
 , "ARCH": "$(ARCH)"
 , "TARGET_ARCH": "$(TARGET_ARCH)"
 , "SOURCE_DATE_EPOCH": $(SOURCE_DATE_EPOCH)
+, "ADD_CFLAGS": ["-I$(shell pwd)/debian/includes"]
+, "ADD_CXXFLAGS": ["-I$(shell pwd)/debian/includes"]
 }
 endef
 export JUST_BUILD_CONF
