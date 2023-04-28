@@ -77,7 +77,6 @@
     , "protobuf"
     , "com_github_grpc_grpc"
     , "com_google_absl"
-    , "upb"
     , "re2"
     , "com_github_libgit2_libgit2"
     , "com_github_microsoft_gsl"
@@ -135,9 +134,10 @@
     , "libarchive-devel"
     , "zlib-devel"
     , "gsl-lite-devel"
+    , "googleapis-devel"
     , "pkg-config"
     ]
-  , "non-local-deps": ["google_apis", "bazel_remote_apis"]
+  , "non-local-deps": ["bazel_remote_apis"]
   , "gen-includes": {"gsl/gsl": "#include <gsl/gsl-lite.hpp>"}
   , "gen-pkgconfig":
     [{"Name": "gsl", "Cflags": "-I${gen_includes} -I/usr/include"}]
@@ -157,7 +157,6 @@
     , "com_google_absl"
     , "zlib"
     , "bzip2"
-    , "upb"
     , "re2"
     , "com_github_cares_cares"
     , "com_github_libgit2_libgit2"
@@ -182,7 +181,6 @@
     , "com_google_absl"
     , "zlib"
     , "bzip2"
-    , "upb"
     , "re2"
     , "com_github_cares_cares"
     , "com_github_libgit2_libgit2"
