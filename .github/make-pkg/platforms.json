@@ -27,7 +27,6 @@
     , "google_apis"
     , "bazel_remote_apis"
     ]
-  , "gen-pkgconfig": []
   }
 , "debian12":
   { "type": "deb"
@@ -86,7 +85,6 @@
     , "google_apis"
     , "bazel_remote_apis"
     ]
-  , "gen-pkgconfig": []
   }
 , "ubuntu22.04":
   { "type": "deb"
@@ -139,7 +137,6 @@
     , "google_apis"
     , "bazel_remote_apis"
     ]
-  , "gen-pkgconfig": []
   }
 , "static-rpm":
   { "type": "rpm"
@@ -165,6 +162,5 @@
     , "google_apis"
     , "bazel_remote_apis"
     ]
-  , "gen-pkgconfig": []
   }
 }

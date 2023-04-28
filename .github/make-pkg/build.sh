@@ -57,10 +57,11 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
   fi
 
   # fetch distfiles of non-local deps
-  NON_LOCAL_DEPS=$(jq -r '."'${PLF}'"."non-local-deps" | tostring' ${ROOTDIR}/platforms.json)
+  NON_LOCAL_DEPS=$(jq -r '."'${PLF}'"."non-local-deps" // [] | tostring' ${ROOTDIR}/platforms.json)
   DISTFILES=${AUXDIR}/distfiles
   mkdir -p ${DISTFILES}
   while read DEP; do
+    if [ -z "${DEP}" ]; then continue; fi
     URL="$(jq -r '.repositories."'${DEP}'".repository.fetch' etc/repos.json)"
     wget -nv -P ${DISTFILES} "${URL}"
   done <<< $(echo ${NON_LOCAL_DEPS} | jq -r '.[]')
@@ -75,12 +76,12 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     echo ${REQ_PC_FIELDS} ${PKG_DESC} \
       | jq -sr 'add | keys_unsorted[] as $k | "\($k): \(.[$k])"' \
       > ${PKGCONFIG}/${PKG_NAME}.pc
-  done <<< $(jq -r '."'${PLF}'"."gen-pkgconfig" | .[] | tostring' ${ROOTDIR}/platforms.json)
+  done <<< $(jq -r '."'${PLF}'"."gen-pkgconfig" // [] | .[] | tostring' ${ROOTDIR}/platforms.json)
 
   echo ${NON_LOCAL_DEPS} > ${AUXDIR}/non_local_deps
   echo ${SOURCE_DATE_EPOCH} > ${AUXDIR}/source_date_epoch
 
-  BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" | join(",")' ${ROOTDIR}/platforms.json)
+  BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" // [] | join(",")' ${ROOTDIR}/platforms.json)
 
   if [ "${PKG}" = "deb" ]; then
     # copy prepared debian files
