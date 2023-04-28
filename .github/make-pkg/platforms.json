@@ -112,6 +112,36 @@
   , "non-local-deps": ["google_apis", "bazel_remote_apis"]
   , "gen-pkgconfig": [{"Name": "gsl", "Cflags": "-I/usr/include"}]
   }
+, "fedora37":
+  { "type": "rpm"
+  , "image": "fedora:37"
+  , "build-depends":
+    [ "clang"
+    , "python3"
+    , "pandoc"
+    , "patch"
+    , "unzip"
+    , "libgit2-devel"
+    , "protobuf-compiler"
+    , "protobuf-devel"
+    , "protobuf-lite-devel"
+    , "grpc-devel"
+    , "grpc-plugins"
+    , "json-devel"
+    , "openssl-devel"
+    , "fmt-devel"
+    , "cli11-devel"
+    , "libcurl-devel"
+    , "libarchive-devel"
+    , "zlib-devel"
+    , "gsl-lite-devel"
+    , "pkg-config"
+    ]
+  , "non-local-deps": ["google_apis", "bazel_remote_apis"]
+  , "gen-includes": {"gsl/gsl": "#include <gsl/gsl-lite.hpp>"}
+  , "gen-pkgconfig":
+    [{"Name": "gsl", "Cflags": "-I${gen_includes} -I/usr/include"}]
+  }
 , "static-deb":
   { "type": "deb"
   , "image": "ubuntu:20.04"
