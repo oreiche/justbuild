@@ -242,6 +242,12 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-22.04
     steps:
+      - name: Restore local cache
+        uses: actions/cache/restore@v3
+        with:
+          path: ./work_static-deb/build/.just
+          key: deploy-${{ runner.os }}-deb-pkg
+
       - name: Checkout sources
         uses: actions/checkout@v3
         with:
@@ -261,11 +267,34 @@ jobs:
           path: justbuild_*.deb
           retention-days: 1
 
+      - name: Run garbage collector and clean cache
+        run: |
+          ./work_static-deb/build/out/bin/just gc --local-build-root $(pwd)/work_static-deb/build/.just
+          gh extension install actions/gh-actions-cache
+          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-deb-pkg')" ]; then
+            gh actions-cache delete "deploy-${{ runner.os }}-deb-pkg" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Store local cache
+        uses: actions/cache/save@v3
+        if: ${{ !cancelled() }}
+        with:
+          path: ./work_static-deb/build/.just
+          key: deploy-${{ runner.os }}-deb-pkg
+
   rpm-package:
     name: RPM Package
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-22.04
     steps:
+      - name: Restore local cache
+        uses: actions/cache/restore@v3
+        with:
+          path: ./work_static-rpm/build/.just
+          key: deploy-${{ runner.os }}-rpm-pkg
+
       - name: Checkout sources
         uses: actions/checkout@v3
         with:
@@ -284,6 +313,23 @@ jobs:
           name: justbuild-rpm-package
           path: justbuild-*.rpm
           retention-days: 1
+
+      - name: Run garbage collector and clean cache
+        run: |
+          ./work_static-rpm/rpmbuild/BUILD/build/out/bin/just gc --local-build-root $(pwd)/work_static-rpm/rpmbuild/BUILD/build/.just
+          gh extension install actions/gh-actions-cache
+          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-rpm-pkg')" ]; then
+            gh actions-cache delete "deploy-${{ runner.os }}-rpm-pkg" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Store local cache
+        uses: actions/cache/save@v3
+        if: ${{ !cancelled() }}
+        with:
+          path: ./work_static-rpm/build/.just
+          key: deploy-${{ runner.os }}-rpm-pkg
 
   deploy-packages:
     name: Deploy Packages
