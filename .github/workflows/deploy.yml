@@ -76,6 +76,7 @@ jobs:
           retention-days: 1
 
       - name: Run garbage collector and clean cache
+        if: ${{ success() }}
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
@@ -90,7 +91,7 @@ jobs:
 
       - name: Store local cache
         uses: actions/cache/save@v3
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         with:
           path: ~/.cache/just
           key: deploy-${{ runner.os }}-x86_64
@@ -173,6 +174,7 @@ jobs:
           retention-days: 1
 
       - name: Run garbage collector and clean cache
+        if: ${{ success() }}
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
@@ -187,7 +189,7 @@ jobs:
 
       - name: Store local cache
         uses: actions/cache/save@v3
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         with:
           path: ~/.cache/just
           key: deploy-${{ runner.os }}-arm64
@@ -268,6 +270,7 @@ jobs:
           retention-days: 1
 
       - name: Run garbage collector and clean cache
+        if: ${{ success() }}
         run: |
           ./work_static-deb/build/out/bin/just gc --local-build-root $(pwd)/work_static-deb/build/.just
           gh extension install actions/gh-actions-cache
@@ -279,7 +282,7 @@ jobs:
 
       - name: Store local cache
         uses: actions/cache/save@v3
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         with:
           path: ./work_static-deb/build/.just
           key: deploy-${{ runner.os }}-deb-pkg
@@ -315,6 +318,7 @@ jobs:
           retention-days: 1
 
       - name: Run garbage collector and clean cache
+        if: ${{ success() }}
         run: |
           ./work_static-rpm/rpmbuild/BUILD/build/out/bin/just gc --local-build-root $(pwd)/work_static-rpm/rpmbuild/BUILD/build/.just
           gh extension install actions/gh-actions-cache
@@ -326,7 +330,7 @@ jobs:
 
       - name: Store local cache
         uses: actions/cache/save@v3
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         with:
           path: ./work_static-rpm/build/.just
           key: deploy-${{ runner.os }}-rpm-pkg
