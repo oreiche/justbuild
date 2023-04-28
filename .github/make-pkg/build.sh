@@ -62,7 +62,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
   mkdir -p ${DISTFILES}
   while read DEP; do
     URL="$(jq -r '.repositories."'${DEP}'".repository.fetch' etc/repos.json)"
-    wget --no-check-certificate -nv -P ${DISTFILES} "${URL}"
+    wget -nv -P ${DISTFILES} "${URL}"
   done <<< $(echo ${NON_LOCAL_DEPS} | jq -r '.[]')
 
   # generate missing pkg-config files
