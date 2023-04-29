@@ -296,7 +296,7 @@ jobs:
       - name: Restore local cache
         uses: actions/cache/restore@v3
         with:
-          path: ./work_static-rpm/build/.just
+          path: ./work_static-rpm/rpmbuild/BUILD/build/.just
           key: deploy-${{ runner.os }}-rpm-pkg
 
       - name: Checkout sources
@@ -333,7 +333,7 @@ jobs:
         uses: actions/cache/save@v3
         if: ${{ success() }}
         with:
-          path: ./work_static-rpm/build/.just
+          path: ./work_static-rpm/rpmbuild/BUILD/build/.just
           key: deploy-${{ runner.os }}-rpm-pkg
 
   deploy-packages:
