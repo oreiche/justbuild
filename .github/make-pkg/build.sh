@@ -109,6 +109,8 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     # copy prepared debian files
     cp ${ROOTDIR}/debian/* ./debian/
     echo 12 > ./debian/compat
+    mkdir -p ./debian/source
+    find debian/distfiles > ./debian/source/include-binaries
 
     # remove usused debian files
     rm -f ./debian/README.Debian
@@ -116,7 +118,10 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     # patch control file
     sed -i 's/BUILD_DEPENDS/'${BUILD_DEPENDS}'/' ./debian/control
 
-    # run build
+    # build source package
+    dpkg-buildpackage -S
+
+    # build binary package
     dpkg-buildpackage -b
   elif [ "${PKG}" = "rpm" ]; then
     # copy prepared rpmbuild files
@@ -131,7 +136,10 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     cd ${WORKDIR}
     tar -czf ${HOME}/rpmbuild/SOURCES/${NAME}-${VERSION}.tar.gz ${NAME}-${VERSION}
 
-    # run build
-    rpmbuild -bb ${HOME}/rpmbuild/SPECS/justbuild.spec
+    # build source rpm
+    rpmbuild -bs ${HOME}/rpmbuild/SPECS/justbuild.spec
+
+    # build binary rpm from source rpm
+    rpmbuild --rebuild ${HOME}/rpmbuild/SRPMS/justbuild-${VERSION}*.src.rpm
   fi
 )
