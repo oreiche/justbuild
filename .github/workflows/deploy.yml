@@ -228,9 +228,9 @@ jobs:
 
       - name: Collect noarch Linux files
         run: |
-          mkdir -p justbuild-noarch-linux/{bin,etc/bash_completion.d}
+          mkdir -p justbuild-noarch-linux/{bin,share/bash-completion/completions}
           cp ./bin/just-import-git.py justbuild-noarch-linux/bin/just-import-git
-          cp ./share/just_complete.bash justbuild-noarch-linux/etc/bash_completion.d/just
+          cp ./share/just_complete.bash justbuild-noarch-linux/share/bash-completion/completions/just
           tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-noarch-linux.tar.gz justbuild-noarch-linux
 
       - name: Upload noarch Linux files
