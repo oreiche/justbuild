@@ -21,7 +21,7 @@ readonly URL=$(curl -s https://api.github.com/repos/oreiche/justbuild/releases \
 if [ -n "${URL}" ]; then
   echo "Installing JustBuild to '${PREFIX}'"
   mkdir -p "${PREFIX}"
-  wget "${URL}" -O - | tar xz --strip-components=1 -C "${PREFIX}"
+  wget -nv "${URL}" -O - | tar xz --strip-components=1 -C "${PREFIX}"
 else
   echo "Could not find latest (pre-)release for architecture '${ARCH}'."
   exit 1
