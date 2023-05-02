@@ -63,7 +63,7 @@ install: justbuild
 	install -D $(BUILDDIR)/out/bin/just $(DESTDIR)/$(PREFIX)/bin/just
 	install -D $(BUILDDIR)/out/bin/just-mr $(DESTDIR)/$(PREFIX)/bin/just-mr
 	install -D ./bin/just-import-git.py $(DESTDIR)/$(PREFIX)/bin/just-import-git
-	install -D ./share/just_complete.bash $(DESTDIR)/etc/bash_completion.d/just
+	install -D ./share/just_complete.bash $(DESTDIR)/$(PREFIX)/share/bash-completion/completions/just
 
 clean:
 	-rm -rf $(BUILDDIR)

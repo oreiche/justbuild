@@ -39,7 +39,7 @@ make -f rpmbuild/justbuild.makefile DESTDIR=$RPM_BUILD_ROOT install
 %files
 %license LICENSE
 %{_bindir}/*
-%{_sysconfdir}/*
+%{_datadir}/bash-completion/completions/*
 %{_mandir}/man1/*
 %{_mandir}/man5/*
 

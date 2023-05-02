@@ -58,7 +58,7 @@ install: justbuild $(MANPAGES)
 	install -D $(BUILDDIR)/out/bin/just $(DESTDIR)/$(PREFIX)/bin/just
 	install -D $(BUILDDIR)/out/bin/just-mr $(DESTDIR)/$(PREFIX)/bin/just-mr
 	install -D ./bin/just-import-git.py $(DESTDIR)/$(PREFIX)/bin/just-import-git
-	install -D ./share/just_complete.bash $(DESTDIR)/etc/bash_completion.d/just
+	install -D ./share/just_complete.bash $(DESTDIR)/$(PREFIX)/share/bash-completion/completions/just
 	install -D $(BUILDDIR)/share/man/just.1 $(DESTDIR)/$(PREFIX)/share/man/man1/just.1
 	install -D $(BUILDDIR)/share/man/just-mr.1 $(DESTDIR)/$(PREFIX)/share/man/man1/just-mr.1
 	install -D $(BUILDDIR)/share/man/just-import-git.1 $(DESTDIR)/$(PREFIX)/share/man/man1/just-import-git.1
