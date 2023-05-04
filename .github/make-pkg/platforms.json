@@ -111,9 +111,92 @@
   , "non-local-deps": ["google_apis", "bazel_remote_apis"]
   , "gen-pkgconfig": [{"Name": "gsl", "Cflags": "-I/usr/include"}]
   }
+, "ubuntu22.10":
+  { "type": "deb"
+  , "image": "ubuntu:22.10"
+  , "build-depends":
+    [ "clang"
+    , "protobuf-compiler"
+    , "protobuf-compiler-grpc"
+    , "libprotobuf-dev"
+    , "libgrpc++-dev"
+    , "libfmt-dev"
+    , "nlohmann-json3-dev"
+    , "libgit2-dev"
+    , "libssl-dev"
+    , "libcli11-dev"
+    , "libmsgsl-dev"
+    , "libarchive-dev"
+    , "libcurl4-openssl-dev"
+    , "python3"
+    , "pandoc"
+    , "patch"
+    , "unzip"
+    , "pkg-config"
+    ]
+  , "non-local-deps": ["google_apis", "bazel_remote_apis"]
+  , "gen-pkgconfig": [{"Name": "gsl", "Cflags": "-I/usr/include"}]
+  }
+, "ubuntu23.04":
+  { "type": "deb"
+  , "image": "ubuntu:23.04"
+  , "build-depends":
+    [ "clang"
+    , "protobuf-compiler"
+    , "protobuf-compiler-grpc"
+    , "libprotobuf-dev"
+    , "libgrpc++-dev"
+    , "libfmt-dev"
+    , "nlohmann-json3-dev"
+    , "libgit2-dev"
+    , "libssl-dev"
+    , "libcli11-dev"
+    , "libmsgsl-dev"
+    , "libarchive-dev"
+    , "libcurl4-openssl-dev"
+    , "python3"
+    , "pandoc"
+    , "patch"
+    , "unzip"
+    , "pkg-config"
+    ]
+  , "non-local-deps": ["google_apis", "bazel_remote_apis"]
+  , "gen-pkgconfig": [{"Name": "gsl", "Cflags": "-I/usr/include"}]
+  }
 , "fedora37":
   { "type": "rpm"
   , "image": "fedora:37"
+  , "build-depends":
+    [ "clang"
+    , "python3"
+    , "pandoc"
+    , "patch"
+    , "unzip"
+    , "libgit2-devel"
+    , "protobuf-compiler"
+    , "protobuf-devel"
+    , "protobuf-lite-devel"
+    , "grpc-devel"
+    , "grpc-plugins"
+    , "json-devel"
+    , "openssl-devel"
+    , "fmt-devel"
+    , "cli11-devel"
+    , "libcurl-devel"
+    , "libarchive-devel"
+    , "zlib-devel"
+    , "gsl-lite-devel"
+    , "googleapis-devel"
+    , "pkg-config"
+    ]
+  , "non-local-deps": ["bazel_remote_apis"]
+  , "gen-includes": {"gsl/gsl": "#include <gsl/gsl-lite.hpp>"}
+  , "gen-pkgconfig":
+    [{"Name": "gsl", "Cflags": "-I${gen_includes} -I/usr/include"}]
+  }
+, "fedora38":
+  { "type": "rpm"
+  , "image": "fedora:38"
   , "build-depends":
     [ "clang"
     , "python3"
