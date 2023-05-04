@@ -57,6 +57,7 @@
 , "ubuntu20.04":
   { "type": "deb"
   , "image": "ubuntu:20.04"
+  , "distrelease": "focal"
   , "build-depends":
     [ "clang"
     , "libstdc++-10-dev"
@@ -88,6 +89,7 @@
 , "ubuntu22.04":
   { "type": "deb"
   , "image": "ubuntu:22.04"
+  , "distrelease": "jammy"
   , "build-depends":
     [ "clang"
     , "protobuf-compiler"
@@ -114,6 +116,7 @@
 , "ubuntu22.10":
   { "type": "deb"
   , "image": "ubuntu:22.10"
+  , "distrelease": "kinetic"
   , "build-depends":
     [ "clang"
     , "protobuf-compiler"
@@ -140,6 +143,7 @@
 , "ubuntu23.04":
   { "type": "deb"
   , "image": "ubuntu:23.04"
+  , "distrelease": "lunar"
   , "build-depends":
     [ "clang"
     , "protobuf-compiler"

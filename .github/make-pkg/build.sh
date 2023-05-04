@@ -36,6 +36,10 @@ if [ -n "$SUFFIX" ]; then
     VERSION="$VERSION+$SOURCE_DATE_EPOCH"
   fi
 fi
+RELEASE=$(jq -r '."'${PLF}'"."distrelease" // ""' ${ROOTDIR}/platforms.json)
+if [ -n "${RELEASE}" ]; then
+  VERSION="$VERSION~${RELEASE}1"
+fi
 
 # rename source tree
 mv ${SRCDIR} ${SRCDIR}-${VERSION}
@@ -113,6 +117,11 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
     # build source package
     dpkg-buildpackage -S
+
+    # patch changes file
+    if [ -n "${RELEASE}" ]; then
+      sed -i 's/UNRELEASED/'${RELEASE}'/' ${WORKDIR}/${NAME}_*_source.changes
+    fi
 
     # build binary package
     dpkg-buildpackage -b
