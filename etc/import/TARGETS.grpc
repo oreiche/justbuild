@@ -1998,12 +1998,12 @@
     , "src/core/ext/xds/xds_resource_type_impl.h"
     , "src/core/ext/xds/xds_transport.h"
     ]
+  , "proto": [["@", "google_apis", "", "google_rpc_status_proto"]]
   , "deps":
     [ "backoff"
     , "debug_location"
     , "event_engine_base_hdrs"
     , "exec_ctx"
-    , ["@", "google_apis", "", "google_rpc_status_proto"]
     , "gpr"
     , "grpc_trace"
     , "orphanable"
@@ -2261,19 +2261,20 @@
   { "type": "export"
   , "target": ["src/compiler", "grpc_cpp_plugin"]
   , "flexible_config":
-    [ "AR"
+    [ "OS"
     , "ARCH"
-    , "CC"
-    , "CFLAGS"
-    , "CXX"
-    , "CXXFLAGS"
-    , "ENV"
     , "HOST_ARCH"
-    , "OS"
     , "TARGET_ARCH"
     , "COMPILER_FAMILY"
+    , "DEBUG"
+    , "CC"
+    , "CXX"
+    , "CFLAGS"
+    , "CXXFLAGS"
     , "ADD_CFLAGS"
     , "ADD_CXXFLAGS"
+    , "AR"
+    , "ENV"
     ]
   }
 }
