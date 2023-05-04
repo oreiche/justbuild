@@ -15,7 +15,8 @@ function docker_build() {
   local IMAGE=$(jq -r '."'${NAME}'".image' ${ROOTDIR}/platforms.json)
   local BUILD_DEPS=$(jq -r '."'${NAME}'"."build-depends" | join(" ")' \
                         ${ROOTDIR}/platforms.json)
-  local DOCKER_ARGS="-w /workspace -v $(pwd):/workspace"
+  local BUILD_DIR="$(pwd)/work_${NAME}/build"
+  local DOCKER_ARGS="-w /workspace -v $(pwd):/workspace -v ${BUILD_DIR}:/tmp/build"
 
   if [ -t 0 ]; then
     DOCKER_ARGS="-it ${DOCKER_ARGS}"
@@ -43,6 +44,10 @@ EOL
     exit 1
   fi
 
+  # create and clean build dir (retain cache)
+  mkdir -p "${BUILD_DIR}"
+  rm -rf "${BUILD_DIR}"/*
+
   # build docker image
   docker build -f ${TEMP}/Dockerfile.${NAME} -t just-make-${PKG}:${NAME} ${TEMP}
 
@@ -50,20 +55,20 @@ EOL
   docker run ${DOCKER_ARGS} -u $(id -u):$(id -g) just-make-${PKG}:${NAME} \
     .github/make-pkg/build.sh ${REF} ${NAME} ${PKG}
 
-  if [ "${PKG}" = "deb" ] && [ -f ./work_${NAME}/justbuild_*.deb ]; then
+  if [ "${PKG}" = "deb" ] && [ -f ./work_${NAME}/source/justbuild_*.deb ]; then
     # verify deb package
     docker run ${DOCKER_ARGS} ${IMAGE} /bin/bash -c "\
       set -e; \
       export DEBIAN_FRONTEND=noninteractive; \
       apt update; \
-      apt install --no-install-recommends -y ./work_${NAME}/justbuild_*.deb; \
+      apt install --no-install-recommends -y ./work_${NAME}/source/justbuild_*.deb; \
       just version && just-mr mrversion; \
       if [ $? = 0 ]; then touch ./work_${NAME}/success; fi"
-  elif [ "${PKG}" = "rpm" ] && [ -f ./work_${NAME}/rpmbuild/RPMS/x86_64/justbuild-*.rpm ]; then
+  elif [ "${PKG}" = "rpm" ] && [ -f ./work_${NAME}/source/rpmbuild/RPMS/x86_64/justbuild-*.rpm ]; then
     # verify rpm package
     docker run ${DOCKER_ARGS} ${IMAGE} /bin/bash -c "\
       set -e; \
-      dnf install -y ./work_${NAME}/rpmbuild/RPMS/x86_64/justbuild-*rpm; \
+      dnf install -y ./work_${NAME}/source/rpmbuild/RPMS/x86_64/justbuild-*rpm; \
       just version && just-mr mrversion; \
       if [ $? = 0 ]; then touch ./work_${NAME}/success; fi"
   fi

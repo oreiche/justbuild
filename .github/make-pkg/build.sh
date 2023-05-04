@@ -10,17 +10,10 @@ readonly NAME="justbuild"
 
 # paths
 readonly ROOTDIR=$(realpath $(dirname $0))
-readonly WORKDIR=$(pwd)/work_${PLF}
-if [ "${PKG}" = "deb" ]; then
-    CACHEDIR="work_${PLF}/build/.just"
-elif [ "${PKG}" = "rpm" ]; then
-    CACHEDIR="work_${PLF}/rpmbuild/BUILD/build/.just"
-fi
+readonly WORKDIR=$(pwd)/work_${PLF}/source
 
-# clean workdir (retain cache)
-if [ -d "${CACHEDIR}" ]; then tar -cf ${PLF}.tar "${CACHEDIR}"; fi
+# clean workdir
 rm -rf ${WORKDIR}
-if [ -f ${PLF}.tar ]; then tar -xf ${PLF}.tar; rm -f ${PLF}.tar; fi
 
 # obtain time stamp from git commit
 readonly SOURCE_DATE_EPOCH=$(git log -n1 --format=%ct ${REF})
@@ -54,11 +47,11 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
   if [ "${PKG}" = "deb" ]; then
     export EMAIL="oliver.reiche@gmail.com"
     export DEBFULLNAME="Oliver Reiche"
-    export AUXDIR="$(pwd)/debian"
+    export DATADIR="$(pwd)/debian"
     dh_make -s -y --createorig
   elif [ "${PKG}" = "rpm" ]; then
     export HOME="${WORKDIR}"
-    export AUXDIR="$(pwd)/rpmbuild"
+    export DATADIR="$(pwd)/rpmbuild"
     rpmdev-setuptree
   else
     echo "Unknown pkg type '${PKG}'"
@@ -67,7 +60,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
   # fetch distfiles of non-local deps
   NON_LOCAL_DEPS=$(jq -r '."'${PLF}'"."non-local-deps" // [] | tostring' ${ROOTDIR}/platforms.json)
-  DISTFILES=${AUXDIR}/distfiles
+  DISTFILES=${DATADIR}/distfiles
   mkdir -p ${DISTFILES}
   while read DEP; do
     if [ -z "${DEP}" ]; then continue; fi
@@ -76,32 +69,32 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
   done <<< $(echo ${NON_LOCAL_DEPS} | jq -r '.[]')
 
   # generate missing includes
-  INCLUDES=${AUXDIR}/includes
-  mkdir -p ${INCLUDES}
+  INCLUDE_PATH=${DATADIR}/include
+  mkdir -p ${INCLUDE_PATH}
   while read HDR_FILE; do
     if [ -z "${HDR_FILE}" ]; then continue; fi
     HDR_DIR="$(dirname "${HDR_FILE}")"
     HDR_DATA="$(jq -r '."'${PLF}'"."gen-includes"."'${HDR_FILE}'" | tostring' \
                 ${ROOTDIR}/platforms.json)"
-    mkdir -p "${INCLUDES}/${HDR_DIR}"
-    echo "${HDR_DATA}" > "${INCLUDES}/${HDR_FILE}"
+    mkdir -p "${INCLUDE_PATH}/${HDR_DIR}"
+    echo "${HDR_DATA}" > "${INCLUDE_PATH}/${HDR_FILE}"
   done <<< $(jq -r '."'${PLF}'"."gen-includes" // {} | keys | .[] | tostring' ${ROOTDIR}/platforms.json)
 
   # generate missing pkg-config files
-  PKGCONFIG=${AUXDIR}/pkgconfig
+  PKGCONFIG=${DATADIR}/pkgconfig
   mkdir -p ${PKGCONFIG}
   REQ_PC_FIELDS='{"Name":"","Version":"n/a","Description":"n/a","URL":"n/a"}'
   while read PKG_DESC; do
     if [ -z "${PKG_DESC}" ]; then continue; fi
     PKG_NAME=$(echo ${PKG_DESC} | jq -r '.Name')
-    echo 'gen_includes="'${INCLUDES}'"' > ${PKGCONFIG}/${PKG_NAME}.pc
+    echo 'gen_includes="GEN_INCLUDES"' > ${PKGCONFIG}/${PKG_NAME}.pc
     echo ${REQ_PC_FIELDS} ${PKG_DESC} \
       | jq -sr 'add | keys_unsorted[] as $k | "\($k): \(.[$k])"' \
       >> ${PKGCONFIG}/${PKG_NAME}.pc
   done <<< $(jq -r '."'${PLF}'"."gen-pkgconfig" // [] | .[] | tostring' ${ROOTDIR}/platforms.json)
 
-  echo ${NON_LOCAL_DEPS} > ${AUXDIR}/non_local_deps
-  echo ${SOURCE_DATE_EPOCH} > ${AUXDIR}/source_date_epoch
+  echo ${NON_LOCAL_DEPS} > ${DATADIR}/non_local_deps
+  echo ${SOURCE_DATE_EPOCH} > ${DATADIR}/source_date_epoch
 
   BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" // [] | join(",")' ${ROOTDIR}/platforms.json)
 

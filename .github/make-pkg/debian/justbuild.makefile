@@ -1,6 +1,7 @@
 PREFIX ?= /usr
-BUILDDIR ?= ../build
-DISTFILES ?= ./debian/distfiles
+DATADIR ?= ./debian
+BUILDDIR ?= /tmp/build
+DISTFILES ?= $(DATADIR)/distfiles
 
 ifeq ($(shell uname -m),aarch64)
   ARCH ?= arm64
@@ -10,17 +11,18 @@ endif
 TARGET_ARCH ?= $(ARCH)
 
 export LOCALBASE = /usr
-export NON_LOCAL_DEPS = $(shell cat ./debian/non_local_deps)
-export PKG_CONFIG_PATH = $(shell pwd)/debian/pkgconfig
-export SOURCE_DATE_EPOCH = $(shell cat ./debian/source_date_epoch)
+export NON_LOCAL_DEPS = $(shell cat $(DATADIR)/non_local_deps)
+export SOURCE_DATE_EPOCH = $(shell cat $(DATADIR)/source_date_epoch)
+export INCLUDE_PATH = $(BUILDDIR)/include
+export PKG_CONFIG_PATH = $(BUILDDIR)/pkgconfig
 
 define JUST_BUILD_CONF
 { "COMPILER_FAMILY": "clang"
 , "ARCH": "$(ARCH)"
 , "TARGET_ARCH": "$(TARGET_ARCH)"
 , "SOURCE_DATE_EPOCH": $(SOURCE_DATE_EPOCH)
-, "ADD_CFLAGS": ["-I$(shell pwd)/debian/includes"]
-, "ADD_CXXFLAGS": ["-I$(shell pwd)/debian/includes"]
+, "ADD_CFLAGS": ["-I$(INCLUDE_PATH)"]
+, "ADD_CXXFLAGS": ["-I$(INCLUDE_PATH)"]
 }
 endef
 export JUST_BUILD_CONF
@@ -35,7 +37,16 @@ MANPAGES := $(addprefix $(BUILDDIR)/, $(patsubst %.org, %, $(ORGFILES)))
 
 all: justbuild man-pages
 
-$(BUILDDIR)/out/bin/just:
+$(INCLUDE_PATH):
+	@mkdir -p $@
+	cp -r $(DATADIR)/include/. $@
+
+$(PKG_CONFIG_PATH):
+	@mkdir -p $@
+	cp -r $(DATADIR)/pkgconfig/. $@
+	find $@ -type f -exec sed 's|GEN_INCLUDES|'$(INCLUDE_PATH)'|g' -i {} \;
+
+$(BUILDDIR)/out/bin/just: $(PKG_CONFIG_PATH) $(INCLUDE_PATH)
 	env PACKAGE=YES python3 ./bin/bootstrap.py . $(BUILDDIR) $(DISTFILES)
 	@touch $@
 
@@ -54,10 +65,10 @@ $(BUILDDIR)/%: %.org
 justbuild: $(BUILDDIR)/out/bin/just $(BUILDDIR)/out/bin/just-mr
 
 man-pages: $(MANPAGES)
-	mkdir -p ./debian/man
-	cp $(MANPAGES) ./debian/man/
+	mkdir -p $(DATADIR)/man
+	cp $(MANPAGES) $(DATADIR)/man/
 	$(foreach m, $(MANPAGES), \
-	  $(shell echo debian/man/$$(basename $(m)) >> ./debian/justbuild.manpages))
+	  $(shell echo debian/man/$$(basename $(m)) >> $(DATADIR)/justbuild.manpages))
 
 install: justbuild
 	install -D $(BUILDDIR)/out/bin/just $(DESTDIR)/$(PREFIX)/bin/just
