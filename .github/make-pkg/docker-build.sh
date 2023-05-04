@@ -46,7 +46,7 @@ EOL
 
   # create and clean build dir (retain cache)
   mkdir -p "${BUILD_DIR}"
-  rm -rf "${BUILD_DIR}"/*
+  rm -rf "${BUILD_DIR}"/* ./work_${NAME}/success
 
   # build docker image
   docker build -f ${TEMP}/Dockerfile.${NAME} -t just-make-${PKG}:${NAME} ${TEMP}
