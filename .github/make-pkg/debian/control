@@ -1,8 +1,8 @@
 Source: justbuild
-Section: unknown
+Section: devel
 Priority: optional
 Maintainer: Oliver Reiche <oliver.reiche@gmail.com>
-Build-Depends: make, BUILD_DEPENDS
+Build-Depends: debhelper, BUILD_DEPENDS
 Standards-Version: 4.6.0
 Homepage: https://github.com/just-buildsystem/justbuild
 #Vcs-Browser: https://salsa.debian.org/debian/justbuild
