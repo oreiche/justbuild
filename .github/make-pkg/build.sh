@@ -103,7 +103,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     cp ${ROOTDIR}/debian/* ./debian/
     echo 12 > ./debian/compat
     mkdir -p ./debian/source
-    find debian/distfiles > ./debian/source/include-binaries
+    find debian/distfiles -type f > ./debian/source/include-binaries
 
     # remove usused debian files
     rm -f ./debian/README.Debian
