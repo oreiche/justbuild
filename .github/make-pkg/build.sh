@@ -98,7 +98,6 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
   done <<< $(jq -r '."'${PLF}'"."gen-pkgconfig" // [] | .[] | tostring' ${ROOTDIR}/platforms.json)
 
   echo ${NON_LOCAL_DEPS} > ${DATADIR}/non_local_deps
-  echo ${SOURCE_DATE_EPOCH} > ${DATADIR}/source_date_epoch
 
   BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" // [] | join(",")' ${ROOTDIR}/platforms.json)
 
@@ -115,6 +114,10 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     # patch control file
     sed -i 's/BUILD_DEPENDS/'${BUILD_DEPENDS}'/' ./debian/control
 
+    # patch changelog file
+    CHANGE_DATE=$(date -u -R -d @${SOURCE_DATE_EPOCH})
+    sed -i '0,/^\(\ -- .*>\ \ \).*/s//\1'"${CHANGE_DATE}"'/' ./debian/changelog
+
     # build source package
     dpkg-buildpackage -S
 
@@ -129,6 +132,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     # copy prepared rpmbuild files
     cp ${ROOTDIR}/rpmbuild/justbuild.makefile ./rpmbuild/
     cp ${ROOTDIR}/rpmbuild/justbuild.spec ${HOME}/rpmbuild/SPECS/
+    echo ${SOURCE_DATE_EPOCH} > ./rpmbuild/source_date_epoch
 
     # patch spec file
     sed -i 's/VERSION/'${VERSION}'/' ${HOME}/rpmbuild/SPECS/justbuild.spec

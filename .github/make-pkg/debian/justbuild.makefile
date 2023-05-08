@@ -12,7 +12,7 @@ TARGET_ARCH ?= $(ARCH)
 
 export LOCALBASE = /usr
 export NON_LOCAL_DEPS = $(shell cat $(DATADIR)/non_local_deps)
-export SOURCE_DATE_EPOCH = $(shell cat $(DATADIR)/source_date_epoch)
+export SOURCE_DATE_EPOCH = $(shell dpkg-parsechangelog -STimestamp)
 export INCLUDE_PATH = $(BUILDDIR)/include
 export PKG_CONFIG_PATH = $(BUILDDIR)/pkgconfig
 
