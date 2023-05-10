@@ -61,7 +61,8 @@ $(BUILDDIR)/out/bin/just-mr: $(BUILDDIR)/out/bin/just
 
 $(BUILDDIR)/%: %.org
 	@mkdir -p $(@D)
-	pandoc -s -t man $< -o $@
+	echo $@.man | emacs --batch --eval "(require 'ox-man)" --kill --insert $< -f org-man-export-to-man
+	@mv $@.man $@
 
 justbuild: $(BUILDDIR)/out/bin/just $(BUILDDIR)/out/bin/just-mr
 
