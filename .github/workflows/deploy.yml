@@ -211,20 +211,16 @@ jobs:
           docker exec ubuntu bash -c "\
             set -e; \
             apt update; \
-            apt install --yes pandoc"
+            apt install --yes emacs"
 
       - name: Build man pages
         run: |
           mkdir -p justbuild-noarch-linux/share/man/man{1,5}
           docker exec ubuntu bash -c "\
             set -e; \
-            pandoc -s -t man ./share/man/just.1.org -o justbuild-noarch-linux/share/man/man1/just.1; \
-            pandoc -s -t man ./share/man/just-mr.1.org -o justbuild-noarch-linux/share/man/man1/just-mr.1; \
-            pandoc -s -t man ./share/man/just-import-git.1.org -o justbuild-noarch-linux/share/man/man1/just-import-git.1; \
-            pandoc -s -t man ./share/man/just-mrrc.5.org -o justbuild-noarch-linux/share/man/man5/just-mrrc.5; \
-            pandoc -s -t man ./share/man/just-graph-file.5.org -o justbuild-noarch-linux/share/man/man5/just-graph-file.5; \
-            pandoc -s -t man ./share/man/just-repository-config.5.org -o justbuild-noarch-linux/share/man/man5/just-repository-config.5; \
-            pandoc -s -t man ./share/man/just-mr-repository-config.5.org -o justbuild-noarch-linux/share/man/man5/just-mr-repository-config.5"
+            find ./share/man/ -name '*.org' -exec emacs --batch --eval \"(require 'ox-man)\" --kill {} -f org-man-export-to-man \\;; \
+            find ./share/man/ -name '*.1.man' -exec sh -c 'mv {} justbuild-noarch-linux/share/man/man1/\$(basename {} .man)' \\;; \
+            find ./share/man/ -name '*.5.man' -exec sh -c 'mv {} justbuild-noarch-linux/share/man/man5/\$(basename {} .man)' \\;"
 
       - name: Collect noarch Linux files
         run: |
