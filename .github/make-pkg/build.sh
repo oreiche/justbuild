@@ -66,12 +66,15 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
   # fetch distfiles of non-local deps
   NON_LOCAL_DEPS=$(jq -r '."'${PLF}'"."non-local-deps" // [] | tostring' ${ROOTDIR}/platforms.json)
-  DISTFILES=${DATADIR}/distfiles
+  DISTFILES=${DATADIR}/third_party
+  INFOFILE=${DISTFILES}/info.txt
   mkdir -p ${DISTFILES}
+  rm -f ${INFOFILE}
   while read DEP; do
     if [ -z "${DEP}" ]; then continue; fi
     URL="$(jq -r '.repositories."'${DEP}'".repository.fetch' etc/repos.json)"
     wget -nv -P ${DISTFILES} "${URL}"
+    echo "$(basename "${URL}"): ${URL}" >> ${INFOFILE}
   done <<< $(echo ${NON_LOCAL_DEPS} | jq -r '.[]')
 
   # generate missing includes
@@ -108,7 +111,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     cp ${ROOTDIR}/debian/* ./debian/
     echo 12 > ./debian/compat
     mkdir -p ./debian/source
-    find debian/distfiles -type f > ./debian/source/include-binaries
+    find debian/third_party -type f > ./debian/source/include-binaries
 
     # remove usused debian files
     rm -f ./debian/README.Debian
