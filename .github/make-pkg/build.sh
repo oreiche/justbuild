@@ -7,6 +7,7 @@ readonly REF="${1:-HEAD}"
 readonly PLF="${2:-ubuntu22.04}"
 readonly PKG="${3:-deb}"
 readonly NAME="justbuild"
+readonly GH_ORG="just-buildsystem"
 
 # paths
 readonly ROOTDIR=$(realpath $(dirname $0))
@@ -16,7 +17,8 @@ readonly WORKDIR=$(pwd)/work_${PLF}/source
 rm -rf ${WORKDIR}
 
 # obtain time stamp from git commit
-readonly SOURCE_DATE_EPOCH=$(git log -n1 --format=%ct ${REF})
+readonly COMMIT_HASH=$(git rev-parse ${REF})
+readonly SOURCE_DATE_EPOCH=$(git log -n1 --format=%ct ${COMMIT_HASH})
 
 # obtain snapshot of sources
 SRCDIR="${WORKDIR}/${NAME}"
@@ -113,6 +115,15 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
     # patch control file
     sed -i 's/BUILD_DEPENDS/'${BUILD_DEPENDS}'/' ./debian/control
+
+    if [ -f ./debian/upstream/metadata.ex ]; then
+      # patch upstream/metadata file
+      cat ./debian/upstream/metadata.ex \
+        | sed -n 's/#\s\+\(.*<user>.*\)/\1/p' > ./debian/upstream/metadata
+      sed -i 's/<user>/'${GH_ORG}'/' ./debian/upstream/metadata
+      sed -i 's|master/CHANGES|'${COMMIT_HASH}'/CHANGELOG.md|' ./debian/upstream/metadata
+      sed -i 's|wiki|blob/'${COMMIT_HASH}'/README.md#documentation|' ./debian/upstream/metadata
+    fi
 
     # patch changelog file
     CHANGE_DATE=$(date -u -R -d @${SOURCE_DATE_EPOCH})
