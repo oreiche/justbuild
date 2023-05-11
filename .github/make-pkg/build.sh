@@ -117,14 +117,12 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     # patch changelog file
     CHANGE_DATE=$(date -u -R -d @${SOURCE_DATE_EPOCH})
     sed -i '0,/^\(\ -- .*>\ \ \).*/s//\1'"${CHANGE_DATE}"'/' ./debian/changelog
+    if [ -n "${RELEASE}" ]; then
+      sed -i 's/UNRELEASED/'${RELEASE}'/' ./debian/changelog
+    fi
 
     # build source package
     dpkg-buildpackage -S
-
-    # patch changes file
-    if [ -n "${RELEASE}" ]; then
-      sed -i 's/UNRELEASED/'${RELEASE}'/' ${WORKDIR}/${NAME}_*_source.changes
-    fi
 
     # build binary package
     dpkg-buildpackage -b
