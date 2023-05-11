@@ -107,9 +107,10 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
   BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" // [] | join(",")' ${ROOTDIR}/platforms.json)
 
   if [ "${PKG}" = "deb" ]; then
+    COMPAT_LEVEL=$(dpkg -s debhelper | sed -n 's/^Version:\s\+\([0-9]*\).*/\1/p')
+
     # copy prepared debian files
     cp ${ROOTDIR}/debian/* ./debian/
-    echo 12 > ./debian/compat
     mkdir -p ./debian/source
     find debian/third_party -type f > ./debian/source/include-binaries
 
@@ -117,6 +118,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     rm -f ./debian/README.Debian
 
     # patch control file
+    sed -i 's/COMPAT_LEVEL/'${COMPAT_LEVEL}'/' ./debian/control
     sed -i 's/BUILD_DEPENDS/'${BUILD_DEPENDS}'/' ./debian/control
 
     if [ -f ./debian/upstream/metadata.ex ]; then
