@@ -132,6 +132,10 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
       sed -i 's/UNRELEASED/'${RELEASE}'/' ./debian/changelog
     fi
 
+    # remove unused files
+    find ./debian/ -type f -name '*.ex' -delete
+    rm -f ./debian/{README.source,justbuild-docs.docs}
+
     # build source package
     dpkg-buildpackage -S
 
