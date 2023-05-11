@@ -1,5 +1,6 @@
 Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: justbuild
+Upstream-Contact: Oliver Reiche <oliver.reiche@gmail.com>
 
 Files: *
 Copyright: 2022, 2023 Huawei Cloud Computing Technology Co., Ltd.
