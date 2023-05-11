@@ -146,6 +146,7 @@
   , "distrelease": "lunar"
   , "build-depends":
     [ "clang"
+    , "libstdc++-13-dev"
     , "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
