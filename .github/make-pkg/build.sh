@@ -68,10 +68,10 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
   NON_LOCAL_DEPS=$(jq -r '."'${PLF}'"."non-local-deps" // [] | tostring' ${ROOTDIR}/platforms.json)
   DISTFILES=${DATADIR}/third_party
   INFOFILE=${DISTFILES}/info.txt
-  mkdir -p ${DISTFILES}
   rm -f ${INFOFILE}
   while read DEP; do
     if [ -z "${DEP}" ]; then continue; fi
+    mkdir -p ${DISTFILES}
     URL="$(jq -r '.repositories."'${DEP}'".repository.fetch' etc/repos.json)"
     wget -nv -P ${DISTFILES} "${URL}"
     echo "$(basename "${URL}"): ${URL}" >> ${INFOFILE}
@@ -79,9 +79,9 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
   # generate missing includes
   INCLUDE_PATH=${DATADIR}/include
-  mkdir -p ${INCLUDE_PATH}
   while read HDR_FILE; do
     if [ -z "${HDR_FILE}" ]; then continue; fi
+    mkdir -p ${INCLUDE_PATH}
     HDR_DIR="$(dirname "${HDR_FILE}")"
     HDR_DATA="$(jq -r '."'${PLF}'"."gen-includes"."'${HDR_FILE}'" | tostring' \
                 ${ROOTDIR}/platforms.json)"
@@ -91,10 +91,10 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
   # generate missing pkg-config files
   PKGCONFIG=${DATADIR}/pkgconfig
-  mkdir -p ${PKGCONFIG}
   REQ_PC_FIELDS='{"Name":"","Version":"n/a","Description":"n/a","URL":"n/a"}'
   while read PKG_DESC; do
     if [ -z "${PKG_DESC}" ]; then continue; fi
+    mkdir -p ${PKGCONFIG}
     PKG_NAME=$(echo ${PKG_DESC} | jq -r '.Name')
     echo 'gen_includes="GEN_INCLUDES"' > ${PKGCONFIG}/${PKG_NAME}.pc
     echo ${REQ_PC_FIELDS} ${PKG_DESC} \
@@ -111,8 +111,11 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
     # copy prepared debian files
     cp ${ROOTDIR}/debian/* ./debian/
-    mkdir -p ./debian/source
-    find debian/third_party -type f > ./debian/source/include-binaries
+
+    if [ -d ./debian/third_party ]; then
+      mkdir -p ./debian/source
+      find debian/third_party -type f > ./debian/source/include-binaries
+    fi
 
     # remove usused debian files
     rm -f ./debian/README.Debian

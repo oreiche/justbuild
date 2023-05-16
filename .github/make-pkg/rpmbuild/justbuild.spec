@@ -29,7 +29,8 @@ functional expressions.
 
 
 %build
-make -f rpmbuild/justbuild.makefile
+make -f rpmbuild/justbuild.makefile clean
+make -f rpmbuild/justbuild.makefile all
 
 
 %install

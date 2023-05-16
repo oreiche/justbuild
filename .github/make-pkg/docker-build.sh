@@ -22,6 +22,10 @@ function docker_build() {
     DOCKER_ARGS="-it ${DOCKER_ARGS}"
   fi
 
+  # create build dir and clean success flag
+  mkdir -p "${BUILD_DIR}"
+  rm -f ./work_${NAME}/success
+
   # generate docker file
   mkdir -p ${TEMP}
   if [ "${PKG}" = "deb" ]; then
@@ -43,10 +47,6 @@ EOL
     echo "Unsupported pkg type '${PKG}'"
     exit 1
   fi
-
-  # create and clean build dir (retain cache)
-  mkdir -p "${BUILD_DIR}"
-  rm -rf "${BUILD_DIR}"/* ./work_${NAME}/success
 
   # build docker image
   docker build -f ${TEMP}/Dockerfile.${NAME} -t just-make-${PKG}:${NAME} ${TEMP}

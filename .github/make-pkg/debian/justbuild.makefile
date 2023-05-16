@@ -39,12 +39,16 @@ all: justbuild man-pages
 
 $(INCLUDE_PATH):
 	@mkdir -p $@
-	cp -r $(DATADIR)/include/. $@
+	if [ -d $(DATADIR)/include ]; then \
+	  cp -r $(DATADIR)/include/. $@; \
+	fi
 
 $(PKG_CONFIG_PATH):
 	@mkdir -p $@
-	cp -r $(DATADIR)/pkgconfig/. $@
-	find $@ -type f -exec sed 's|GEN_INCLUDES|'$(INCLUDE_PATH)'|g' -i {} \;
+	if [ -d $(DATADIR)/pkgconfig ]; then \
+	  cp -r $(DATADIR)/pkgconfig/. $@; \
+	  find $@ -type f -exec sed 's|GEN_INCLUDES|'$(INCLUDE_PATH)'|g' -i {} \;; \
+	fi
 
 $(BUILDDIR)/out/bin/just: $(PKG_CONFIG_PATH) $(INCLUDE_PATH)
 	env PACKAGE=YES python3 ./bin/bootstrap.py . $(BUILDDIR) $(DISTFILES)
@@ -78,8 +82,9 @@ install: justbuild
 	install -D ./share/just_complete.bash $(DESTDIR)/$(PREFIX)/share/bash-completion/completions/just
 
 clean:
-	-rm -rf $(BUILDDIR)
+	rm -rf $(BUILDDIR)/*
 
 distclean: clean
+	rm -rf $(BUILDDIR)
 
 .PHONY: all justbuild man-pages install clean distclean
