@@ -34,7 +34,7 @@ FROM ${IMAGE}
 ENV HOME=/tmp/nobody
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt update && apt install -y jq git wget dh-make
-RUN apt install -y ${BUILD_DEPS}
+RUN apt update && apt install -y ${BUILD_DEPS}
 EOL
   elif [ "${PKG}" = "rpm" ]; then
     cat > ${TEMP}/Dockerfile.${NAME} << EOL
