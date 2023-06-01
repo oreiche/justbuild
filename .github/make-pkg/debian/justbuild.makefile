@@ -31,8 +31,8 @@ export JUST_BUILD_CONF
 export http_proxy = http://8.8.8.8:3128
 export https_proxy = http://8.8.8.8:3128
 
-ORGFILES := $(wildcard ./share/man/*.org)
-MANPAGES := $(addprefix $(BUILDDIR)/, $(patsubst %.org, %, $(ORGFILES)))
+MDFILES := $(wildcard ./share/man/*.md)
+MANPAGES := $(addprefix $(BUILDDIR)/, $(patsubst %.md, %, $(MDFILES)))
 
 
 all: justbuild man-pages
@@ -62,10 +62,9 @@ $(BUILDDIR)/out/bin/just-mr: $(BUILDDIR)/out/bin/just
 	  -o $(BUILDDIR)/out/ 'installed just-mr'
 	@touch $@
 
-$(BUILDDIR)/%: %.org
+$(BUILDDIR)/%: %.md
 	@mkdir -p $(@D)
-	echo $@.man | emacs --batch --eval "(require 'ox-man)" --kill --insert $< -f org-man-export-to-man
-	@mv $@.man $@
+	pandoc -s -t man $< -o $@
 
 justbuild: $(BUILDDIR)/out/bin/just $(BUILDDIR)/out/bin/just-mr
 

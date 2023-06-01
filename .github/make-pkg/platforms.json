@@ -15,7 +15,7 @@
     , "libc-ares-dev"
     , "zlib1g-dev"
     , "python3"
-    , "emacs"
+    , "pandoc"
     , "patch"
     , "unzip"
     , "pkg-config"
@@ -46,7 +46,7 @@
     , "libarchive-dev"
     , "libcurl4-openssl-dev"
     , "python3"
-    , "emacs"
+    , "pandoc"
     , "patch"
     , "unzip"
     , "pkg-config"
@@ -66,7 +66,7 @@
     , "libc-ares-dev"
     , "zlib1g-dev"
     , "python3"
-    , "emacs"
+    , "pandoc"
     , "patch"
     , "unzip"
     , "pkg-config"
@@ -105,7 +105,7 @@
     , "libarchive-dev"
     , "libcurl4-openssl-dev"
     , "python3"
-    , "emacs"
+    , "pandoc"
     , "patch"
     , "unzip"
     , "pkg-config"
@@ -132,7 +132,7 @@
     , "libarchive-dev"
     , "libcurl4-openssl-dev"
     , "python3"
-    , "emacs"
+    , "pandoc"
     , "patch"
     , "unzip"
     , "pkg-config"
@@ -146,7 +146,6 @@
   , "distrelease": "lunar"
   , "build-depends":
     [ "clang"
-    , "libstdc++-13-dev"
     , "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
@@ -160,7 +159,7 @@
     , "libarchive-dev"
     , "libcurl4-openssl-dev"
     , "python3"
-    , "emacs"
+    , "pandoc"
     , "patch"
     , "unzip"
     , "pkg-config"
@@ -174,7 +173,7 @@
   , "build-depends":
     [ "clang"
     , "python3"
-    , "emacs"
+    , "pandoc"
     , "patch"
     , "unzip"
     , "libgit2-devel"
@@ -205,7 +204,7 @@
   , "build-depends":
     [ "clang"
     , "python3"
-    , "emacs"
+    , "pandoc"
     , "patch"
     , "unzip"
     , "libgit2-devel"
@@ -234,7 +233,7 @@
   { "type": "deb"
   , "image": "ubuntu:20.04"
   , "build-depends":
-    ["clang", "libstdc++-10-dev", "python3", "emacs", "patch", "unzip"]
+    ["clang", "libstdc++-10-dev", "python3", "pandoc", "patch", "unzip"]
   , "non-local-deps":
     [ "fmt"
     , "ssl"
@@ -258,7 +257,7 @@
 , "static-rpm":
   { "type": "rpm"
   , "image": "fedora:33"
-  , "build-depends": ["clang", "python3", "emacs", "patch", "unzip"]
+  , "build-depends": ["clang", "python3", "pandoc", "patch", "unzip"]
   , "non-local-deps":
     [ "fmt"
     , "ssl"
