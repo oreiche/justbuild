@@ -1,6 +1,6 @@
 # Justbuild
-[![Tests](../../actions/workflows/tests.yml/badge.svg)](https://github.com/oreiche/justbuild/actions/workflows/tests.yml)
-[![Bootstrap and Deploy](../../actions/workflows/deploy.yml/badge.svg)](../../releases)
+[![Tests](../../actions/workflows/tests.yml/badge.svg?branch=github-ci-1.1)](https://github.com/oreiche/justbuild/actions/workflows/tests.yml)
+[![Bootstrap and Deploy](../../actions/workflows/deploy.yml/badge.svg?branch=github-ci-1.1)](../../releases)
 
 Justbuild is a generic build system supporting multi-repository
 builds. A peculiarity of the tool is the separation between global
