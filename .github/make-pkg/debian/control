@@ -1,0 +1,23 @@
+Source: justbuild
+Section: devel
+Priority: optional
+Maintainer: Oliver Reiche <oliver.reiche@gmail.com>
+Build-Depends: debhelper-compat (= COMPAT_LEVEL), BUILD_DEPENDS
+Standards-Version: 4.6.1.0
+Homepage: https://github.com/just-buildsystem/justbuild
+#Vcs-Browser: https://salsa.debian.org/debian/justbuild
+#Vcs-Git: https://salsa.debian.org/debian/justbuild.git
+Rules-Requires-Root: no
+
+Package: justbuild
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: python3, bash-completion
+Description: Justbuild generic build system
+ Justbuild is a generic build system supporting multi-repository builds. A
+ peculiarity of the tool is the separation between global names and physical
+ location on the one hand, and logical paths used for actions and installation
+ on the other hand (sometimes referred to as "staging"). The language-specific
+ information to translate high-level concepts (libraries, binaries) into
+ individual compile action is taken from user-defined rules described by
+ functional expressions.
