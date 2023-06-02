@@ -114,7 +114,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
     if [ -d ./debian/third_party ]; then
       mkdir -p ./debian/source
-      find debian/third_party -type f > ./debian/source/include-binaries
+      find debian/third_party -type f -not -name '*.txt' > ./debian/source/include-binaries
     fi
 
     # remove usused debian files
