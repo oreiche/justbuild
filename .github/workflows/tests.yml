@@ -3,7 +3,7 @@ name: Tests
 on:
   push:
     branches:
-      - github-ci
+      - github-ci*
 
 jobs:
   debug:
