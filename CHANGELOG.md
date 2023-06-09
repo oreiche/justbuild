@@ -1,3 +1,14 @@
+## Release `1.1.2` (2023-06-09)
+
+Bug fixes on top of release `1.1.1`.
+
+### Fixes
+
+- Removed another potential uses of `malloc` between `fork` and
+  `exec`. This removes the risk of deadlocks on certain combinations
+  of `C++` standard library and `libc`.
+- Fix bundled build of `ssl` on `i686`.
+
 ## Release `1.1.1` (2023-06-02)
 
 Bug fixes on top of release `1.1.0`.
