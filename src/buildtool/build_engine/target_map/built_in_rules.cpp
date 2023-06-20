@@ -28,6 +28,7 @@
 #include <nlohmann/json.hpp>
 
 #include "src/buildtool/build_engine/base_maps/field_reader.hpp"
+#include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/build_engine/expression/expression_ptr.hpp"
 #include "src/buildtool/build_engine/target_map/export.hpp"
 #include "src/buildtool/build_engine/target_map/utils.hpp"
@@ -199,7 +200,9 @@ void FileGenRuleWithDeps(
             ObjectType::File}}}};
 
     auto analysis_result = std::make_shared<AnalysedTarget const>(
-        TargetResult{stage, ExpressionPtr{Expression::map_t{}}, stage},
+        TargetResult{.artifact_stage = stage,
+                     .provides = ExpressionPtr{Expression::map_t{}},
+                     .runfiles = stage},
         std::vector<ActionDescription::Ptr>{},
         std::vector<std::string>{data_val->String()},
         std::vector<Tree::Ptr>{},
@@ -372,7 +375,9 @@ void TreeRuleWithDeps(
     auto result = ExpressionPtr{Expression::map_t{result_stage}};
 
     auto analysis_result = std::make_shared<AnalysedTarget const>(
-        TargetResult{result, ExpressionPtr{Expression::map_t{}}, result},
+        TargetResult{.artifact_stage = result,
+                     .provides = ExpressionPtr{Expression::map_t{}},
+                     .runfiles = result},
         std::vector<ActionDescription::Ptr>{},
         std::vector<std::string>{},
         std::move(trees),
@@ -604,7 +609,8 @@ void InstallRuleWithDeps(
 
     auto const& empty_map = Expression::kEmptyMap;
     auto result = std::make_shared<AnalysedTarget const>(
-        TargetResult{stage, empty_map, stage},
+        TargetResult{
+            .artifact_stage = stage, .provides = empty_map, .runfiles = stage},
         std::vector<ActionDescription::Ptr>{},
         std::vector<std::string>{},
         std::vector<Tree::Ptr>{},
@@ -1044,6 +1050,8 @@ void GenericRuleWithDeps(
                                                env_val,
                                                std::nullopt,
                                                false,
+                                               1.0,
+                                               Expression::kEmptyMap,
                                                inputs);
     auto action_identifier = action->Id();
     Expression::map_t::underlying_map_t artifacts;
@@ -1059,7 +1067,9 @@ void GenericRuleWithDeps(
     auto const& empty_map = Expression::kEmptyMap;
     auto result = std::make_shared<AnalysedTarget const>(
         TargetResult{
-            ExpressionPtr{Expression::map_t{artifacts}}, empty_map, empty_map},
+            .artifact_stage = ExpressionPtr{Expression::map_t{artifacts}},
+            .provides = empty_map,
+            .runfiles = empty_map},
         std::vector<ActionDescription::Ptr>{action},
         std::vector<std::string>{},
         std::vector<Tree::Ptr>{},

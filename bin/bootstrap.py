@@ -53,6 +53,8 @@ ARCHS = {
   'arm':'arm',
   'aarch64':'arm64'
 }
+if "OS" not in CONF:
+    CONF["OS"] = platform.system().lower()
 if "ARCH" not in CONF:
     MACH = platform.machine()
     if MACH in ARCHS:
@@ -80,11 +82,14 @@ ENV['PKG_CONFIG_PATH'] = ":".join(CONFIG_PATHS)
 
 CONF_STRING = json.dumps(CONF)
 
+OS=CONF["OS"]
+ARCH=CONF["ARCH"]
 AR="ar"
 CC="cc"
 CXX="c++"
 CFLAGS = []
 CXXFLAGS = []
+FINAL_LDFLAGS = ["-Wl,-z,stack-size=8388608"]
 
 if "COMPILER_FAMILY" in CONF:
     if CONF["COMPILER_FAMILY"] == "gnu":
@@ -104,6 +109,8 @@ if "ADD_CFLAGS" in CONF:
     CFLAGS=CONF["ADD_CFLAGS"]
 if "ADD_CXXFLAGS" in CONF:
     CXXFLAGS=CONF["ADD_CXXFLAGS"]
+if "FINAL_LDFLAGS" in CONF:
+    FINAL_LDFLAGS+=CONF["FINAL_LDFLAGS"]
 
 BOOTSTRAP_CC = [CXX] + CXXFLAGS + ["-std=c++20", "-DBOOTSTRAP_BUILD_TOOL"]
 
@@ -199,8 +206,11 @@ def setup_deps(src_wrkdir):
             else:
                 os.symlink(os.path.normpath(include_dir),
                            os.path.join(include_location, include_name))
+            os_map = hints.get("os_map", dict())
+            arch_map = hints.get("arch_map", dict())
             if "build" in hints:
                 run(["sh", "-c", hints["build"].format(
+                    os=os_map.get(OS, OS), arch=arch_map.get(ARCH, ARCH),
                     cc=CC, cxx=CXX, ar=AR,
                     cflags=quote(CFLAGS), cxxflags=quote(CXXFLAGS),
                 )], cwd=subdir)
@@ -371,8 +381,8 @@ def bootstrap():
             cmd = BOOTSTRAP_CC + flags + ["-c", f, "-o", obj_file_name]
             ts.submit(run, cmd, cwd=src_wrkdir)
     bootstrap_just = os.path.join(WRKDIR, "bootstrap-just")
-    cmd = BOOTSTRAP_CC + ["-o", bootstrap_just
-                          ] + object_files + dep_flags["link"]
+    cmd = BOOTSTRAP_CC + FINAL_LDFLAGS + ["-o", bootstrap_just
+                                          ] + object_files + dep_flags["link"]
     run(cmd, cwd=src_wrkdir)
     CONF_FILE = os.path.join(WRKDIR, "repo-conf.json")
     LOCAL_ROOT = os.path.join(WRKDIR, ".just")

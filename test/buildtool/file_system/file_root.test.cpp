@@ -25,9 +25,13 @@ namespace {
 
 auto const kBundlePath =
     std::string{"test/buildtool/file_system/data/test_repo.bundle"};
-auto const kTreeId = std::string{"e51a219a27b672ccf17abec7d61eb4d6e0424140"};
+auto const kTreeId = std::string{"c610db170fbcad5f2d66fe19972495923f3b2536"};
 auto const kFooId = std::string{"19102815663d23f8b75a47e7a01965dcdc96468c"};
 auto const kBarId = std::string{"ba0e162e1c47469e3fe4b393a8bf8c569f302116"};
+
+auto const kBundleSymPath =
+    std::string{"test/buildtool/file_system/data/test_repo_symlinks.bundle"};
+auto const kTreeSymId = std::string{"e00aa80fd1600090930c7ec0b7146028693074bf"};
 
 [[nodiscard]] auto GetTestDir() -> std::filesystem::path {
     auto* tmp_dir = std::getenv("TEST_TMPDIR");
@@ -54,6 +58,22 @@ auto const kBarId = std::string{"ba0e162e1c47469e3fe4b393a8bf8c569f302116"};
     return std::nullopt;
 }
 
+[[nodiscard]] auto CreateTestRepoSymlinks(bool do_checkout = false)
+    -> std::optional<std::filesystem::path> {
+    static std::atomic<int> counter{};
+    auto repo_path =
+        GetTestDir() / "test_repo_symlinks" /
+        std::filesystem::path{std::to_string(counter++)}.filename();
+    auto cmd = fmt::format("git clone {}{} {}",
+                           do_checkout ? "--branch master " : "",
+                           QuoteForShell(kBundleSymPath),
+                           QuoteForShell(repo_path.string()));
+    if (std::system(cmd.c_str()) == 0) {
+        return repo_path;
+    }
+    return std::nullopt;
+}
+
 void TestFileRootReadFile(FileRoot const& root) {
     REQUIRE(root.Exists("foo"));
     REQUIRE(root.IsFile("foo"));
@@ -68,7 +88,25 @@ void TestFileRootReadFile(FileRoot const& root) {
     CHECK(*bar == "bar");
 
     REQUIRE(root.Exists("baz"));
-    CHECK_FALSE(root.IsFile("baz"));
+    REQUIRE(root.IsDirectory("baz"));
+
+    // Check subdir
+    REQUIRE(root.Exists("baz/foo"));
+    REQUIRE(root.IsFile("baz/foo"));
+    auto bazfoo = root.ReadFile("baz/foo");
+    REQUIRE(bazfoo);
+    CHECK(*bazfoo == "foo");
+
+    REQUIRE(root.Exists("baz/bar"));
+    REQUIRE(root.IsFile("baz/bar"));
+    auto bazbar = root.ReadFile("baz/bar");
+    REQUIRE(bazbar);
+    CHECK(*bazbar == "bar");
+
+    // Check symlinks are missing
+    CHECK_FALSE(root.Exists("baz_l"));
+    CHECK_FALSE(root.Exists("baz/foo_l"));
+    CHECK_FALSE(root.Exists("baz/bar_l"));
 }
 
 void TestFileRootReadEntries(FileRoot const& root,
@@ -89,8 +127,7 @@ void TestFileRootReadEntries(FileRoot const& root,
 
 void TestFileRootReadDirectory(FileRoot const& root) {
     TestFileRootReadEntries(root, ".", true);
-    TestFileRootReadEntries(root, "baz", true);
-    TestFileRootReadEntries(root, "baz/baz", false);
+    TestFileRootReadEntries(root, "baz", false);
 }
 
 void TestFileRootReadFileType(FileRoot const& root) {
@@ -98,12 +135,25 @@ void TestFileRootReadFileType(FileRoot const& root) {
     REQUIRE(foo_type);
     CHECK(*foo_type == ObjectType::File);
 
-    auto bar_type = root.FileType("baz/baz/bar");
+    auto bar_type = root.FileType("baz/bar");
     REQUIRE(bar_type);
     CHECK(*bar_type == ObjectType::Executable);
 
     CHECK_FALSE(root.FileType("baz"));
     CHECK_FALSE(root.FileType("does_not_exist"));
+
+    // Check subdir
+    REQUIRE(root.Exists("baz/foo"));
+    REQUIRE(root.IsFile("baz/foo"));
+    auto bazfoo = root.ReadFile("baz/foo");
+    REQUIRE(bazfoo);
+    CHECK(*bazfoo == "foo");
+
+    REQUIRE(root.Exists("baz/bar"));
+    REQUIRE(root.IsFile("baz/bar"));
+    auto bazbar = root.ReadFile("baz/bar");
+    REQUIRE(bazbar);
+    CHECK(*bazbar == "bar");
 }
 
 }  // namespace
@@ -127,6 +177,28 @@ TEST_CASE("Creating file root", "[file_root]") {
 
         CHECK_FALSE(FileRoot::FromGit("does_not_exist", kTreeId));
     }
+
+    SECTION("local root ignore-special") {
+        auto root_path = CreateTestRepoSymlinks(true);
+        REQUIRE(root_path);
+
+        CHECK(FileRoot{*root_path, /*ignore_special=*/true}.Exists("."));
+        CHECK_FALSE(
+            FileRoot{"does_not_exist", /*ignore_special=*/true}.Exists("."));
+    }
+
+    SECTION("git root ignore-special") {
+        auto repo_path = CreateTestRepoSymlinks(false);
+        REQUIRE(repo_path);
+
+        auto root =
+            FileRoot::FromGit(*repo_path, kTreeSymId, /*ignore_special=*/true);
+        REQUIRE(root);
+        CHECK(root->Exists("."));
+
+        CHECK_FALSE(FileRoot::FromGit(
+            "does_not_exist", kTreeSymId, /*ignore_special=*/true));
+    }
 }
 
 TEST_CASE("Reading files", "[file_root]") {
@@ -145,6 +217,23 @@ TEST_CASE("Reading files", "[file_root]") {
 
         TestFileRootReadFile(*root);
     }
+
+    SECTION("local root ignore-special") {
+        auto root_path = CreateTestRepoSymlinks(true);
+        REQUIRE(root_path);
+
+        TestFileRootReadFile(FileRoot{*root_path, /*ignore_special=*/true});
+    }
+
+    SECTION("git root ignore-special") {
+        auto repo_path = CreateTestRepoSymlinks(false);
+        REQUIRE(repo_path);
+        auto root =
+            FileRoot::FromGit(*repo_path, kTreeSymId, /*ignore_special=*/true);
+        REQUIRE(root);
+
+        TestFileRootReadFile(*root);
+    }
 }
 
 TEST_CASE("Reading directories", "[file_root]") {
@@ -159,6 +248,24 @@ TEST_CASE("Reading directories", "[file_root]") {
         auto repo_path = CreateTestRepo(false);
         REQUIRE(repo_path);
         auto root = FileRoot::FromGit(*repo_path, kTreeId);
+        REQUIRE(root);
+
+        TestFileRootReadDirectory(*root);
+    }
+
+    SECTION("local root ignore-special") {
+        auto root_path = CreateTestRepoSymlinks(true);
+        REQUIRE(root_path);
+
+        TestFileRootReadDirectory(
+            FileRoot{*root_path, /*ignore_special=*/true});
+    }
+
+    SECTION("git root ignore-special") {
+        auto repo_path = CreateTestRepoSymlinks(false);
+        REQUIRE(repo_path);
+        auto root =
+            FileRoot::FromGit(*repo_path, kTreeSymId, /*ignore_special=*/true);
         REQUIRE(root);
 
         TestFileRootReadDirectory(*root);
@@ -185,6 +292,28 @@ TEST_CASE("Reading blobs", "[file_root]") {
 
         CHECK_FALSE(root->ReadBlob("does_not_exist"));
     }
+
+    SECTION("local root ignore-special") {
+        auto root_path = CreateTestRepoSymlinks(true);
+        REQUIRE(root_path);
+
+        CHECK_FALSE(
+            FileRoot{*root_path, /*ignore_special=*/true}.ReadBlob(kFooId));
+    }
+
+    SECTION("git root ignore-special") {
+        auto repo_path = CreateTestRepoSymlinks(false);
+        REQUIRE(repo_path);
+        auto root =
+            FileRoot::FromGit(*repo_path, kTreeSymId, /*ignore_special=*/true);
+        REQUIRE(root);
+
+        auto foo = root->ReadBlob(kFooId);
+        REQUIRE(foo);
+        CHECK(*foo == "foo");
+
+        CHECK_FALSE(root->ReadBlob("does_not_exist"));
+    }
 }
 
 TEST_CASE("Reading file type", "[file_root]") {
@@ -199,6 +328,23 @@ TEST_CASE("Reading file type", "[file_root]") {
         auto repo_path = CreateTestRepo(false);
         REQUIRE(repo_path);
         auto root = FileRoot::FromGit(*repo_path, kTreeId);
+        REQUIRE(root);
+
+        TestFileRootReadFileType(*root);
+    }
+
+    SECTION("local root ignore-special") {
+        auto root_path = CreateTestRepoSymlinks(true);
+        REQUIRE(root_path);
+
+        TestFileRootReadFileType(FileRoot{*root_path, /*ignore_special=*/true});
+    }
+
+    SECTION("git root ignore-special") {
+        auto repo_path = CreateTestRepoSymlinks(false);
+        REQUIRE(repo_path);
+        auto root =
+            FileRoot::FromGit(*repo_path, kTreeSymId, /*ignore_special=*/true);
         REQUIRE(root);
 
         TestFileRootReadFileType(*root);
@@ -232,7 +378,45 @@ TEST_CASE("Creating artifact descriptions", "[file_root]") {
                                   ObjectType::File,
                                   "repo"});
 
-        auto bar = root->ToArtifactDescription("baz/baz/bar", "repo");
+        auto bar = root->ToArtifactDescription("baz/bar", "repo");
+        REQUIRE(bar);
+        CHECK(*bar ==
+              ArtifactDescription{ArtifactDigest{kBarId, 3, /*is_tree=*/false},
+                                  ObjectType::Executable,
+                                  "repo"});
+
+        CHECK_FALSE(root->ToArtifactDescription("baz", "repo"));
+        CHECK_FALSE(root->ToArtifactDescription("does_not_exist", "repo"));
+    }
+
+    SECTION("local root ignore-special") {
+        auto root_path = CreateTestRepoSymlinks(true);
+        REQUIRE(root_path);
+        auto root = FileRoot{*root_path, /*ignore_special=*/true};
+
+        auto desc = root.ToArtifactDescription("baz/foo", "repo");
+        REQUIRE(desc);
+        CHECK(*desc ==
+              ArtifactDescription(std::filesystem::path{"baz/foo"}, "repo"));
+
+        CHECK(root.ToArtifactDescription("does_not_exist", "repo"));
+    }
+
+    SECTION("git root ignore-special") {
+        auto repo_path = CreateTestRepoSymlinks(false);
+        REQUIRE(repo_path);
+        auto root =
+            FileRoot::FromGit(*repo_path, kTreeSymId, /*ignore_special=*/true);
+        REQUIRE(root);
+
+        auto foo = root->ToArtifactDescription("baz/foo", "repo");
+        REQUIRE(foo);
+        CHECK(*foo ==
+              ArtifactDescription{ArtifactDigest{kFooId, 3, /*is_tree=*/false},
+                                  ObjectType::File,
+                                  "repo"});
+
+        auto bar = root->ToArtifactDescription("baz/bar", "repo");
         REQUIRE(bar);
         CHECK(*bar ==
               ArtifactDescription{ArtifactDigest{kBarId, 3, /*is_tree=*/false},

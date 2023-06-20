@@ -4,20 +4,30 @@
   , "srcs": ["main.cpp"]
   , "deps":
     [ ["@", "catch2", "", "catch2"]
-    , ["test/utils", "log_config"]
-    , ["src/buildtool/file_system", "git_context"]
+    , ["utils", "log_config"]
+    , ["@", "src", "src/buildtool/file_system", "git_context"]
     ]
   , "stage": ["test"]
   }
 , "TESTS":
   { "type": "install"
+  , "arguments_config": ["DROP_LARGE_TESTS"]
   , "tainted": ["test"]
   , "dirs":
-    [ [["./", "buildtool", "TESTS"], "buildtool"]
-    , [["./", "utils", "TESTS"], "utils"]
-    , [["./", "end-to-end", "TESTS"], "end-to-end"]
-    , [["./", "other_tools", "TESTS"], "other_tools"]
-    ]
+    { "type": "++"
+    , "$1":
+      [ [ [["./", "buildtool", "TESTS"], "buildtool"]
+        , [["./", "utils", "TESTS"], "utils"]
+        , [["./", "end-to-end", "TESTS"], "end-to-end"]
+        , [["./", "other_tools", "TESTS"], "other_tools"]
+        ]
+      , { "type": "if"
+        , "cond": {"type": "var", "name": "DROP_LARGE_TESTS"}
+        , "then": []
+        , "else": [["bootstrap-test", "bootstrap"]]
+        }
+      ]
+    }
   }
 , "ALL":
   { "type": "configure"
@@ -66,8 +76,36 @@
     }
   }
 , "bootstrap-test":
-  { "type": "install"
+  { "type": "configure"
   , "tainted": ["test"]
-  , "deps": [["./", "bootstrap", "TESTS"]]
+  , "target": ["./", "bootstrap", "TESTS"]
+  , "config":
+    { "type": "let*"
+    , "bindings": [["TIMEOUT_SCALE", 20.0]]
+    , "body": {"type": "env", "vars": ["TIMEOUT_SCALE"]}
+    }
+  }
+, "test-deps-headers":
+  { "type": ["@", "rules", "CC", "install-with-deps"]
+  , "hdrs-only": ["yes"]
+  , "targets": [["@", "catch2", "", "catch2"]]
+  }
+, "just-ext-hdrs (unconfigured)":
+  { "type": "install"
+  , "dirs":
+    [[["@", "src", "", "just-ext-hdrs"], "."], ["test-deps-headers", "."]]
+  }
+, "just-ext-hdrs":
+  { "type": "configure"
+  , "arguments_config": ["OS", "ARCH"]
+  , "target": "just-ext-hdrs (unconfigured)"
+  , "config":
+    { "type": "let*"
+    , "bindings":
+      [ ["OS", {"type": "var", "name": "OS", "default": "linux"}]
+      , ["ARCH", {"type": "var", "name": "ARCH", "default": "x86_64"}]
+      ]
+    , "body": {"type": "env", "vars": ["OS", "ARCH"]}
+    }
   }
 }

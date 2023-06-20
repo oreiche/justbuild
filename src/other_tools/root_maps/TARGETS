@@ -7,6 +7,7 @@
     [ ["@", "json", "", "json"]
     , ["src/other_tools/ops_maps", "import_to_git_map"]
     , ["src/other_tools/ops_maps", "content_cas_map"]
+    , ["src/utils/cpp", "hash_combine"]
     ]
   , "stage": ["src", "other_tools", "root_maps"]
   , "private-deps":
@@ -20,6 +21,7 @@
     , ["src/buildtool/file_system", "file_storage"]
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
     , ["src/other_tools/just_mr/progress_reporting", "statistics"]
+    , ["src/buildtool/file_system", "file_root"]
     ]
   }
 , "commit_git_map":
@@ -39,6 +41,7 @@
     , ["src/utils/cpp", "tmp_dir"]
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
     , ["src/other_tools/just_mr/progress_reporting", "statistics"]
+    , ["src/buildtool/file_system", "file_root"]
     ]
   }
 , "fpath_git_map":
@@ -49,6 +52,8 @@
   , "deps":
     [ ["src/other_tools/ops_maps", "import_to_git_map"]
     , ["@", "json", "", "json"]
+    , ["src/utils/cpp", "path_hash"]
+    , ["src/utils/cpp", "hash_combine"]
     ]
   , "stage": ["src", "other_tools", "root_maps"]
   , "private-deps":
@@ -56,6 +61,7 @@
     , ["src/buildtool/execution_api/local", "config"]
     , ["src/buildtool/storage", "config"]
     , ["src/utils/cpp", "tmp_dir"]
+    , ["src/buildtool/file_system", "file_root"]
     ]
   }
 , "content_git_map":
@@ -76,6 +82,7 @@
     , ["src/buildtool/storage", "config"]
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
     , ["src/other_tools/just_mr/progress_reporting", "statistics"]
+    , ["src/buildtool/file_system", "file_root"]
     ]
   }
 , "tree_id_git_map":
@@ -86,6 +93,7 @@
   , "deps":
     [ ["@", "json", "", "json"]
     , ["src/other_tools/ops_maps", "critical_git_op_map"]
+    , ["src/utils/cpp", "hash_combine"]
     ]
   , "stage": ["src", "other_tools", "root_maps"]
   , "private-deps":
@@ -100,6 +108,7 @@
     , ["src/other_tools/just_mr/progress_reporting", "statistics"]
     , ["src/other_tools/ops_maps", "content_cas_map"]
     , ["src/other_tools/ops_maps", "import_to_git_map"]
+    , ["src/buildtool/file_system", "file_root"]
     , ["@", "fmt", "", "fmt"]
     ]
   }

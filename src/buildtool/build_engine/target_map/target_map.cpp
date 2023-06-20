@@ -28,6 +28,7 @@
 #include "src/buildtool/build_engine/base_maps/field_reader.hpp"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
 #include "src/buildtool/build_engine/expression/evaluator.hpp"
+#include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/build_engine/expression/function_map.hpp"
 #include "src/buildtool/build_engine/target_map/built_in_rules.hpp"
 #include "src/buildtool/build_engine/target_map/utils.hpp"
@@ -199,7 +200,8 @@ struct TargetData {
             targets.reserve(nodes.size());
             for (auto const& node_expr : nodes) {
                 targets.emplace_back(ExpressionPtr{BuildMaps::Base::EntityName{
-                    BuildMaps::Base::AnonymousTarget{rule_map, node_expr}}});
+                    BuildMaps::Base::AnonymousTarget{
+                        .rule_map = rule_map, .target_node = node_expr}}});
             }
             target_exprs.emplace(field_name, targets);
         }
@@ -268,7 +270,8 @@ void withDependencies(
         declared_and_implicit_count, dependency_values.size(), &anonymous_deps);
     auto deps_info = TargetGraphInformation{
         std::make_shared<BuildMaps::Target::ConfiguredTarget>(
-            BuildMaps::Target::ConfiguredTarget{key.target, effective_conf}),
+            BuildMaps::Target::ConfiguredTarget{.target = key.target,
+                                                .config = effective_conf}),
         declared_deps,
         implicit_deps,
         anonymous_deps};
@@ -551,14 +554,47 @@ void withDependencies(
                   }
               }
               bool no_cache = not no_cache_exp->List().empty();
-              auto action =
-                  BuildMaps::Target::Utils::createAction(outputs,
-                                                         output_dirs,
-                                                         std::move(cmd),
-                                                         env_exp,
-                                                         may_fail,
-                                                         no_cache,
-                                                         inputs_exp);
+              auto timeout_scale_exp =
+                  eval(expr->Get("timeout scaling", Expression::kOne), env);
+              if (not(timeout_scale_exp->IsNumber() or
+                      timeout_scale_exp->IsNone())) {
+                  throw Evaluator::EvaluationError{
+                      fmt::format("timeout scaling has to be number (or null "
+                                  "for default), but found {}",
+                                  timeout_scale_exp->ToString())};
+              }
+              auto execution_properties = eval(
+                  expr->Get("execution properties", Expression::kEmptyMapExpr),
+                  env);
+              if (execution_properties->IsNone()) {
+                  execution_properties = Expression::kEmptyMap;
+              }
+              if (not(execution_properties->IsMap())) {
+                  throw Evaluator::EvaluationError{
+                      fmt::format("execution properties has to be a map of "
+                                  "strings (or null for empty), but found {}",
+                                  execution_properties->ToString())};
+              }
+              for (auto const& [prop_name, prop_value] :
+                   execution_properties->Map()) {
+                  if (not prop_value->IsString()) {
+                      throw Evaluator::EvaluationError{fmt::format(
+                          "execution properties has to be a map of "
+                          "strings (or null for empty), but found {}",
+                          execution_properties->ToString())};
+                  }
+              }
+              auto action = BuildMaps::Target::Utils::createAction(
+                  outputs,
+                  output_dirs,
+                  std::move(cmd),
+                  env_exp,
+                  may_fail,
+                  no_cache,
+                  timeout_scale_exp->IsNumber() ? timeout_scale_exp->Number()
+                                                : 1.0,
+                  execution_properties,
+                  inputs_exp);
               auto action_id = action->Id();
               actions.emplace_back(std::move(action));
               for (auto const& out : outputs) {
@@ -702,10 +738,10 @@ void withDependencies(
               check_entries(
                   target_fields, is_node, "target_fields", "target node");
 
-              return ExpressionPtr{
-                  TargetNode{TargetNode::Abstract{type->String(),
-                                                  std::move(string_fields),
-                                                  std::move(target_fields)}}};
+              return ExpressionPtr{TargetNode{TargetNode::Abstract{
+                  .node_type = type->String(),
+                  .string_fields = std::move(string_fields),
+                  .target_fields = std::move(target_fields)}}};
           }},
          {"RESULT", [](auto&& eval, auto const& expr, auto const& env) {
               auto const& empty_map_exp = Expression::kEmptyMapExpr;
@@ -774,7 +810,9 @@ void withDependencies(
                       fmt::format("provides has to be a map, but found {}",
                                   provides->ToString())};
               }
-              return ExpressionPtr{TargetResult{artifacts, provides, runfiles}};
+              return ExpressionPtr{TargetResult{.artifact_stage = artifacts,
+                                                .provides = provides,
+                                                .runfiles = runfiles}};
           }}});
 
     auto result = rule->Expression()->Evaluate(
@@ -1024,11 +1062,12 @@ void withRuleDefinition(
                 }
 
                 dependency_keys.emplace_back(
-                    BuildMaps::Target::ConfiguredTarget{dep->Name(),
-                                                        transitioned_config});
+                    BuildMaps::Target::ConfiguredTarget{
+                        .target = dep->Name(), .config = transitioned_config});
                 transition_keys.emplace_back(
                     BuildMaps::Target::ConfiguredTarget{
-                        dep->Name(), Configuration{transition}});
+                        .target = dep->Name(),
+                        .config = Configuration{transition}});
             }
         }
         params.emplace(target_field_name,
@@ -1047,11 +1086,11 @@ void withRuleDefinition(
                 }
 
                 dependency_keys.emplace_back(
-                    BuildMaps::Target::ConfiguredTarget{dep,
-                                                        transitioned_config});
+                    BuildMaps::Target::ConfiguredTarget{
+                        .target = dep, .config = transitioned_config});
                 transition_keys.emplace_back(
                     BuildMaps::Target::ConfiguredTarget{
-                        dep, Configuration{transition}});
+                        .target = dep, .config = Configuration{transition}});
             }
         }
     }
@@ -1117,8 +1156,9 @@ void withRuleDefinition(
                             return;
                         }
                         anon_names.emplace_back(BuildMaps::Base::EntityName{
-                            BuildMaps::Base::AnonymousTarget{def.rule_map,
-                                                             node}});
+                            BuildMaps::Base::AnonymousTarget{
+                                .rule_map = def.rule_map,
+                                .target_node = node}});
                     }
                 }
 
@@ -1128,11 +1168,13 @@ void withRuleDefinition(
                     for (auto const& anon : anon_names) {
                         anonymous_keys.emplace_back(
                             BuildMaps::Target::ConfiguredTarget{
-                                anon->Name(), transitioned_config});
+                                .target = anon->Name(),
+                                .config = transitioned_config});
 
                         transition_keys.emplace_back(
                             BuildMaps::Target::ConfiguredTarget{
-                                anon->Name(), Configuration{transition}});
+                                .target = anon->Name(),
+                                .config = Configuration{transition}});
                     }
                 }
 
@@ -1393,7 +1435,9 @@ void TreeTarget(
                     Expression::map_t{target.name, ExpressionPtr{*known_tree}}};
 
                 auto analysis_result = std::make_shared<AnalysedTarget const>(
-                    TargetResult{tree, {}, tree},
+                    TargetResult{.artifact_stage = tree,
+                                 .provides = {},
+                                 .runfiles = tree},
                     std::vector<ActionDescription::Ptr>{},
                     std::vector<std::string>{},
                     std::vector<Tree::Ptr>{},
@@ -1417,23 +1461,25 @@ void TreeTarget(
             std::vector<ConfiguredTarget> v;
 
             for (const auto& x : dir_entries.FilesIterator()) {
-                v.emplace_back(
-                    ConfiguredTarget{BuildMaps::Base::EntityName{
-                                         target.repository,
-                                         dir_name,
-                                         x,
-                                         BuildMaps::Base::ReferenceType::kFile},
-                                     Configuration{}});
+                v.emplace_back(ConfiguredTarget{
+                    .target =
+                        BuildMaps::Base::EntityName{
+                            target.repository,
+                            dir_name,
+                            x,
+                            BuildMaps::Base::ReferenceType::kFile},
+                    .config = Configuration{}});
             }
 
             for (const auto& x : dir_entries.DirectoriesIterator()) {
-                v.emplace_back(
-                    ConfiguredTarget{BuildMaps::Base::EntityName{
-                                         target.repository,
-                                         dir_name,
-                                         x,
-                                         BuildMaps::Base::ReferenceType::kTree},
-                                     Configuration{}});
+                v.emplace_back(ConfiguredTarget{
+                    .target =
+                        BuildMaps::Base::EntityName{
+                            target.repository,
+                            dir_name,
+                            x,
+                            BuildMaps::Base::ReferenceType::kTree},
+                    .config = Configuration{}});
             }
             (*subcaller)(
                 std::move(v),
@@ -1463,7 +1509,9 @@ void TreeTarget(
                         name, ExpressionPtr{ArtifactDescription{tree_id}}}};
                     auto analysis_result =
                         std::make_shared<AnalysedTarget const>(
-                            TargetResult{tree_map, {}, tree_map},
+                            TargetResult{.artifact_stage = tree_map,
+                                         .provides = {},
+                                         .runfiles = tree_map},
                             std::vector<ActionDescription::Ptr>{},
                             std::vector<std::string>{},
                             std::vector<Tree::Ptr>{tree},
@@ -1494,7 +1542,9 @@ void GlobResult(const std::vector<AnalysedTargetPtr const*>& values,
     }
     auto stage = ExpressionPtr{Expression::map_t{result}};
     auto target = std::make_shared<AnalysedTarget const>(
-        TargetResult{stage, Expression::kEmptyMap, stage},
+        TargetResult{.artifact_stage = stage,
+                     .provides = Expression::kEmptyMap,
+                     .runfiles = stage},
         std::vector<ActionDescription::Ptr>{},
         std::vector<std::string>{},
         std::vector<Tree::Ptr>{},

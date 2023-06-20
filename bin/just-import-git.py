@@ -163,6 +163,8 @@ def extra_layers_to_import(repos_config, repos):
     as layers for the repositories to import."""
     extra_imports = set()
     for repo in repos:
+        if isinstance(repos_config[repo]["repository"], str):
+            extra_imports.add(repos_config[repo]["repository"])
         for layer in ["target_root", "rule_root", "expression_root"]:
             if layer in repos_config[repo]:
                 extra = repos_config[repo][layer]
@@ -230,8 +232,14 @@ def handle_import(args):
         foreign_config_file = args.foreign_repository_config
     else:
         foreign_config_file = get_repository_config_file(srcdir)
-    with open(foreign_config_file) as f:
-        foreign_config = json.load(f)
+    if args.plain:
+        foreign_config = { "main": "",
+                           "repositories": {"": {"repository":
+                                                 {"type": "file",
+                                                  "path": "." }}}}
+    else:
+        with open(foreign_config_file) as f:
+            foreign_config = json.load(f)
     foreign_repos = foreign_config.get("repositories", {})
     if args.foreign_repository_name:
         foreign_name = args.foreign_repository_name
@@ -292,6 +300,13 @@ def main():
         dest="foreign_repository_config",
         help="Repository-description file in the repository to import",
         metavar="relative-path"
+    )
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        help=
+        "Pretend the remote repository description is the canonical"
+        + " single-repository one",
     )
     parser.add_argument(
         "--as",

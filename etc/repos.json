@@ -4,7 +4,6 @@
     { "repository": {"type": "file", "path": "."}
     , "bindings":
       { "rules": "rules-just"
-      , "just-distfiles": "just-distfiles"
       , "gsl": "com_github_microsoft_gsl"
       , "cli11": "cli11"
       , "json": "json"
@@ -14,13 +13,31 @@
       , "googleapis": "google_apis"
       , "bazel_remote_apis": "bazel_remote_apis"
       , "libgit2": "com_github_libgit2_libgit2"
-      , "catch2": "catch2"
       , "protoc": "protobuf"
       , "libcurl": "com_github_curl_curl"
       , "libarchive": "com_github_libarchive_libarchive"
       }
     , "bootstrap": {"link": ["-pthread"]}
     , "bootstrap_local": {"link": ["-pthread"]}
+    }
+  , "just tests":
+    { "repository": {"type": "file", "path": "test"}
+    , "bindings":
+      { "src": "just"
+      , "rules": "rules-just"
+      , "just-distfiles": "just-distfiles"
+      , "catch2": "catch2"
+      , "gsl": "com_github_microsoft_gsl"
+      , "cli11": "cli11"
+      , "json": "json"
+      , "fmt": "fmt"
+      , "ssl": "ssl"
+      , "grpc": "com_github_grpc_grpc"
+      , "googleapis": "google_apis"
+      , "bazel_remote_apis": "bazel_remote_apis"
+      , "libgit2": "com_github_libgit2_libgit2"
+      , "protoc": "protobuf"
+      }
     }
   , "just-distfiles":
     { "repository":
@@ -45,6 +62,11 @@
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.distfiles"
     }
+  , "toolchain":
+    { "repository":
+      {"type": "file", "path": "etc/toolchain", "pragma": {"to_git": true}}
+    , "rule_root": "rules"
+    }
   , "defaults":
     { "repository":
       {"type": "file", "path": "etc/defaults", "pragma": {"to_git": true}}
@@ -58,6 +80,7 @@
       {"type": "file", "path": "rules", "pragma": {"to_git": true}}
     , "target_root": "defaults"
     , "rule_root": "rules"
+    , "bindings": {"toolchain": "toolchain"}
     }
   , "rules-just":
     { "repository": "rules"
@@ -121,6 +144,13 @@
     , "target_root": "defaults"
     , "rule_root": "rules"
     , "target_file_name": "TARGETS.bzip2"
+    , "bindings": {"base": "rules"}
+    }
+  , "rules-lzma":
+    { "repository": "rules"
+    , "target_root": "defaults"
+    , "rule_root": "rules"
+    , "target_file_name": "TARGETS.lzma"
     , "bindings": {"base": "rules"}
     }
   , "rules-archive":
@@ -210,7 +240,8 @@
     , "target_file_name": "TARGETS.boringssl"
     , "bindings": {"rules": "rules-boringssl"}
     , "bootstrap":
-      { "build": "SYS=`uname -s | tr 'A-Z' 'a-z'` && ARCH=`uname -m` && {cc} {cflags} -I . -I src/include -c *.c src/crypto/*.c  src/crypto/*/*.c $SYS-$ARCH/crypto/fipsmodule/*.S && {ar} cqs libcrypto.a *.o"
+      { "arch_map": {"arm64": "aarch64"}
+      , "build": "{cc} {cflags} -I . -I src/include -c *.c src/crypto/*.c  src/crypto/*/*.c {os}-{arch}/crypto/fipsmodule/*.S && {ar} cqs libcrypto.a *.o"
       , "link": ["-lcrypto", "-pthread"]
       , "include_dir": "src/include/openssl"
       , "include_name": "openssl"
@@ -300,6 +331,20 @@
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.bzip2"
     , "bindings": {"rules": "rules-bzip2"}
+    , "bootstrap": {"drop": true}
+    }
+  , "lzma":
+    { "repository":
+      { "type": "archive"
+      , "content": "6dae9322046ff66b7074c33b24be9a98f5cee42a"
+      , "fetch": "https://github.com/xz-mirror/xz/archive/refs/tags/v5.4.0.tar.gz"
+      , "sha256": "26ec069c41e5dfae221825b9f28a4934cb6ce3bedd3f55bc0a08073f7c2e42fd"
+      , "sha512": "60aba20197d329a1e0d86b32de8a9727a98e5ff6f1eda6111c5ddf85086edeefcf9e2cc3998d237e248bf4af7cf746923b45d236e6b47d88f63cf3d57cae9e8f"
+      , "subdir": "xz-5.4.0"
+      }
+    , "target_root": "import targets"
+    , "target_file_name": "TARGETS.lzma"
+    , "bindings": {"rules": "rules-lzma"}
     , "bootstrap": {"drop": true}
     }
   , "re2":
@@ -423,6 +468,7 @@
       , "zlib": "zlib"
       , "ssl": "ssl"
       , "bzip2": "bzip2"
+      , "lzma": "lzma"
       }
     , "bootstrap": {"drop": true}
     }

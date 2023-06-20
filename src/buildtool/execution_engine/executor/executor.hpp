@@ -36,6 +36,23 @@
 #include "src/buildtool/progress_reporting/progress.hpp"
 #include "src/utils/cpp/hex_string.hpp"
 
+namespace detail {
+static inline auto scale_time(std::chrono::milliseconds t, double f)
+    -> std::chrono::milliseconds {
+    return std::chrono::milliseconds(std::lround(t.count() * f));
+}
+
+static inline auto merge_properties(
+    const std::map<std::string, std::string>& base,
+    const std::map<std::string, std::string>& overlay) {
+    std::map<std::string, std::string> result = base;
+    for (auto const& [k, v] : overlay) {
+        result[k] = v;
+    }
+    return result;
+}
+}  // namespace detail
+
 /// \brief Implementations for executing actions and uploading artifacts.
 class ExecutorImpl {
   public:
@@ -392,7 +409,8 @@ class ExecutorImpl {
                                          IsExecutableObject(*object_type)}}})) {
             return std::nullopt;
         }
-        return Artifact::ObjectInfo{std::move(digest), *object_type};
+        return Artifact::ObjectInfo{.digest = std::move(digest),
+                                    .type = *object_type};
     }
 
     /// \brief Add digests and object type to artifact nodes for all outputs of
@@ -579,8 +597,9 @@ class Executor {
             logger,
             action,
             remote_api_,
-            properties_,
-            timeout_,
+            detail::merge_properties(properties_,
+                                     action->ExecutionProperties()),
+            detail::scale_time(timeout_, action->TimeoutScale()),
             action->NoCache() ? CF::DoNotCacheOutput : CF::CacheOutput);
 
         // check response and save digests of results
@@ -633,24 +652,28 @@ class Rebuilder {
         const noexcept -> bool {
         auto const& action_id = action->Content().Id();
         Logger logger("rebuild:" + action_id);
-        auto response = Impl::ExecuteAction(logger,
-                                            action,
-                                            remote_api_,
-                                            properties_,
-                                            timeout_,
-                                            CF::PretendCached);
+        auto response = Impl::ExecuteAction(
+            logger,
+            action,
+            remote_api_,
+            detail::merge_properties(properties_,
+                                     action->ExecutionProperties()),
+            detail::scale_time(timeout_, action->TimeoutScale()),
+            CF::PretendCached);
 
         if (not response) {
             return true;  // action without response (e.g., tree action)
         }
 
         Logger logger_cached("cached:" + action_id);
-        auto response_cached = Impl::ExecuteAction(logger_cached,
-                                                   action,
-                                                   api_cached_,
-                                                   properties_,
-                                                   timeout_,
-                                                   CF::FromCacheOnly);
+        auto response_cached = Impl::ExecuteAction(
+            logger_cached,
+            action,
+            api_cached_,
+            detail::merge_properties(properties_,
+                                     action->ExecutionProperties()),
+            detail::scale_time(timeout_, action->TimeoutScale()),
+            CF::FromCacheOnly);
 
         if (not response_cached) {
             logger_cached.Emit(LogLevel::Error,

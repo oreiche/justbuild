@@ -14,6 +14,7 @@
 
 #include "src/other_tools/root_maps/content_git_map.hpp"
 
+#include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
@@ -31,7 +32,7 @@ namespace {
     -> std::optional<std::string> {
     if (repo_type == "archive") {
         return ArchiveOps::ExtractArchive(
-            ArchiveType::kArchiveTypeTarGz, archive, dst_dir);
+            ArchiveType::kArchiveTypeTar, archive, dst_dir);
     }
     if (repo_type == "zip") {
         return ArchiveOps::ExtractArchive(
@@ -68,19 +69,21 @@ auto CreateContentGitMap(
             }
             // ensure Git cache
             // define Git operation to be done
-            GitOpKey op_key = {{
-                                   StorageConfig::GitRoot(),  // target_path
-                                   "",                        // git_hash
-                                   "",                        // branch
-                                   std::nullopt,              // message
-                                   true                       // init_bare
-                               },
-                               GitOpType::ENSURE_INIT};
+            GitOpKey op_key = {.params =
+                                   {
+                                       StorageConfig::GitRoot(),  // target_path
+                                       "",                        // git_hash
+                                       "",                        // branch
+                                       std::nullopt,              // message
+                                       true                       // init_bare
+                                   },
+                               .op_type = GitOpType::ENSURE_INIT};
             critical_git_op_map->ConsumeAfterKeysReady(
                 ts,
                 {std::move(op_key)},
                 [archive_tree_id = *archive_tree_id,
                  subdir = key.subdir,
+                 ignore_special = key.ignore_special,
                  setter,
                  logger](auto const& values) {
                     GitOpValue op_result = *values[0];
@@ -114,12 +117,14 @@ auto CreateContentGitMap(
                         return;
                     }
                     // set the workspace root
-                    (*setter)(
-                        std::pair(nlohmann::json::array(
-                                      {"git tree",
-                                       *subtree_hash,
-                                       StorageConfig::GitRoot().string()}),
-                                  true));
+                    (*setter)(std::pair(
+                        nlohmann::json::array(
+                            {ignore_special
+                                 ? FileRoot::kGitTreeIgnoreSpecialMarker
+                                 : FileRoot::kGitTreeMarker,
+                             *subtree_hash,
+                             StorageConfig::GitRoot().string()}),
+                        true));
                 },
                 [logger, target_path = StorageConfig::GitRoot()](
                     auto const& msg, bool fatal) {
@@ -140,6 +145,7 @@ auto CreateContentGitMap(
                  repo_type = key.repo_type,
                  content_id = key.archive.content,
                  subdir = key.subdir,
+                 ignore_special = key.ignore_special,
                  origin = key.archive.origin,
                  import_to_git_map,
                  ts,
@@ -181,6 +187,7 @@ auto CreateContentGitMap(
                         [tmp_dir,  // keep tmp_dir alive
                          archive_tree_id_file,
                          subdir,
+                         ignore_special,
                          origin,
                          setter,
                          logger](auto const& values) {
@@ -241,7 +248,9 @@ auto CreateContentGitMap(
                             // set the workspace root
                             (*setter)(std::pair(
                                 nlohmann::json::array(
-                                    {"git tree",
+                                    {ignore_special
+                                         ? FileRoot::kGitTreeIgnoreSpecialMarker
+                                         : FileRoot::kGitTreeMarker,
                                      *subtree_hash,
                                      StorageConfig::GitRoot().string()}),
                                 false));

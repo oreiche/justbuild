@@ -377,6 +377,15 @@ class DependencyGraph : DirectedAcyclicGraph {
             return Content().MayFail();
         }
 
+        [[nodiscard]] auto TimeoutScale() const -> double {
+            return Content().TimeoutScale();
+        }
+
+        [[nodiscard]] auto ExecutionProperties() const
+            -> std::map<std::string, std::string> {
+            return Content().ExecutionProperties();
+        }
+
         [[nodiscard]] auto NoCache() const -> bool {
             return Content().NoCache();
         }

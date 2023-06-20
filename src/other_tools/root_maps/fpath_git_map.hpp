@@ -17,30 +17,40 @@
 
 #include "nlohmann/json.hpp"
 #include "src/other_tools/ops_maps/import_to_git_map.hpp"
+#include "src/utils/cpp/hash_combine.hpp"
+#include "src/utils/cpp/path_hash.hpp"
 
-/// \brief Maps the path to a repo on the file system to its Git tree WS root.
-using FilePathGitMap = AsyncMapConsumer<std::filesystem::path, nlohmann::json>;
+struct FpathInfo {
+    std::filesystem::path fpath{}; /* key */
+    // create root that ignores symlinks
+    bool ignore_special{}; /* key */
 
-#if (defined(__GLIBCXX__) and _GLIBCXX_RELEASE < 12) or \
-    (defined(_LIBCPP_VERSION) and _LIBCPP_VERSION < 16000)
-// std::hash<std::filesystem::path> is missing for
-// - GNU's libstdc++ < 12
-// - LLVM's libcxx < 16 (see https://reviews.llvm.org/D125394)
-namespace std {
-template <>
-struct hash<std::filesystem::path> {
-    [[nodiscard]] auto operator()(
-        std::filesystem::path const& ct) const noexcept -> std::size_t {
-        return std::filesystem::hash_value(ct);
+    [[nodiscard]] auto operator==(const FpathInfo& other) const noexcept
+        -> bool {
+        return fpath == other.fpath and ignore_special == other.ignore_special;
     }
 };
-}  // namespace std
-#endif
+
+/// \brief Maps the path to a repo on the file system to its Git tree WS root.
+using FilePathGitMap = AsyncMapConsumer<FpathInfo, nlohmann::json>;
 
 [[nodiscard]] auto CreateFilePathGitMap(
     std::optional<std::string> const& current_subcmd,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     std::size_t jobs) -> FilePathGitMap;
+
+namespace std {
+template <>
+struct hash<FpathInfo> {
+    [[nodiscard]] auto operator()(FpathInfo const& ct) const noexcept
+        -> std::size_t {
+        size_t seed{};
+        hash_combine<std::filesystem::path>(&seed, ct.fpath);
+        hash_combine<bool>(&seed, ct.ignore_special);
+        return seed;
+    }
+};
+}  // namespace std
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_ROOT_MAPS_FPATH_GIT_MAP_HPP
