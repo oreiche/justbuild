@@ -175,21 +175,21 @@ class FileRoot {
         explicit DirectoryEntries(tree_t const& git_tree) noexcept
             : data_{git_tree} {}
 
-        [[nodiscard]] auto ContainsFile(std::string const& name) const noexcept
+        [[nodiscard]] auto ContainsBlob(std::string const& name) const noexcept
             -> bool {
             try {
                 if (std::holds_alternative<tree_t>(data_)) {
                     auto const& data = std::get<tree_t>(data_);
                     auto ptr = data->LookupEntryByName(name);
                     if (static_cast<bool>(ptr)) {
-                        return ptr->IsBlob();
+                        return IsBlobObject(ptr->Type());
                     }
                     return false;
                 }
                 if (std::holds_alternative<pairs_t>(data_)) {
                     auto const& data = std::get<pairs_t>(data_);
                     auto it = data.find(name);
-                    return (it != data.end() and IsFileObject(it->second));
+                    return (it != data.end() and IsBlobObject(it->second));
                 }
             } catch (...) {
             }
@@ -213,8 +213,7 @@ class FileRoot {
         }
 
         /// \brief Retrieve a root tree as a KNOWN artifact.
-        /// User should know whether this root tree is symlink free and only
-        /// call this function accordingly.
+        /// Only succeeds if no entries have to be ignored.
         [[nodiscard]] auto AsKnownTree(std::string const& repository)
             const noexcept -> std::optional<ArtifactDescription> {
             if (Compatibility::IsCompatible()) {
@@ -223,6 +222,10 @@ class FileRoot {
             if (std::holds_alternative<tree_t>(data_)) {
                 try {
                     auto const& data = std::get<tree_t>(data_);
+                    // check if tree is ignore_special
+                    if (data->RawHash().empty()) {
+                        return std::nullopt;
+                    }
                     auto const& id = data->Hash();
                     auto const& size = data->Size();
                     if (size) {
@@ -250,7 +253,23 @@ class FileRoot {
             auto const& data = std::get<tree_t>(data_);
             return Iterator{FilteredIterator{
                 data->begin(), data->end(), [](auto const& x) noexcept -> bool {
-                    return x.second->IsBlob();
+                    return IsFileObject(x.second->Type());
+                }}};
+        }
+
+        [[nodiscard]] auto SymlinksIterator() const -> Iterator {
+            if (std::holds_alternative<pairs_t>(data_)) {
+                auto const& data = std::get<pairs_t>(data_);
+                return Iterator{FilteredIterator{
+                    data.begin(), data.end(), [](auto const& x) {
+                        return IsSymlinkObject(x.second);
+                    }}};
+            }
+            // std::holds_alternative<tree_t>(data_) == true
+            auto const& data = std::get<tree_t>(data_);
+            return Iterator{FilteredIterator{
+                data->begin(), data->end(), [](auto const& x) noexcept -> bool {
+                    return IsSymlinkObject(x.second->Type());
                 }}};
         }
 
@@ -325,7 +344,7 @@ class FileRoot {
     }
 
     // Indicates that subsequent calls to `Exists()`, `IsFile()`,
-    // `IsDirectory()`, and `FileType()` on contents of the same directory will
+    // `IsDirectory()`, and `BlobType()` on contents of the same directory will
     // be served without any additional file system lookups.
     [[nodiscard]] auto HasFastDirectoryLookup() const noexcept -> bool {
         return std::holds_alternative<git_root_t>(root_);
@@ -343,8 +362,8 @@ class FileRoot {
         // std::holds_alternative<fs_root_t>(root_) == true
         auto root_path = std::get<fs_root_t>(root_) / path;
         auto exists = FileSystemManager::Exists(root_path);
-        return (ignore_special_ ? exists and FileSystemManager::Type(
-                                                 root_path) != std::nullopt
+        auto type = FileSystemManager::Type(root_path);
+        return (ignore_special_ ? exists and type and IsNonSpecialObject(*type)
                                 : exists);
     }
 
@@ -354,12 +373,31 @@ class FileRoot {
             if (auto entry =
                     std::get<git_root_t>(root_).tree->LookupEntryByPath(
                         file_path)) {
-                return entry->IsBlob();
+                return IsFileObject(entry->Type());
             }
             return false;
         }
         return FileSystemManager::IsFile(std::get<fs_root_t>(root_) /
                                          file_path);
+    }
+
+    [[nodiscard]] auto IsSymlink(
+        std::filesystem::path const& file_path) const noexcept -> bool {
+        if (std::holds_alternative<git_root_t>(root_)) {
+            if (auto entry =
+                    std::get<git_root_t>(root_).tree->LookupEntryByPath(
+                        file_path)) {
+                return IsSymlinkObject(entry->Type());
+            }
+            return false;
+        }
+        return FileSystemManager::IsNonUpwardsSymlink(
+            std::get<fs_root_t>(root_) / file_path);
+    }
+
+    [[nodiscard]] auto IsBlob(
+        std::filesystem::path const& file_path) const noexcept -> bool {
+        return IsFile(file_path) or IsSymlink(file_path);
     }
 
     [[nodiscard]] auto IsDirectory(
@@ -379,18 +417,26 @@ class FileRoot {
                                               dir_path);
     }
 
-    [[nodiscard]] auto ReadFile(std::filesystem::path const& file_path)
+    /// \brief Read content of file or symlink.
+    [[nodiscard]] auto ReadContent(std::filesystem::path const& file_path)
         const noexcept -> std::optional<std::string> {
         if (std::holds_alternative<git_root_t>(root_)) {
             if (auto entry =
                     std::get<git_root_t>(root_).tree->LookupEntryByPath(
                         file_path)) {
-                return entry->Blob();
+                if (IsBlobObject(entry->Type())) {
+                    return entry->Blob();
+                }
             }
             return std::nullopt;
         }
-        return FileSystemManager::ReadFile(std::get<fs_root_t>(root_) /
-                                           file_path);
+        auto full_path = std::get<fs_root_t>(root_) / file_path;
+        if (auto type = FileSystemManager::Type(full_path)) {
+            return IsSymlinkObject(*type)
+                       ? FileSystemManager::ReadSymlink(full_path)
+                       : FileSystemManager::ReadFile(full_path);
+        }
+        return std::nullopt;
     }
 
     [[nodiscard]] auto ReadDirectory(std::filesystem::path const& dir_path)
@@ -428,13 +474,13 @@ class FileRoot {
         return DirectoryEntries{DirectoryEntries::pairs_t{}};
     }
 
-    [[nodiscard]] auto FileType(std::filesystem::path const& file_path)
+    [[nodiscard]] auto BlobType(std::filesystem::path const& file_path)
         const noexcept -> std::optional<ObjectType> {
         if (std::holds_alternative<git_root_t>(root_)) {
             if (auto entry =
                     std::get<git_root_t>(root_).tree->LookupEntryByPath(
                         file_path)) {
-                if (entry->IsBlob()) {
+                if (IsBlobObject(entry->Type())) {
                     return entry->Type();
                 }
             }
@@ -442,7 +488,7 @@ class FileRoot {
         }
         auto type =
             FileSystemManager::Type(std::get<fs_root_t>(root_) / file_path);
-        if (type and IsFileObject(*type)) {
+        if (type and IsBlobObject(*type)) {
             return type;
         }
         return std::nullopt;
@@ -459,11 +505,10 @@ class FileRoot {
     }
 
     /// \brief Read a root tree based on its ID.
-    /// User should know whether the desired tree is symlink free and only call
-    /// this function accordingly.
+    /// This should include all valid entry types.
     [[nodiscard]] auto ReadTree(std::string const& tree_id) const noexcept
         -> std::optional<GitTree> {
-        if (std::holds_alternative<git_root_t>(root_) and not ignore_special_) {
+        if (std::holds_alternative<git_root_t>(root_)) {
             try {
                 auto const& cas = std::get<git_root_t>(root_).cas;
                 return GitTree::Read(cas, tree_id);

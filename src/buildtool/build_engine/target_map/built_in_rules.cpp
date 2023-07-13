@@ -42,7 +42,9 @@ auto const kGenericRuleFields =
                                     "cmds",
                                     "deps",
                                     "env",
+                                    "execution properties",
                                     "tainted",
+                                    "timeout scaling",
                                     "type",
                                     "out_dirs",
                                     "outs"};
@@ -1022,6 +1024,7 @@ void GenericRuleWithDeps(
             fmt::format("env has to evaluate to map of strings, but found {}",
                         env_val->ToString()),
             true);
+        return;
     }
     for (auto const& [var_name, x] : env_val->Map()) {
         if (not x->IsString()) {
@@ -1029,6 +1032,64 @@ void GenericRuleWithDeps(
                                   "found entry {}",
                                   x->ToString()),
                       true);
+            return;
+        }
+    }
+
+    auto scale_exp =
+        desc->ReadOptionalExpression("timeout scaling", Expression::kOne);
+    if (not scale_exp) {
+        return;
+    }
+    auto scale_val = scale_exp.Evaluate(
+        param_config, string_fields_fcts, [&logger](auto const& msg) {
+            (*logger)(fmt::format("While evaluating timeout scaling:\n{}", msg),
+                      true);
+        });
+    if (not scale_val) {
+        return;
+    }
+    if (not(scale_val->IsNumber() or scale_val->IsNone())) {
+        (*logger)(fmt::format("timeout scaling has evaluate to a number (or "
+                              "null for default), but found {}",
+                              scale_val->ToString()),
+                  true);
+        return;
+    }
+
+    auto props_exp = desc->ReadOptionalExpression("execution properties",
+                                                  Expression::kEmptyMapExpr);
+    if (not props_exp) {
+        return;
+    }
+    auto props_val = props_exp.Evaluate(
+        param_config, string_fields_fcts, [&logger](auto const& msg) {
+            (*logger)(
+                fmt::format("While evaluating execution properties:\n{}", msg),
+                true);
+        });
+    if (not props_val) {
+        return;
+    }
+    if (props_val->IsNone()) {
+        props_val = Expression::kEmptyMap;
+    }
+    if (not props_val->IsMap()) {
+        (*logger)(fmt::format("execution properties has to evaluate to a map "
+                              "(or null for default), but found {}",
+                              props_val->ToString()),
+                  true);
+        return;
+    }
+    for (auto const& [prop_name, prop_val] : props_val->Map()) {
+        if (not prop_val->IsString()) {
+            (*logger)(
+                fmt::format("execution properties has to evaluate to a map (or "
+                            "null for default), but found {} for key {}",
+                            nlohmann::json(prop_name).dump(),
+                            prop_val->ToString()),
+                true);
+            return;
         }
     }
 
@@ -1043,16 +1104,16 @@ void GenericRuleWithDeps(
     }
 
     // Construct our single action, and its artifacts
-    auto action =
-        BuildMaps::Target::Utils::createAction(outs,
-                                               out_dirs,
-                                               {"sh", "-c", cmd_ss.str()},
-                                               env_val,
-                                               std::nullopt,
-                                               false,
-                                               1.0,
-                                               Expression::kEmptyMap,
-                                               inputs);
+    auto action = BuildMaps::Target::Utils::createAction(
+        outs,
+        out_dirs,
+        {"sh", "-c", cmd_ss.str()},
+        env_val,
+        std::nullopt,
+        false,
+        scale_val->IsNumber() ? scale_val->Number() : 1.0,
+        props_val,
+        inputs);
     auto action_identifier = action->Id();
     Expression::map_t::underlying_map_t artifacts;
     for (const auto& container : {outs, out_dirs}) {

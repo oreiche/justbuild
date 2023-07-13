@@ -17,6 +17,8 @@
 #include <thread>
 #include <unordered_set>
 
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/gsl.hpp"
 #include "src/utils/cpp/hex_string.hpp"
@@ -30,7 +32,8 @@ extern "C" {
 #ifndef BOOTSTRAP_BUILD_TOOL
 namespace {
 
-std::unordered_set<git_filemode_t> const kSupportedGitFileModes{
+/// \brief libgit2 file modes corresponding to non-special entries.
+std::unordered_set<git_filemode_t> const kNonSpecialGitFileModes{
     GIT_FILEMODE_BLOB,
     GIT_FILEMODE_BLOB_EXECUTABLE,
     GIT_FILEMODE_TREE};
@@ -53,9 +56,9 @@ std::unordered_set<git_filemode_t> const kSupportedGitFileModes{
 }
 
 /// \brief Returns true if mode corresponds to a supported object type.
-[[nodiscard]] auto GitFileModeIsSupported(git_filemode_t const& mode) noexcept
+[[nodiscard]] auto GitFileModeIsNonSpecial(git_filemode_t const& mode) noexcept
     -> bool {
-    return kSupportedGitFileModes.contains(mode);
+    return kNonSpecialGitFileModes.contains(mode);
 }
 
 [[nodiscard]] auto GitFileModeToObjectType(git_filemode_t const& mode) noexcept
@@ -67,6 +70,8 @@ std::unordered_set<git_filemode_t> const kSupportedGitFileModes{
             return ObjectType::Executable;
         case GIT_FILEMODE_TREE:
             return ObjectType::Tree;
+        case GIT_FILEMODE_LINK:
+            return ObjectType::Symlink;  // condition not tested here
         default: {
             std::ostringstream str;
             str << std::oct << static_cast<int>(mode);
@@ -86,6 +91,8 @@ std::unordered_set<git_filemode_t> const kSupportedGitFileModes{
             return GIT_FILEMODE_BLOB_EXECUTABLE;
         case ObjectType::Tree:
             return GIT_FILEMODE_TREE;
+        case ObjectType::Symlink:
+            return GIT_FILEMODE_LINK;
     }
     return GIT_FILEMODE_UNREADABLE;  // make gcc happy
 }
@@ -132,16 +139,19 @@ std::unordered_set<git_filemode_t> const kSupportedGitFileModes{
     std::string name = git_tree_entry_name(entry);
     auto const* oid = git_tree_entry_id(entry);
     if (auto raw_id = ToRawString(*oid)) {
-        if (not GitFileModeIsSupported(git_tree_entry_filemode(entry))) {
+        if (not GitFileModeIsNonSpecial(git_tree_entry_filemode(entry))) {
             return 0;  // allow, but not store
         }
         if (auto type =
                 GitFileModeToObjectType(git_tree_entry_filemode(entry))) {
+            // no need to test for symlinks, as no symlink entry will reach this
             (*entries)[*raw_id].emplace_back(std::move(name), *type);
             return 1;  // return >=0 on success, 1 == skip subtrees (flat)
         }
     }
-    Logger::Log(LogLevel::Error, "failed walk for git tree entry: {}", name);
+    Logger::Log(LogLevel::Error,
+                "failed ignore_special walk for git tree entry: {}",
+                name);
     return -1;  // fail
 }
 
@@ -156,6 +166,7 @@ std::unordered_set<git_filemode_t> const kSupportedGitFileModes{
     if (auto raw_id = ToRawString(*oid)) {
         if (auto type =
                 GitFileModeToObjectType(git_tree_entry_filemode(entry))) {
+            // symlinks need to be checked in caller for non-upwardness
             (*entries)[*raw_id].emplace_back(std::move(name), *type);
             return 1;  // return >=0 on success, 1 == skip subtrees (flat)
         }
@@ -388,9 +399,15 @@ GitRepo::GitRepo(std::filesystem::path const& repo_path) noexcept {
         }
         cas->odb_.reset(odb_ptr);  // retain odb pointer
         is_repo_fake_ = false;
-        // save root path
-        cas->git_path_ = ToNormalPath(std::filesystem::absolute(
-            std::filesystem::path(git_repository_path(repo_->Ptr()))));
+        // save root path; this differs if repository is bare or not
+        if (git_repository_is_bare(repo_->Ptr()) != 0) {
+            cas->git_path_ = std::filesystem::absolute(
+                ToNormalPath(git_repository_path(repo_->Ptr())));
+        }
+        else {
+            cas->git_path_ = std::filesystem::absolute(
+                ToNormalPath(git_repository_workdir(repo_->Ptr())));
+        }
         // retain the pointer
         git_cas_ = std::static_pointer_cast<GitCAS const>(cas);
     } catch (std::exception const& ex) {
@@ -512,19 +529,32 @@ auto GitRepo::StageAndCommitAllAnonymous(std::string const& message,
         // share the odb lock
         std::shared_lock lock{GetGitCAS()->mutex_};
 
+        // cannot perform this operation on a bare repository; this has to be
+        // checked because git_index_add_bypath will not do it for us!
+        if (not FileSystemManager::Exists(GetGitCAS()->git_path_ / ".git")) {
+            (*logger)("cannot stage and commit files in a bare repository!",
+                      true /*fatal*/);
+            return std::nullopt;
+        }
+
         // add all files to be staged
         git_index* index_ptr{nullptr};
         git_repository_index(&index_ptr, repo_->Ptr());
         auto index = std::unique_ptr<git_index, decltype(&index_closer)>(
             index_ptr, index_closer);
 
-        git_strarray array_obj{};
-        PopulateStrarray(&array_obj, {"."});
-        auto array = std::unique_ptr<git_strarray, decltype(&strarray_deleter)>(
-            &array_obj, strarray_deleter);
-
-        if (git_index_add_all(index.get(), array.get(), 0, nullptr, nullptr) !=
-            0) {
+        // due to mismanagement of .gitignore rules by libgit2 when doing a
+        // forced add all, we resort to using git_index_add_bypath manually for
+        // all entries, instead of git_index_add_all with GIT_INDEX_ADD_FORCE.
+        auto use_entry = [&index](std::filesystem::path const& name,
+                                  bool is_tree) {
+            return is_tree or
+                   git_index_add_bypath(index.get(), name.c_str()) == 0;
+        };
+        if (not FileSystemManager::ReadDirectoryEntriesRecursive(
+                GetGitCAS()->git_path_,
+                use_entry,
+                /*ignored_subdirs=*/{".git"})) {
             (*logger)(fmt::format(
                           "staging files in git repository {} failed with:\n{}",
                           GetGitCAS()->git_path_.string(),
@@ -532,8 +562,6 @@ auto GitRepo::StageAndCommitAllAnonymous(std::string const& message,
                       true /*fatal*/);
             return std::nullopt;
         }
-        // release unused resources
-        array.reset(nullptr);
         // build tree from staged files
         git_oid tree_oid;
         if (git_index_write_tree(&tree_oid, index.get()) != 0) {
@@ -1146,53 +1174,90 @@ auto GitRepo::IsRepoFake() const noexcept -> bool {
 }
 
 auto GitRepo::ReadTree(std::string const& id,
+                       SymlinksCheckFunc const& check_symlinks,
                        bool is_hex_id,
                        bool ignore_special) const noexcept
     -> std::optional<tree_entries_t> {
-#ifdef BOOTSTRAP_BUILD_TOOL
-    return std::nullopt;
-#else
-    // create object id
-    auto oid = GitObjectID(id, is_hex_id);
-    if (not oid) {
-        return std::nullopt;
-    }
+#ifndef BOOTSTRAP_BUILD_TOOL
+    try {
+        // create object id
+        auto oid = GitObjectID(id, is_hex_id);
+        if (not oid) {
+            return std::nullopt;
+        }
 
-    // lookup tree
-    git_tree* tree_ptr{nullptr};
-    {
-        // share the odb lock
-        std::shared_lock lock{GetGitCAS()->mutex_};
-        if (git_tree_lookup(&tree_ptr, repo_->Ptr(), &(*oid)) != 0) {
+        // lookup tree
+        git_tree* tree_ptr{nullptr};
+        {
+            // share the odb lock
+            std::shared_lock lock{GetGitCAS()->mutex_};
+            if (git_tree_lookup(&tree_ptr, repo_->Ptr(), &(*oid)) != 0) {
+                Logger::Log(LogLevel::Debug,
+                            "failed to lookup Git tree {}",
+                            is_hex_id ? std::string{id} : ToHexString(id));
+                return std::nullopt;
+            }
+        }
+        auto tree = std::unique_ptr<git_tree, decltype(&tree_closer)>{
+            tree_ptr, tree_closer};
+
+        // walk tree (flat) and create entries
+        tree_entries_t entries{};
+        entries.reserve(git_tree_entrycount(tree.get()));
+        if (git_tree_walk(tree.get(),
+                          GIT_TREEWALK_PRE,
+                          ignore_special ? flat_tree_walker_ignore_special
+                                         : flat_tree_walker,
+                          &entries) != 0) {
             Logger::Log(LogLevel::Debug,
-                        "failed to lookup Git tree {}",
+                        "failed to walk Git tree {}",
                         is_hex_id ? std::string{id} : ToHexString(id));
             return std::nullopt;
         }
-    }
-    auto tree = std::unique_ptr<git_tree, decltype(&tree_closer)>{tree_ptr,
-                                                                  tree_closer};
 
-    // walk tree (flat) and create entries
-    tree_entries_t entries{};
-    entries.reserve(git_tree_entrycount(tree.get()));
-    if (git_tree_walk(
-            tree.get(),
-            GIT_TREEWALK_PRE,
-            ignore_special ? flat_tree_walker_ignore_special : flat_tree_walker,
-            &entries) != 0) {
-        Logger::Log(LogLevel::Debug,
-                    "failed to walk Git tree {}",
-                    is_hex_id ? std::string{id} : ToHexString(id));
-        return std::nullopt;
-    }
+        // checking non-upwardness of symlinks can not be easily or safely done
+        // during the tree walk, so it is done here. This is only needed for
+        // ignore_special==false.
+        if (not ignore_special) {
+            // we first gather all symlink candidates
+            std::vector<bazel_re::Digest> symlinks{};
+            symlinks.reserve(entries.size());  // at most one symlink per entry
+            for (auto const& entry : entries) {
+                for (auto const& item : entry.second) {
+                    if (IsSymlinkObject(item.type)) {
+                        symlinks.emplace_back(bazel_re::Digest(
+                            ArtifactDigest(ToHexString(entry.first),
+                                           /*size=*/0,
+                                           /*is_tree=*/false)));
+                        break;  // no need to check other items with same hash
+                    }
+                }
+            }
+            // we check symlinks in bulk, optimized for network-backed repos
+            if (not check_symlinks) {
+                Logger::Log(LogLevel::Debug, "check_symlink callable is empty");
+                return std::nullopt;
+            }
+            if (not check_symlinks(symlinks)) {
+                Logger::Log(LogLevel::Error,
+                            "found upwards symlinks in Git tree {}",
+                            is_hex_id ? std::string{id} : ToHexString(id));
+                return std::nullopt;
+            }
+        }
 
 #ifndef NDEBUG
-    EnsuresAudit(ValidateEntries(entries));
+        EnsuresAudit(ValidateEntries(entries));
 #endif
 
-    return entries;
+        return entries;
+    } catch (std::exception const& ex) {
+        Logger::Log(
+            LogLevel::Error, "reading tree failed with:\n{}", ex.what());
+    }
 #endif
+
+    return std::nullopt;
 }
 
 auto GitRepo::CreateTree(tree_entries_t const& entries) const noexcept
@@ -1246,6 +1311,7 @@ auto GitRepo::CreateTree(tree_entries_t const& entries) const noexcept
 
 auto GitRepo::ReadTreeData(std::string const& data,
                            std::string const& id,
+                           SymlinksCheckFunc const& check_symlinks,
                            bool is_hex_id) noexcept
     -> std::optional<tree_entries_t> {
 #ifndef BOOTSTRAP_BUILD_TOOL
@@ -1270,7 +1336,8 @@ auto GitRepo::ReadTreeData(std::string const& data,
                 // wrap odb in "fake" repo
                 auto repo =
                     GitRepo(std::static_pointer_cast<GitCAS const>(cas));
-                return repo.ReadTree(*raw_id, /*is_hex_id=*/false);
+                return repo.ReadTree(
+                    *raw_id, check_symlinks, /*is_hex_id=*/false);
             }
         }
     } catch (std::exception const& ex) {

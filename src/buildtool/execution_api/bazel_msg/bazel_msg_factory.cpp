@@ -211,9 +211,10 @@ template <class T>
     copy_nodes(dir.mutable_directories(), dirs);
     copy_nodes(dir.mutable_symlinks(), links);
 
-    std::copy(props.cbegin(),
-              props.cend(),
-              pb::back_inserter(dir.mutable_node_properties()));
+    std::copy(
+        props.cbegin(),
+        props.cend(),
+        pb::back_inserter(dir.mutable_node_properties()->mutable_properties()));
 
     return dir;
 }
@@ -229,7 +230,8 @@ template <class T>
     node.set_is_executable(IsExecutableObject(type));
     std::copy(props.cbegin(),
               props.cend(),
-              pb::back_inserter(node.mutable_node_properties()));
+              pb::back_inserter(
+                  node.mutable_node_properties()->mutable_properties()));
     return node;
 }
 
@@ -238,6 +240,22 @@ template <class T>
     -> bazel_re::DirectoryNode {
     bazel_re::DirectoryNode node;
     node.set_name(dir_name);
+    return node;
+}
+
+/// \brief Create protobuf message 'SymlinkNode'.
+[[nodiscard]] auto CreateSymlinkNode(
+    std::string const& link_name,
+    std::string const& target,
+    std::vector<bazel_re::NodeProperty> const& props) noexcept
+    -> bazel_re::SymlinkNode {
+    bazel_re::SymlinkNode node;
+    node.set_name(link_name);
+    node.set_target(target);
+    std::copy(props.cbegin(),
+              props.cend(),
+              pb::back_inserter(
+                  node.mutable_node_properties()->mutable_properties()));
     return node;
 }
 
@@ -266,6 +284,25 @@ template <class T>
     return dir_node;
 }
 
+/// \brief Create protobuf message SymlinkNode from Digest for multiple
+/// instances at once
+[[nodiscard]] auto CreateSymlinkNodesFromDigests(
+    std::vector<std::string> const& symlink_names,
+    std::vector<bazel_re::Digest> const& symlink_digests,
+    BazelMsgFactory::LinkDigestResolveFunc const& resolve_links)
+    -> std::vector<bazel_re::SymlinkNode> {
+    std::vector<std::string> symlink_targets;
+    resolve_links(symlink_digests, &symlink_targets);
+    auto it_name = symlink_names.begin();
+    auto it_target = symlink_targets.begin();
+    std::vector<bazel_re::SymlinkNode> symlink_nodes;
+    // both loops have same length
+    for (; it_name != symlink_names.end(); ++it_name, ++it_target) {
+        symlink_nodes.emplace_back(CreateSymlinkNode(*it_name, *it_target, {}));
+    }
+    return symlink_nodes;
+}
+
 /// \brief Create bundle for protobuf message DirectoryNode from Directory.
 [[nodiscard]] auto CreateDirectoryNodeBundle(std::string const& dir_name,
                                              bazel_re::Directory const& dir)
@@ -288,6 +325,10 @@ template <class T>
     std::vector<bazel_re::Platform_Property> const& platform_properties)
     -> CommandBundle::Ptr {
     bazel_re::Command msg;
+    // DEPRECATED as of v2.2: platform properties are now specified
+    // directly in the action. See documentation note in the
+    // [Action][build.bazel.remote.execution.v2.Action] for migration.
+    // (https://github.com/bazelbuild/remote-apis/blob/e1fe21be4c9ae76269a5a63215bb3c72ed9ab3f0/build/bazel/remote/execution/v2/remote_execution.proto#L646)
     msg.set_allocated_platform(CreatePlatform(platform_properties).release());
     std::copy(std::cbegin(args),
               std::cend(args),
@@ -315,7 +356,7 @@ template <class T>
 [[nodiscard]] auto CreateActionBundle(
     bazel_re::Digest const& command,
     bazel_re::Digest const& root_dir,
-    std::vector<std::string> const& output_node_properties,
+    std::vector<bazel_re::Platform_Property> const& platform_properties,
     bool do_not_cache,
     std::chrono::milliseconds const& timeout) -> ActionBundle::Ptr {
     using seconds = std::chrono::seconds;
@@ -334,9 +375,12 @@ template <class T>
         gsl::owner<bazel_re::Digest*>{new bazel_re::Digest{command}});
     msg.set_allocated_input_root_digest(
         gsl::owner<bazel_re::Digest*>{new bazel_re::Digest{root_dir}});
-    std::copy(output_node_properties.cbegin(),
-              output_node_properties.cend(),
-              pb::back_inserter(msg.mutable_output_node_properties()));
+    // New in version 2.2: clients SHOULD set these platform properties
+    // as well as those in the
+    // [Command][build.bazel.remote.execution.v2.Command]. Servers
+    // SHOULD prefer those set here.
+    // (https://github.com/bazelbuild/remote-apis/blob/e1fe21be4c9ae76269a5a63215bb3c72ed9ab3f0/build/bazel/remote/execution/v2/remote_execution.proto#L516)
+    msg.set_allocated_platform(CreatePlatform(platform_properties).release());
 
     auto content_creator = [&msg] { return SerializeMessage(msg); };
 
@@ -361,27 +405,41 @@ template <class T>
                                             : ObjectType::File};
 }
 
+[[nodiscard]] auto CreateObjectInfo(bazel_re::SymlinkNode const& node)
+    -> Artifact::ObjectInfo {
+    return Artifact::ObjectInfo{
+        ArtifactDigest::Create<ObjectType::File>(node.target()),
+        ObjectType::Symlink};
+}
+
 /// \brief Convert `DirectoryTree` to `DirectoryNodeBundle`.
 /// NOLINTNEXTLINE(misc-no-recursion)
 [[nodiscard]] auto DirectoryTreeToBundle(
     std::string const& root_name,
     DirectoryTreePtr const& tree,
+    BazelMsgFactory::LinkDigestResolveFunc const& resolve_links,
     std::optional<BazelMsgFactory::BlobStoreFunc> const& store_blob,
     std::optional<BazelMsgFactory::InfoStoreFunc> const& store_info,
     std::filesystem::path const& parent = "") noexcept
     -> DirectoryNodeBundle::Ptr {
-    std::vector<bazel_re::FileNode> file_nodes;
-    std::vector<bazel_re::DirectoryNode> dir_nodes;
+    std::vector<bazel_re::FileNode> file_nodes{};
+    std::vector<bazel_re::DirectoryNode> dir_nodes{};
+    std::vector<std::string> symlink_names{};
+    std::vector<bazel_re::Digest> symlink_digests{};
     try {
         for (auto const& [name, node] : *tree) {
             if (std::holds_alternative<DirectoryTreePtr>(node)) {
                 auto const& dir = std::get<DirectoryTreePtr>(node);
-                auto const dir_bundle = DirectoryTreeToBundle(
-                    name, dir, store_blob, store_info, parent / name);
+                auto const dir_bundle = DirectoryTreeToBundle(name,
+                                                              dir,
+                                                              resolve_links,
+                                                              store_blob,
+                                                              store_info,
+                                                              parent / name);
                 if (not dir_bundle) {
                     return nullptr;
                 }
-                dir_nodes.push_back(dir_bundle->Message());
+                dir_nodes.emplace_back(dir_bundle->Message());
                 if (store_blob) {
                     (*store_blob)(dir_bundle->MakeBlob(/*is_exec=*/false));
                 }
@@ -393,11 +451,17 @@ template <class T>
                     return nullptr;
                 }
                 if (IsTreeObject(object_info->type)) {
-                    dir_nodes.push_back(
+                    dir_nodes.emplace_back(
                         CreateDirectoryNodeFromObjectInfo(name, *object_info));
                 }
+                else if (IsSymlinkObject(object_info->type)) {
+                    // for symlinks we need to retrieve the data from the
+                    // digest, which we will handle in bulk
+                    symlink_names.emplace_back(name);
+                    symlink_digests.emplace_back(object_info->digest);
+                }
                 else {
-                    file_nodes.push_back(
+                    file_nodes.emplace_back(
                         CreateFileNodeFromObjectInfo(name, *object_info));
                 }
                 if (store_info and
@@ -407,7 +471,12 @@ template <class T>
             }
         }
         return CreateDirectoryNodeBundle(
-            root_name, CreateDirectory(file_nodes, dir_nodes, {}, {}));
+            root_name,
+            CreateDirectory(file_nodes,
+                            dir_nodes,
+                            CreateSymlinkNodesFromDigests(
+                                symlink_names, symlink_digests, resolve_links),
+                            {}));
     } catch (...) {
         return nullptr;
     }
@@ -422,6 +491,11 @@ auto BazelMsgFactory::ReadObjectInfosFromDirectory(
     try {
         for (auto const& f : dir.files()) {
             if (not store_info(f.name(), CreateObjectInfo(f))) {
+                return false;
+            }
+        }
+        for (auto const& l : dir.symlinks()) {
+            if (not store_info(l.name(), CreateObjectInfo(l))) {
                 return false;
             }
         }
@@ -468,10 +542,12 @@ auto BazelMsgFactory::ReadObjectInfosFromGitTree(
 
 auto BazelMsgFactory::CreateDirectoryDigestFromTree(
     DirectoryTreePtr const& tree,
+    LinkDigestResolveFunc const& resolve_links,
     std::optional<BlobStoreFunc> const& store_blob,
     std::optional<InfoStoreFunc> const& store_info) noexcept
     -> std::optional<bazel_re::Digest> {
-    if (auto bundle = DirectoryTreeToBundle("", tree, store_blob, store_info)) {
+    if (auto bundle = DirectoryTreeToBundle(
+            "", tree, resolve_links, store_blob, store_info)) {
         if (store_blob) {
             try {
                 (*store_blob)(bundle->MakeBlob(/*is_exec=*/false));
@@ -487,17 +563,25 @@ auto BazelMsgFactory::CreateDirectoryDigestFromTree(
 auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
     std::filesystem::path const& root,
     FileStoreFunc const& store_file,
-    DirStoreFunc const& store_dir) noexcept -> std::optional<bazel_re::Digest> {
+    DirStoreFunc const& store_dir,
+    SymlinkStoreFunc const& store_symlink) noexcept
+    -> std::optional<bazel_re::Digest> {
     std::vector<bazel_re::FileNode> files{};
     std::vector<bazel_re::DirectoryNode> dirs{};
+    std::vector<bazel_re::SymlinkNode> symlinks{};
 
-    auto dir_reader = [&files, &dirs, &root, &store_file, &store_dir](
-                          auto name, auto type) {
+    auto dir_reader = [&files,
+                       &dirs,
+                       &symlinks,
+                       &root,
+                       &store_file,
+                       &store_dir,
+                       &store_symlink](auto name, auto type) {
         const auto full_name = root / name;
         if (IsTreeObject(type)) {
             // create and store sub directory
             auto digest = CreateDirectoryDigestFromLocalTree(
-                root / name, store_file, store_dir);
+                root / name, store_file, store_dir, store_symlink);
             if (not digest) {
                 Logger::Log(LogLevel::Error,
                             "failed storing tree {}",
@@ -512,8 +596,22 @@ auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
             return true;
         }
 
-        // create and store file
         try {
+            if (IsSymlinkObject(type)) {
+                // create and store symlink
+                auto content = FileSystemManager::ReadSymlink(full_name);
+                if (content and PathIsNonUpwards(*content) and
+                    store_symlink(*content)) {
+                    symlinks.emplace_back(
+                        CreateSymlinkNode(name.string(), *content, {}));
+                    return true;
+                }
+                Logger::Log(LogLevel::Error,
+                            "failed storing symlink {}",
+                            full_name.string());
+                return false;
+            }
+            // create and store file
             if (auto digest = store_file(full_name, IsExecutableObject(type))) {
                 auto file = CreateFileNode(name.string(), type, {});
                 file.set_allocated_digest(gsl::owner<bazel_re::Digest*>{
@@ -531,7 +629,7 @@ auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
     };
 
     if (FileSystemManager::ReadDirectory(root, dir_reader)) {
-        auto dir = CreateDirectory(files, dirs, {}, {});
+        auto dir = CreateDirectory(files, dirs, symlinks, {});
         if (auto bytes = SerializeMessage(dir)) {
             try {
                 if (auto digest = store_dir(*bytes, dir)) {
@@ -551,16 +649,20 @@ auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
 auto BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
     std::filesystem::path const& root,
     FileStoreFunc const& store_file,
-    TreeStoreFunc const& store_tree) noexcept
+    TreeStoreFunc const& store_tree,
+    SymlinkStoreFunc const& store_symlink) noexcept
     -> std::optional<bazel_re::Digest> {
     GitRepo::tree_entries_t entries{};
-    auto dir_reader = [&entries, &root, &store_file, &store_tree](auto name,
-                                                                  auto type) {
+    auto dir_reader = [&entries,
+                       &root,
+                       &store_file,
+                       &store_tree,
+                       &store_symlink](auto name, auto type) {
         const auto full_name = root / name;
         if (IsTreeObject(type)) {
             // create and store sub directory
             if (auto digest = CreateGitTreeDigestFromLocalTree(
-                    full_name, store_file, store_tree)) {
+                    full_name, store_file, store_tree, store_symlink)) {
                 if (auto raw_id = FromHexString(
                         NativeSupport::Unprefix(digest->hash()))) {
                     entries[std::move(*raw_id)].emplace_back(name.string(),
@@ -573,8 +675,30 @@ auto BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
             return false;
         }
 
-        // create and store file
         try {
+            if (IsSymlinkObject(type)) {
+                auto content = FileSystemManager::ReadSymlink(full_name);
+                if (content and PathIsNonUpwards(*content)) {
+                    if (auto digest = store_symlink(*content)) {
+                        if (auto raw_id = FromHexString(
+                                NativeSupport::Unprefix(digest->hash()))) {
+                            entries[std::move(*raw_id)].emplace_back(
+                                name.string(), type);
+                            return true;
+                        }
+                    }
+                    Logger::Log(LogLevel::Error,
+                                "failed storing symlink {}",
+                                full_name.string());
+                }
+                else {
+                    Logger::Log(LogLevel::Error,
+                                "failed storing symlink {} -- not non-upwards",
+                                full_name.string());
+                }
+                return false;
+            }
+            // create and store file
             if (auto digest = store_file(full_name, IsExecutableObject(type))) {
                 if (auto raw_id = FromHexString(
                         NativeSupport::Unprefix(digest->hash()))) {
@@ -614,7 +738,6 @@ auto BazelMsgFactory::CreateActionDigestFromCommandLine(
     bazel_re::Digest const& exec_dir,
     std::vector<std::string> const& output_files,
     std::vector<std::string> const& output_dirs,
-    std::vector<std::string> const& output_node_properties,
     std::vector<bazel_re::Command_EnvironmentVariable> const& env_vars,
     std::vector<bazel_re::Platform_Property> const& properties,
     bool do_not_cache,
@@ -626,7 +749,7 @@ auto BazelMsgFactory::CreateActionDigestFromCommandLine(
 
     // create action
     auto action = CreateActionBundle(
-        cmd->Digest(), exec_dir, output_node_properties, do_not_cache, timeout);
+        cmd->Digest(), exec_dir, properties, do_not_cache, timeout);
 
     if (store_blob) {
         (*store_blob)(cmd->MakeBlob(/*is_exec=*/false));

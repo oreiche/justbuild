@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <unordered_map>
 
 #include "catch2/catch_test_macros.hpp"
 #include "catch2/generators/catch_generators_all.hpp"
@@ -60,6 +61,112 @@ class WriteFileFixture {
     std::filesystem::path const root_dir_{"./tmp-RemoveFile"};
     std::filesystem::path const file_path_{root_dir_ / relative_path_parent_ /
                                            "file"};
+};
+
+class SymlinkTestsFixture {
+  public:
+    SymlinkTestsFixture() noexcept {
+        REQUIRE(FileSystemManager::CreateDirectory(root_dir_));
+        create_files();
+        create_symlinks();
+    }
+    SymlinkTestsFixture(SymlinkTestsFixture const&) = delete;
+    SymlinkTestsFixture(SymlinkTestsFixture&&) = delete;
+    ~SymlinkTestsFixture() noexcept {
+        CHECK(std::filesystem::remove_all(root_dir_));
+    }
+    auto operator=(SymlinkTestsFixture const&) -> SymlinkTestsFixture& = delete;
+    auto operator=(SymlinkTestsFixture&&) -> SymlinkTestsFixture& = delete;
+
+    std::filesystem::path const root_dir_{"./tmp-Symlinks"};
+
+    using filetree_t = std::unordered_map<std::string, ObjectType>;
+    filetree_t const kExpected = {{"foo", ObjectType::File},
+                                  {"baz", ObjectType::Tree},
+                                  {"baz/foo", ObjectType::File},
+                                  {"bazz", ObjectType::Tree},
+                                  {"bazz/baz", ObjectType::Tree},
+                                  {"bazz/baz/foo", ObjectType::File}};
+
+    struct LinkInfo {
+        std::string to;
+        std::string link;
+        bool resolvesToExisting;
+        bool isNonUpwards;
+    };
+    std::vector<LinkInfo> const kSymExpected = {
+        {.to = "baz",
+         .link = "baz_l",
+         .resolvesToExisting = true,
+         .isNonUpwards = true},
+        {.to = "../foo",
+         .link = "baz/foo_l",
+         .resolvesToExisting = true,
+         .isNonUpwards = false},
+        {.to = "baz/foo_l",
+         .link = "bar_l",
+         .resolvesToExisting = true,
+         .isNonUpwards = true},
+        {.to = "does_not_exist",
+         .link = "baz/non_existing_l",
+         .resolvesToExisting = false,
+         .isNonUpwards = true},
+        {.to = "non_existing_l",
+         .link = "baz/non_existing_indirect_l",
+         .resolvesToExisting = false,
+         .isNonUpwards = true},
+        {.to = "baz/../../does_not_exist",
+         .link = "non_existing_sneaky_l",
+         .resolvesToExisting = false,
+         .isNonUpwards = false}};
+
+    // distinct dir entries
+    size_t const num_entries_{12U};
+    // distinct dir entries after removing all subdirs named "baz"
+    size_t const num_root_file_entries_{5U};
+
+    void create_files() {
+        for (auto const& [path, type] : kExpected) {
+            switch (type) {
+                case ObjectType::File: {
+                    if (not FileSystemManager::WriteFile("",
+                                                         root_dir_ / path)) {
+                        Logger::Log(LogLevel::Error,
+                                    "Could not create test file at path {}",
+                                    (root_dir_ / path).string());
+                        std::exit(1);
+                    };
+                } break;
+                case ObjectType::Tree: {
+                    if (not FileSystemManager::CreateDirectory(root_dir_ /
+                                                               path)) {
+                        Logger::Log(LogLevel::Error,
+                                    "Could not create test dir at path {}",
+                                    (root_dir_ / path).string());
+                        std::exit(1);
+                    };
+                } break;
+                default: {
+                    Logger::Log(LogLevel::Error,
+                                "File system failure in creating test dir");
+                    std::exit(1);
+                }
+            }
+        }
+    }
+
+    void create_symlinks() {
+        for (auto const& link_info : kSymExpected) {
+            if (not FileSystemManager::CreateSymlink(
+                    link_info.to, root_dir_ / link_info.link)) {
+                Logger::Log(
+                    LogLevel::Error,
+                    "File system failure in creating symlink at path {}",
+                    (root_dir_ / link_info.link).string());
+                std::exit(1);
+            }
+        }
+    }
 };
 
 namespace {
@@ -118,21 +225,12 @@ auto HasEpochTime(fs::path const& path) noexcept -> bool {
 
 }  // namespace
 
-TEST_CASE("CreateDirectory", "[file_system]") {
-    auto const dir = GENERATE(as<std::filesystem::path>{},
-                              "level0",
-                              "level0/level1",
-                              "a/b/c/d",
-                              "./a/../e");
-    CHECK(FileSystemManager::CreateDirectory(dir));
-    CHECK(std::filesystem::exists(dir));
-    CHECK(std::filesystem::is_directory(dir));
-
-    // If we have created the directory already, CreateDirectory() returns true
-    // and the state of things doesn't change
-    CHECK(FileSystemManager::CreateDirectory(dir));
-    CHECK(std::filesystem::exists(dir));
-    CHECK(std::filesystem::is_directory(dir));
+TEST_CASE("Exists", "[file_system]") {
+    CHECK(FileSystemManager::Exists("test/buildtool/file_system/data/"));
+    CHECK(FileSystemManager::Exists(
+        "test/buildtool/file_system/data/example_file"));
+    CHECK(FileSystemManager::Exists(
+        "test/buildtool/file_system/data/empty_executable"));
 }
 
 TEST_CASE("IsFile", "[file_system]") {
@@ -152,6 +250,14 @@ TEST_CASE("IsExecutable", "[file_system]") {
         FileSystemManager::IsExecutable("test/buildtool/file_system/data/"));
 }
 
+TEST_CASE("IsDirectory", "[file_system]") {
+    CHECK(FileSystemManager::IsDirectory("test/buildtool/file_system/data"));
+    CHECK_FALSE(FileSystemManager::IsDirectory(
+        "test/buildtool/file_system/data/example_file"));
+    CHECK_FALSE(FileSystemManager::IsDirectory(
+        "test/buildtool/file_system/data/empty_executable"));
+}
+
 TEST_CASE("Type", "[file_system]") {
     auto const type_file =
         FileSystemManager::Type("test/buildtool/file_system/data/example_file");
@@ -167,6 +273,21 @@ TEST_CASE("Type", "[file_system]") {
         FileSystemManager::Type("test/buildtool/file_system/data/");
     REQUIRE(type_dir);
     CHECK(*type_dir == ObjectType::Tree);
+}
+
+TEST_CASE("CreateDirectory", "[file_system]") {
+    auto const dir = GENERATE(as<std::filesystem::path>{},
+                              "level0",
+                              "level0/level1",
+                              "a/b/c/d",
+                              "./a/../e");
+    CHECK(FileSystemManager::CreateDirectory(dir));
+    CHECK(FileSystemManager::IsDirectory(dir));
+
+    // If we have created the directory already, CreateDirectory() returns true
+    // and the state of things doesn't change
+    CHECK(FileSystemManager::CreateDirectory(dir));
+    CHECK(FileSystemManager::IsDirectory(dir));
 }
 
 TEST_CASE("ChangeDirectory", "[file_system]") {
@@ -204,7 +325,7 @@ TEST_CASE("ReadFile", "[file_system]") {
     SECTION("Non-existing file") {
         std::filesystem::path file{
             "test/buildtool/file_system/data/this_file_does_not_exist"};
-        REQUIRE(not std::filesystem::exists(file));
+        REQUIRE(not FileSystemManager::Exists(file));
 
         auto const content = FileSystemManager::ReadFile(file);
         CHECK_FALSE(content.has_value());
@@ -217,8 +338,7 @@ TEST_CASE_METHOD(CopyFileFixture, "CopyFile", "[file_system]") {
         CHECK(FileSystemManager::CopyFile(from_, to_, fd_less));
 
         // file exists
-        CHECK(std::filesystem::exists(to_));
-        CHECK(std::filesystem::is_regular_file(to_));
+        CHECK(FileSystemManager::IsFile(to_));
 
         // Contents are equal
         auto const content_from = FileSystemManager::ReadFile(from_);
@@ -240,8 +360,7 @@ TEST_CASE_METHOD(CopyFileFixture, "CopyFileAs", "[file_system]") {
                 from_, to_, ObjectType::File, fd_less));
 
             // file exists
-            CHECK(std::filesystem::exists(to_));
-            CHECK(std::filesystem::is_regular_file(to_));
+            CHECK(FileSystemManager::IsFile(to_));
             CHECK(not FileSystemManager::IsExecutable(to_));
 
             // Contents are equal
@@ -275,8 +394,7 @@ TEST_CASE_METHOD(CopyFileFixture, "CopyFileAs", "[file_system]") {
                 from_, to_, ObjectType::File, fd_less));
 
             // file exists
-            CHECK(std::filesystem::exists(to_));
-            CHECK(std::filesystem::is_regular_file(to_));
+            CHECK(FileSystemManager::IsFile(to_));
             CHECK(not FileSystemManager::IsExecutable(to_));
 
             // Contents are equal
@@ -309,8 +427,6 @@ TEST_CASE_METHOD(CopyFileFixture, "CopyFileAs", "[file_system]") {
                 from_, to_, ObjectType::Executable, fd_less));
 
             // file exists
-            CHECK(std::filesystem::exists(to_));
-            CHECK(std::filesystem::is_regular_file(to_));
             CHECK(FileSystemManager::IsExecutable(to_));
 
             // Contents are equal
@@ -344,8 +460,6 @@ TEST_CASE_METHOD(CopyFileFixture, "CopyFileAs", "[file_system]") {
                 from_, to_, ObjectType::Executable, fd_less));
 
             // file exists
-            CHECK(std::filesystem::exists(to_));
-            CHECK(std::filesystem::is_regular_file(to_));
             CHECK(FileSystemManager::IsExecutable(to_));
 
             // Contents are equal
@@ -383,24 +497,24 @@ TEST_CASE("RemoveFile", "[file_system]") {
 
         CHECK(FileSystemManager::CopyFile(from, to));
 
-        CHECK(std::filesystem::exists(to));
+        CHECK(FileSystemManager::Exists(to));
 
         CHECK(FileSystemManager::RemoveFile(to));
 
-        CHECK(not std::filesystem::exists(to));
+        CHECK(not FileSystemManager::Exists(to));
     }
     SECTION("Non-existing file") {
         std::filesystem::path file{
             "test/buildtool/file_system/data/"
             "this_file_does_not_exist_neither"};
-        CHECK(not std::filesystem::exists(file));
+        CHECK(not FileSystemManager::Exists(file));
         CHECK(FileSystemManager::RemoveFile(file));  // nothing to delete
     }
     SECTION("Existing but not file") {
         std::filesystem::path dir{"./tmp-RemoveFile/dir"};
         CHECK(FileSystemManager::CreateDirectory(dir));
         CHECK(not FileSystemManager::RemoveFile(dir));
-        CHECK(std::filesystem::exists(dir));
+        CHECK(FileSystemManager::Exists(dir));
     }
 }
 
@@ -409,9 +523,8 @@ TEST_CASE_METHOD(WriteFileFixture, "WriteFile", "[file_system]") {
 
     auto run_test = [&](bool fd_less) {
         CHECK(FileSystemManager::WriteFile(content, file_path_, fd_less));
-        CHECK(std::filesystem::exists(file_path_));
-        CHECK(std::filesystem::is_directory(file_path_.parent_path()));
-        CHECK(std::filesystem::is_regular_file(file_path_));
+        CHECK(FileSystemManager::IsDirectory(file_path_.parent_path()));
+        CHECK(FileSystemManager::IsFile(file_path_));
 
         auto const written_content = FileSystemManager::ReadFile(file_path_);
         CHECK(written_content.has_value());
@@ -429,9 +542,8 @@ TEST_CASE_METHOD(WriteFileFixture, "WriteFileAs", "[file_system]") {
         auto run_test = [&]<bool kSetEpochTime = false>(bool fd_less) {
             CHECK(FileSystemManager::WriteFileAs<kSetEpochTime>(
                 content, file_path_, ObjectType::File, fd_less));
-            CHECK(std::filesystem::exists(file_path_));
-            CHECK(std::filesystem::is_directory(file_path_.parent_path()));
-            CHECK(std::filesystem::is_regular_file(file_path_));
+            CHECK(FileSystemManager::IsDirectory(file_path_.parent_path()));
+            CHECK(FileSystemManager::IsFile(file_path_));
             CHECK(not FileSystemManager::IsExecutable(file_path_));
 
             auto const written_content =
@@ -461,9 +573,7 @@ TEST_CASE_METHOD(WriteFileFixture, "WriteFileAs", "[file_system]") {
         auto run_test = [&]<bool kSetEpochTime = false>(bool fd_less) {
             CHECK(FileSystemManager::WriteFileAs<kSetEpochTime>(
                 content, file_path_, ObjectType::Executable, fd_less));
-            CHECK(std::filesystem::exists(file_path_));
-            CHECK(std::filesystem::is_directory(file_path_.parent_path()));
-            CHECK(std::filesystem::is_regular_file(file_path_));
+            CHECK(FileSystemManager::IsDirectory(file_path_.parent_path()));
             CHECK(FileSystemManager::IsExecutable(file_path_));
 
             auto const written_content =
@@ -556,27 +666,27 @@ TEST_CASE("CreateFileHardlink", "[file_system]") {
         }
 
         CHECK(FileSystemManager::CreateFileHardlink(from, to));
-        CHECK(std::filesystem::exists(to));
+        CHECK(FileSystemManager::Exists(to));
 
         CHECK_FALSE(FileSystemManager::CreateFileHardlink(from, to));
-        CHECK(std::filesystem::exists(to));
+        CHECK(FileSystemManager::Exists(to));
 
         CHECK(FileSystemManager::RemoveFile(to));
-        CHECK(not std::filesystem::exists(to));
+        CHECK(not FileSystemManager::Exists(to));
     }
     SECTION("Non-existing file") {
         std::filesystem::path from{
             "test/buildtool/file_system/data/this_file_does_not_exist"};
 
         CHECK_FALSE(FileSystemManager::CreateFileHardlink(from, to));
-        CHECK_FALSE(std::filesystem::exists(to));
+        CHECK_FALSE(FileSystemManager::Exists(to));
     }
     SECTION("Existing but not file") {
         std::filesystem::path from{"./tmp-CreateFileHardlink/dir"};
         CHECK(FileSystemManager::CreateDirectory(from));
 
         CHECK_FALSE(FileSystemManager::CreateFileHardlink(from, to));
-        CHECK_FALSE(std::filesystem::exists(to));
+        CHECK_FALSE(FileSystemManager::Exists(to));
     }
 }
 
@@ -585,8 +695,7 @@ TEST_CASE("CopyDirectoryImpl", "[file_system]") {
     REQUIRE(FileSystemManager::CreateDirectory(to.parent_path()));
 
     CHECK(FileSystemManager::CreateDirectory("a/b/c/d"));
-    CHECK(std::filesystem::exists("a/b/c/d"));
-    CHECK(std::filesystem::is_directory("a/b/c/d"));
+    CHECK(FileSystemManager::IsDirectory("a/b/c/d"));
 
     CHECK(FileSystemManager::WriteFile("boo", "a/bb.txt"));
 
@@ -594,17 +703,13 @@ TEST_CASE("CopyDirectoryImpl", "[file_system]") {
     CHECK(FileSystemManager::CopyDirectoryImpl("a", to, true));
 
     // Result should be in tmp-dir now
-    CHECK(std::filesystem::exists(to));
-    CHECK(std::filesystem::is_directory(to));
+    CHECK(FileSystemManager::IsDirectory(to));
 
-    CHECK(std::filesystem::exists(to / "b"));
-    CHECK(std::filesystem::is_directory(to / "b"));
+    CHECK(FileSystemManager::IsDirectory(to / "b"));
 
-    CHECK(std::filesystem::exists(to / "b/c"));
-    CHECK(std::filesystem::is_directory(to / "b/c"));
+    CHECK(FileSystemManager::IsDirectory(to / "b/c"));
 
-    CHECK(std::filesystem::exists(to / "bb.txt"));
-    CHECK(std::filesystem::is_regular_file(to / "bb.txt"));
+    CHECK(FileSystemManager::IsFile(to / "bb.txt"));
 }
 
 TEST_CASE_METHOD(CopyFileFixture, "CreateFileHardlinkAs", "[file_system]") {
@@ -625,9 +730,10 @@ TEST_CASE_METHOD(CopyFileFixture, "CreateFileHardlinkAs", "[file_system]") {
             is_executable ? ObjectType::Executable : ObjectType::File));
 
         // file exists
-        CHECK(std::filesystem::exists(to_));
-        CHECK(std::filesystem::is_regular_file(to_));
         CHECK(is_executable == FileSystemManager::IsExecutable(to_));
+
+        // executables are special permission files
+        CHECK(FileSystemManager::IsFile(to_));
 
         // permissions should be 0555 or 0444
         CHECK((is_executable ? HasExecutablePermissions(to_)
@@ -675,5 +781,53 @@ TEST_CASE_METHOD(CopyFileFixture, "CreateFileHardlinkAs", "[file_system]") {
             set_perm(true);
             run_test.template operator()<true>(true);
         }
+    }
+}
+
+TEST_CASE_METHOD(SymlinkTestsFixture, "Symlinks", "[file_system]") {
+    CHECK(std::filesystem::is_directory(root_dir_ / "baz"));
+    CHECK(std::filesystem::is_symlink(root_dir_ / "baz_l"));
+    CHECK_FALSE(std::filesystem::is_directory(
+        std::filesystem::symlink_status(root_dir_ / "baz_l")));
+
+    auto i = GENERATE(range(0U, 6U /* kSymExpected.size() */));
+
+    SECTION(fmt::format("Non-upwards symlinks - entry {}", i)) {
+        CHECK(FileSystemManager::IsNonUpwardsSymlink(root_dir_ /
+                                                     kSymExpected[i].link) ==
+              kSymExpected[i].isNonUpwards);
+    }
+
+    SECTION(fmt::format("Resolve symlinks - entry {}", i)) {
+        auto path = root_dir_ / kSymExpected[i].link;
+        REQUIRE(FileSystemManager::ResolveSymlinks(&path));
+        CHECK(FileSystemManager::Exists(path) ==
+              kSymExpected[i].resolvesToExisting);
+    }
+}
+
+TEST_CASE_METHOD(SymlinkTestsFixture,
+                 "ReadDirectoryEntriesRecursive",
+                 "[file_system]") {
+    size_t count{};
+    auto use_entry = [&count](std::filesystem::path const& /*name*/,
+                              bool /*is_tree*/) {
+        ++count;
+        return true;
+    };
+
+    SECTION("Check directory is complete") {
+        REQUIRE(FileSystemManager::ReadDirectoryEntriesRecursive(root_dir_,
+                                                                 use_entry));
+        CHECK(count == num_entries_);
+    }
+
+    SECTION("Check directory with missing paths") {
+        REQUIRE(FileSystemManager::ReadDirectoryEntriesRecursive(
+            root_dir_,
+            use_entry,
+            /*ignored_subdirs=*/
+            {"baz"}));
+        CHECK(count == num_root_file_entries_);
     }
 }

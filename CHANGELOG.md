@@ -2,13 +2,26 @@
 
 A feature release on top of `1.1.0`, backwards compatible.
 
+### Major new features
+
+- Actions can now define additional execution properties and in
+  that way chose a specific remote execution image, as well as a
+  factor to scale the time out. This also applies to the built-in
+  `generic` rule. Additionally, the remote-execution endpoint can
+  be dispatched based on the remote-execution properties using
+  the `--endpoint-configuration` argument.
+- Relative non-upwards symbolic links are now treated as first-class
+  objects. This introduces a new artifact type and allows the free use
+  of such symbolic links throughout the build process.
+
 ### Other changes
 
 - `just-import-git` now supports an option `--plain` to import a
   repository without dependencies.
 - Minor changes to the layout of the local build root; in particular,
-  left-over execution directories will eventually get cleaned up
-  by garbage collection.
+  left-over execution directories, as well as left-over temporary
+  directories of `just-mr`, will eventually get cleaned up by
+  garbage collection.
 - `just-mr` now supports unpacking tar archives compressed with
   bzip2 and xz.
 
@@ -24,6 +37,10 @@ A feature release on top of `1.1.0`, backwards compatible.
   was significantly lower.
 - The man pages are now provided as markdown files, allowing to
   potentially reduce the build dependencies to more standard ones.
+- `just-mr` now correctly performs a forced add in order to stage
+  all entries in a Git repository. Previously it was possible for
+  entries to be skipped inadvertently in, e.g., imported archives
+  if `gitignore` files were present.
 
 ## Release `1.1.0` (2023-05-19)
 

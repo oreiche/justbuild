@@ -44,6 +44,7 @@
 #include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/execution_api/execution_service/operation_cache.hpp"
 #include "src/buildtool/execution_api/execution_service/server_implementation.hpp"
+#include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/graph_traverser/graph_traverser.hpp"
 #include "src/buildtool/progress_reporting/progress_reporter.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
@@ -329,6 +330,15 @@ void SetupExecutionConfig(EndpointArguments const& eargs,
             std::exit(kExitFailure);
         }
     }
+    if (eargs.remote_execution_dispatch_file) {
+        if (not RemoteConfig::SetRemoteExecutionDispatch(
+                *eargs.remote_execution_dispatch_file)) {
+            Logger::Log(LogLevel::Error,
+                        "setting remote execution dispatch based on file '{}'",
+                        eargs.remote_execution_dispatch_file->string());
+            std::exit(kExitFailure);
+        }
+    }
     if (rargs.cache_endpoint) {
         if (not(RemoteConfig::SetCacheAddress(*rargs.cache_endpoint) ==
                 (*rargs.cache_endpoint != "local"))) {
@@ -469,7 +479,7 @@ void SetupHashFunction() {
     -> Configuration {
     Configuration config{};
     if (not clargs.config_file.empty()) {
-        if (not std::filesystem::exists(clargs.config_file)) {
+        if (not FileSystemManager::Exists(clargs.config_file)) {
             Logger::Log(LogLevel::Error,
                         "Config file {} does not exist.",
                         clargs.config_file.string());
@@ -581,7 +591,11 @@ void SetupHashFunction() {
     }
     auto const target_file =
         (std::filesystem::path{current_module} / target_file_name).string();
-    auto file_content = target_root->ReadFile(target_file);
+    if (not target_root->IsFile(target_file)) {
+        Logger::Log(LogLevel::Error, "Expected file at {}.", target_file);
+        std::exit(kExitFailure);
+    }
+    auto file_content = target_root->ReadContent(target_file);
     if (not file_content) {
         Logger::Log(LogLevel::Error, "Cannot read file {}.", target_file);
         std::exit(kExitFailure);
@@ -660,7 +674,7 @@ auto ParseRoot(std::string const& repo,
                         repo);
             std::exit(kExitFailure);
         }
-        auto path = std::filesystem::path{root[1]};
+        auto path = std::filesystem::path{root[1].get<std::string>()};
         return {FileRoot{path}, std::move(path)};
     }
     if (root[0] == FileRoot::kGitTreeMarker) {
@@ -695,7 +709,7 @@ auto ParseRoot(std::string const& repo,
                 repo);
             std::exit(kExitFailure);
         }
-        auto path = std::filesystem::path{root[1]};
+        auto path = std::filesystem::path{root[1].get<std::string>()};
         return {FileRoot{path, /*ignore_special=*/true}, std::move(path)};
     }
     if (root[0] == FileRoot::kGitTreeIgnoreSpecialMarker) {
@@ -1233,6 +1247,9 @@ auto DetermineNonExplicitTarget(
             return std::nullopt;
         case Base::ReferenceType::kGlob:
             std::cout << id.ToString() << " is a glob." << std::endl;
+            return std::nullopt;
+        case Base::ReferenceType::kSymlink:
+            std::cout << id.ToString() << " is a symlink." << std::endl;
             return std::nullopt;
         case Base::ReferenceType::kTarget:
             return id;

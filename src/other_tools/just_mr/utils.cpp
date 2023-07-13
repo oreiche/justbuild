@@ -23,8 +23,9 @@ namespace JustMR::Utils {
 auto GetGitRoot(JustMR::PathsPtr const& just_mr_paths,
                 std::string const& repo_url) noexcept -> std::filesystem::path {
     if (just_mr_paths->git_checkout_locations.contains(repo_url)) {
-        return std::filesystem::absolute(ToNormalPath(std::filesystem::path(
-            just_mr_paths->git_checkout_locations[repo_url])));
+        return std::filesystem::absolute(ToNormalPath(std::filesystem::path{
+            just_mr_paths->git_checkout_locations[repo_url]
+                .get<std::string>()}));
     }
     auto repo_url_as_path = std::filesystem::absolute(
         ToNormalPath(std::filesystem::path(repo_url)));
@@ -38,7 +39,8 @@ auto GetGitRoot(JustMR::PathsPtr const& just_mr_paths,
 
 auto CreateTypedTmpDir(std::string const& type) noexcept -> TmpDirPtr {
     // try to create parent dir
-    auto parent_path = StorageConfig::BuildRoot() / "tmp-workspaces" / type;
+    auto parent_path =
+        StorageConfig::GenerationCacheRoot(0) / "tmp-workspaces" / type;
     return TmpDir::Create(parent_path);
 }
 

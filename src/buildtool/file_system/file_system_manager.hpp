@@ -23,10 +23,13 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <unordered_set>
 
 #include <fcntl.h>
 
 #ifdef __unix__
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -35,6 +38,7 @@
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/system/system.hpp"
+#include "src/utils/cpp/path.hpp"
 
 namespace detail {
 static inline consteval auto BitWidth(int max_val) -> int {
@@ -52,6 +56,9 @@ class FileSystemManager {
   public:
     using ReadDirEntryFunc =
         std::function<bool(std::filesystem::path const&, ObjectType type)>;
+
+    using UseDirEntryFunc =
+        std::function<bool(std::filesystem::path const&, bool /*is_tree*/)>;
 
     class DirectoryAnchor {
         friend class FileSystemManager;
@@ -131,6 +138,54 @@ class FileSystemManager {
         return CreateFileImpl(file) == CreationStatus::Created;
     }
 
+    /// \brief We are POSIX-compliant, therefore we only care about the string
+    /// value the symlinks points to, whether it exists or not, not the target
+    /// type. As such, we don't distinguish directory or file targets. However,
+    /// for maximum compliance, we use the directory symlink creator.
+    [[nodiscard]] static auto CreateSymlink(
+        std::filesystem::path const& to,
+        std::filesystem::path const& link,
+        LogLevel log_failure_at = LogLevel::Error) noexcept -> bool {
+        try {
+            if (not CreateDirectory(link.parent_path())) {
+                Logger::Log(log_failure_at,
+                            "can not create directory {}",
+                            link.parent_path().string());
+                return false;
+            }
+#ifdef __unix__
+            std::filesystem::create_directory_symlink(to, link);
+            return std::filesystem::is_symlink(link);
+#else
+// For non-unix systems one would have to differentiate between file and
+// directory symlinks[1], which would require filesystem access and could lead
+// to inconsistencies due to order of creation of existing symlink targets.
+// [1]https://en.cppreference.com/w/cpp/filesystem/create_symlink
+#error "Non-unix is not supported yet"
+#endif
+        } catch (std::exception const& e) {
+            Logger::Log(log_failure_at,
+                        "symlinking {} to {}\n{}",
+                        to.string(),
+                        link.string(),
+                        e.what());
+            return false;
+        }
+    }
+
+    [[nodiscard]] static auto CreateNonUpwardsSymlink(
+        std::filesystem::path const& to,
+        std::filesystem::path const& link,
+        LogLevel log_failure_at = LogLevel::Error) noexcept -> bool {
+        if (PathIsNonUpwards(to)) {
+            return CreateSymlink(to, link, log_failure_at);
+        }
+        Logger::Log(log_failure_at,
+                    "symlink failure: target {} is not non-upwards",
+                    to.string());
+        return false;
+    }
+
     [[nodiscard]] static auto CreateFileHardlink(
         std::filesystem::path const& file_path,
         std::filesystem::path const& link_path,
@@ -176,6 +231,7 @@ class FileSystemManager {
                                             kSetEpochTime>(file_path,
                                                            link_path);
             case ObjectType::Tree:
+            case ObjectType::Symlink:
                 return false;
         }
     }
@@ -287,6 +343,8 @@ class FileSystemManager {
                 return CopyFileAs<ObjectType::Executable,
                                   kSetEpochTime,
                                   kSetWritable>(src, dst, fd_less, opt);
+            case ObjectType::Symlink:
+                return CopySymlinkAs<kSetEpochTime>(src, dst);
             case ObjectType::Tree:
                 break;
         }
@@ -330,13 +388,60 @@ class FileSystemManager {
         }
     }
 
+    /// \brief Create a symlink with option to set epoch time.
+    template <bool kSetEpochTime = false>
+    [[nodiscard]] static auto CreateSymlinkAs(
+        std::filesystem::path const& to,
+        std::filesystem::path const& link) noexcept -> bool {
+        return CreateSymlink(to, link) and
+               (not kSetEpochTime or SetEpochTime(link));
+    }
+
+    /// \brief Create symlink copy at location, with option to overwriting any
+    /// existing. Uses the content of src directly as the new target, whether
+    /// src is a regular file (CAS entry) or another symlink.
+    template <bool kSetEpochTime = false>
+    [[nodiscard]] static auto CopySymlinkAs(
+        std::filesystem::path const& src,
+        std::filesystem::path const& dst,
+        bool overwrite_existing = true) noexcept -> bool {
+        try {
+            if (overwrite_existing and Exists(dst) and
+                not std::filesystem::remove(dst)) {
+                Logger::Log(LogLevel::Debug,
+                            "could not overwrite existing path {}",
+                            dst.string());
+                return false;
+            }
+            if (std::filesystem::is_symlink(src)) {
+                if (auto content = ReadSymlink(src)) {
+                    return CreateSymlinkAs<kSetEpochTime>(*content, dst);
+                }
+            }
+            else {
+                if (auto content = ReadFile(src)) {
+                    return CreateSymlinkAs<kSetEpochTime>(*content, dst);
+                }
+            }
+        } catch (std::exception const& e) {
+            Logger::Log(LogLevel::Error,
+                        "copying symlink from {} to {}:\n{}",
+                        src.string(),
+                        dst.string(),
+                        e.what());
+        }
+
+        return false;
+    }
+
     [[nodiscard]] static auto RemoveFile(
         std::filesystem::path const& file) noexcept -> bool {
         try {
-            if (!std::filesystem::exists(file)) {
+            auto status = std::filesystem::symlink_status(file);
+            if (!std::filesystem::exists(status)) {
                 return true;
             }
-            if (!IsFile(file)) {
+            if (!std::filesystem::is_regular_file(status)) {
                 return false;
             }
             return std::filesystem::remove(file);
@@ -353,8 +458,12 @@ class FileSystemManager {
                                               bool recursively = false) noexcept
         -> bool {
         try {
-            if (!std::filesystem::exists(dir)) {
+            auto status = std::filesystem::symlink_status(dir);
+            if (!std::filesystem::exists(status)) {
                 return true;
+            }
+            if (!std::filesystem::is_directory(status)) {
+                return false;
             }
             if (recursively) {
                 return (std::filesystem::remove_all(dir) !=
@@ -370,11 +479,34 @@ class FileSystemManager {
         }
     }
 
+    /// \brief Returns if symlink is non-upwards, i.e., its string content path
+    /// never passes itself in the directory tree.
+    /// \param non_strict if set, do not check non-upwardness. Use with care!
+    [[nodiscard]] static auto IsNonUpwardsSymlink(
+        std::filesystem::path const& link,
+        bool non_strict = false) noexcept -> bool {
+        try {
+            if (not std::filesystem::is_symlink(link)) {
+                return false;
+            }
+            return non_strict or
+                   PathIsNonUpwards(std::filesystem::read_symlink(link));
+        } catch (std::exception const& e) {
+            Logger::Log(LogLevel::Error, e.what());
+            return false;
+        }
+    }
+
+    /// \brief Follow a symlink chain without existence check on resulting path
     [[nodiscard]] static auto ResolveSymlinks(
-        gsl::not_null<std::filesystem::path*> const& path) noexcept -> bool {
+        gsl::not_null<std::filesystem::path*> path) noexcept -> bool {
         try {
             while (std::filesystem::is_symlink(*path)) {
-                *path = std::filesystem::read_symlink(*path);
+                auto dest = std::filesystem::read_symlink(*path);
+                *path = dest.is_relative()
+                            ? (std::filesystem::absolute(*path).parent_path() /
+                               dest)
+                            : dest;
             }
         } catch (std::exception const& e) {
             Logger::Log(LogLevel::Error, e.what());
@@ -468,6 +600,10 @@ class FileSystemManager {
             }
             if (std::filesystem::is_directory(status)) {
                 return ObjectType::Tree;
+            }
+            if (std::filesystem::is_symlink(status) and
+                IsNonUpwardsSymlink(path)) {
+                return ObjectType::Symlink;
             }
             if (std::filesystem::exists(status)) {
                 Logger::Log(LogLevel::Debug,
@@ -563,8 +699,23 @@ class FileSystemManager {
                 else if (std::filesystem::is_directory(status)) {
                     type = ObjectType::Tree;
                 }
+                // if not file, executable, or tree, ignore every other entry
+                // type if asked to do so
                 else if (ignore_special) {
                     continue;
+                }
+                // if not already ignored, check symlinks and only add the
+                // non-upwards ones
+                else if (std::filesystem::is_symlink(status)) {
+                    if (IsNonUpwardsSymlink(entry)) {
+                        type = ObjectType::Symlink;
+                    }
+                    else {
+                        Logger::Log(LogLevel::Error,
+                                    "unsupported upwards symlink dir entry {}",
+                                    entry.path().string());
+                        return false;
+                    }
                 }
                 else {
                     Logger::Log(LogLevel::Error,
@@ -582,6 +733,88 @@ class FileSystemManager {
             return false;
         }
         return true;
+    }
+
+    /// \brief Read all entries recursively in a filesystem directory tree.
+    /// \param dir root directory to traverse
+    /// \param use_entry callback to call with found valid entries
+    /// \param ignored_subdirs directory names to be ignored wherever found in
+    ///                        the directory tree of dir.
+    [[nodiscard]] static auto ReadDirectoryEntriesRecursive(
+        std::filesystem::path const& dir,
+        UseDirEntryFunc const& use_entry,
+        std::unordered_set<std::string> const& ignored_subdirs = {}) noexcept
+        -> bool {
+        try {
+            // constructor of this iterator points to end by default;
+            for (auto it = std::filesystem::recursive_directory_iterator(dir);
+                 it != std::filesystem::recursive_directory_iterator();
+                 ++it) {
+                // check for ignored subdirs
+                if (std::filesystem::is_directory(it->symlink_status()) and
+                    ignored_subdirs.contains(*--it->path().end())) {
+                    it.disable_recursion_pending();
+                    continue;
+                }
+                // use the entry
+                if (not use_entry(
+                        it->path().lexically_relative(dir),
+                        std::filesystem::is_directory(it->symlink_status()))) {
+                    return false;
+                }
+            }
+        } catch (std::exception const& ex) {
+            Logger::Log(LogLevel::Error,
+                        "reading directory {} recursively failed",
+                        dir.string());
+            return false;
+        }
+        return true;
+    }
+
+    /// \brief Read the content of a symlink.
+    [[nodiscard]] static auto ReadSymlink(std::filesystem::path const& link)
+        -> std::optional<std::string> {
+        try {
+            if (std::filesystem::is_symlink(link)) {
+                return std::filesystem::read_symlink(link).string();
+            }
+            Logger::Log(LogLevel::Debug,
+                        "{} can not be read because it is not a symlink.",
+                        link.string());
+        } catch (std::exception const& ex) {
+            Logger::Log(LogLevel::Error,
+                        "reading symlink {} failed:\n{}",
+                        link.string(),
+                        ex.what());
+        }
+
+        return std::nullopt;
+    }
+
+    /// \brief Read the content of given file or symlink.
+    [[nodiscard]] static auto ReadContentAtPath(
+        std::filesystem::path const& fpath,
+        ObjectType type) -> std::optional<std::string> {
+        try {
+            if (IsSymlinkObject(type)) {
+                return ReadSymlink(fpath);
+            }
+            if (IsFileObject(type)) {
+                return ReadFile(fpath, type);
+            }
+            Logger::Log(
+                LogLevel::Debug,
+                "{} can not be read because it is neither a file nor symlink.",
+                fpath.string());
+        } catch (std::exception const& ex) {
+            Logger::Log(LogLevel::Error,
+                        "reading content at path {} failed:\n{}",
+                        fpath.string(),
+                        ex.what());
+        }
+
+        return std::nullopt;
     }
 
     /// \brief Write file
@@ -666,6 +899,8 @@ class FileSystemManager {
                 return WriteFileAs<ObjectType::Executable,
                                    kSetEpochTime,
                                    kSetWritable>(content, file, fd_less);
+            case ObjectType::Symlink:
+                return CreateSymlinkAs<kSetEpochTime>(content, file);
             case ObjectType::Tree:
                 return false;
         }
@@ -701,7 +936,8 @@ class FileSystemManager {
     [[nodiscard]] static auto CreateDirectoryImpl(
         std::filesystem::path const& dir) noexcept -> CreationStatus {
         try {
-            if (std::filesystem::is_directory(dir)) {
+            if (std::filesystem::is_directory(
+                    std::filesystem::symlink_status(dir))) {
                 return CreationStatus::Exists;
             }
             if (std::filesystem::create_directories(dir)) {
@@ -711,7 +947,8 @@ class FileSystemManager {
             // after the current thread checked if it existed. For that reason,
             // we try to create it and check if it exists if create_directories
             // was not successful.
-            if (std::filesystem::is_directory(dir)) {
+            if (std::filesystem::is_directory(
+                    std::filesystem::symlink_status(dir))) {
                 return CreationStatus::Exists;
             }
 
@@ -727,7 +964,8 @@ class FileSystemManager {
     [[nodiscard]] static auto CreateFileImpl(
         std::filesystem::path const& file) noexcept -> CreationStatus {
         try {
-            if (std::filesystem::is_regular_file(file)) {
+            if (std::filesystem::is_regular_file(
+                    std::filesystem::symlink_status(file))) {
                 return CreationStatus::Exists;
             }
             if (gsl::owner<FILE*> fp = std::fopen(file.c_str(), "wx")) {
@@ -738,7 +976,8 @@ class FileSystemManager {
             // the current thread checked if it existed. For that reason, we try
             // to create it and check if it exists if fopen() with exclusive bit
             // was not successful.
-            if (std::filesystem::is_regular_file(file)) {
+            if (std::filesystem::is_regular_file(
+                    std::filesystem::symlink_status(file))) {
                 return CreationStatus::Exists;
             }
             return CreationStatus::Failed;
@@ -755,6 +994,11 @@ class FileSystemManager {
             std::filesystem::copy_options::overwrite_existing) noexcept
         -> bool {
         try {
+            // src and dst should be actual files
+            if (std::filesystem::is_symlink(src) or
+                std::filesystem::is_symlink(dst)) {
+                return false;
+            }
             return std::filesystem::copy_file(src, dst, opt);
         } catch (std::exception const& e) {
             Logger::Log(LogLevel::Error,
@@ -809,11 +1053,40 @@ class FileSystemManager {
         }
     }
 
+    /// \brief Set the last time of modification for a file (or symlink --
+    /// POSIX-only).
     static auto SetEpochTime(std::filesystem::path const& file_path) noexcept
         -> bool {
         static auto const kPosixEpochTime =
             System::GetPosixEpoch<std::chrono::file_clock>();
         try {
+            if (std::filesystem::is_symlink(file_path)) {
+                // Because std::filesystem::last_write_time follows
+                // symlinks, one has instead to manually call utimensat with
+                // the AT_SYMLINK_NOFOLLOW flag. On non-POSIX systems, we
+                // return false by default for symlinks.
+#ifdef __unix__
+                std::array<timespec, 2> times{};  // default is POSIX epoch
+                if (utimensat(AT_FDCWD,
+                              file_path.c_str(),
+                              times.data(),
+                              AT_SYMLINK_NOFOLLOW) != 0) {
+                    Logger::Log(LogLevel::Error,
+                                "Call to utimensat for symlink {} failed with "
+                                "error: {}",
+                                file_path.string(),
+                                strerror(errno));
+                    return false;
+                }
+                return true;
+#else
+                Logger::Log(
+                    LogLevel::Warning,
+                    "Setting the last modification time attribute for a "
+                    "symlink is unsupported!");
+                return false;
+#endif
+            }
             std::filesystem::last_write_time(file_path, kPosixEpochTime);
             return true;
         } catch (std::exception const& e) {
