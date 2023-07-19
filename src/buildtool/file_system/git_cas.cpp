@@ -21,6 +21,7 @@
 #include "gsl/gsl"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/hex_string.hpp"
+#include "src/utils/cpp/path.hpp"
 
 #ifndef BOOTSTRAP_BUILD_TOOL
 
@@ -156,8 +157,25 @@ auto GitCAS::OpenODB(std::filesystem::path const& repo_path) noexcept -> bool {
         git_repository_odb(&odb_ptr, repo);
         odb_.reset(odb_ptr);  // retain odb pointer
         // set root
-        git_path_ = std::filesystem::weakly_canonical(std::filesystem::absolute(
-            std::filesystem::path(git_repository_path(repo))));
+        std::filesystem::path git_path{};
+        if (git_repository_is_bare(repo) != 0) {
+            git_path = ToNormalPath((git_repository_path(repo)));
+        }
+        else {
+            git_path = ToNormalPath(git_repository_workdir(repo));
+        }
+        if (not git_path.is_absolute()) {
+            try {
+                git_path = std::filesystem::absolute(git_path);
+            } catch (std::exception const& e) {
+                Logger::Log(LogLevel::Error,
+                            "Failed to obtain absolute path for {}: {}",
+                            git_path.string(),
+                            e.what());
+                return false;
+            }
+        }
+        git_path_ = git_path;
         // release resources
         git_repository_free(repo);
     }
