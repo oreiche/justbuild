@@ -47,7 +47,7 @@ jobs:
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            export JUST_BUILD_CONF='{\"COMPILER_FAMILY\":\"clang\",\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}'; \
+            export JUST_BUILD_CONF='{\"TOOLCHAIN_CONFIG\":{\"FAMILY\":\"clang\"},\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}'; \
             ./bin/bootstrap.py . /tmp/justbuild_x86_64"
 
       - name: Build just-mr for x86_64
@@ -151,7 +151,7 @@ jobs:
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            echo '{\"COMPILER_FAMILY\":\"gnu\",\"ARCH\":\"x86_64\",\"TARGET_ARCH\":\"arm64\",\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > gcc-arm64.conf; \
+            echo '{\"TOOLCHAIN_CONFIG\":{\"FAMILY\":\"gnu\"},\"ARCH\":\"x86_64\",\"TARGET_ARCH\":\"arm64\",\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > gcc-arm64.conf; \
             export PATH=\$(pwd)/justbuild-x86_64-linux/bin:\$PATH; \
             just-mr install -c gcc-arm64.conf -o justbuild-arm64-linux 'installed just'"
 
@@ -159,7 +159,7 @@ jobs:
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            echo '{\"COMPILER_FAMILY\":\"gnu\",\"ARCH\":\"x86_64\",\"TARGET_ARCH\":\"arm64\",\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > gcc-arm64.conf; \
+            echo '{\"TOOLCHAIN_CONFIG\":{\"FAMILY\":\"gnu\"},\"ARCH\":\"x86_64\",\"TARGET_ARCH\":\"arm64\",\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > gcc-arm64.conf; \
             export PATH=\$(pwd)/justbuild-x86_64-linux/bin:\$PATH; \
             just-mr install -c gcc-arm64.conf -o justbuild-arm64-linux 'installed just-mr'"
 

@@ -17,7 +17,7 @@ export INCLUDE_PATH = $(BUILDDIR)/include
 export PKG_CONFIG_PATH = $(BUILDDIR)/pkgconfig
 
 define JUST_BUILD_CONF
-{ "COMPILER_FAMILY": "clang"
+{ "TOOLCHAIN_CONFIG": {"FAMILY": "clang"}
 , "AR": "ar"
 , "ARCH": "$(ARCH)"
 , "TARGET_ARCH": "$(TARGET_ARCH)"
