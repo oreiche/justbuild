@@ -461,6 +461,11 @@ When installing a tree to stdout, i.e., when no option **`-o`** is given,
 dump the raw tree rather than a pretty-printed version.  
 Supported by: install-cas.
 
+**`-P`**, **`--sub-object-path`** *`PATH`*  
+Instead of the specified tree object take the object at the specified
+logical path inside.  
+Supported by: install-cas.
+
 **`--remember`**  
 Ensure that all installed artifacts are available in local CAS as well,
 even when using remote execution.  
@@ -501,9 +506,9 @@ remote-execution endpoints based on the the execution properties.
 The format is a JSON list of pairs (lists of length two) of an object
 of strings and a string. The first entry describes a condition (the
 remote-execution properties have to agree on the domain of this
-object), the is remote-exeuction address in the NAME:PORT format as
-for the **`-r`** option. The first matching entry (if any) is taken;
-in none matches the default execution endpoint is taken (either
+object), the second entry is a remote-execution address in the NAME:PORT
+format as for the **`-r`** option. The first matching entry (if any) is taken;
+if none matches, the default execution endpoint is taken (either
 as specified by **`-r`**, or local execution if no endpoint is
 specified).  
 Supported by: analyse|build|install-cas|install|rebuild|traverse.

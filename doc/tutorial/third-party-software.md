@@ -3,11 +3,16 @@ Building Third-party Software
 
 Third-party projects usually ship with their own build description,
 which often happens to be not compatible with justbuild. Nevertheless,
-it is highly desireable to include external projects via their source
+it often is desireable to include external projects via their source
 code base, instead of relying on the integration of out-of-band binary
 distributions. justbuild offers a flexible approach to provide the
 required build description via an overlay layer without the need to
-touch the original code base.
+touch the original code base. This mechanism is independent of the
+actual justbuild description eventually used and the latter might
+well be a
+[rule calling the foreign buildsystem](https://github.com/just-buildsystem/rules-cc#rule-ccforeigncmake-library).
+In this section, however, we describe the cleaner approach of providing
+a native build description.
 
 For the remainder of this section, we expect to have the project files
 available resulting from successfully completing the tutorial section on
@@ -135,7 +140,7 @@ additional binding `"format"` for it:
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "123d8b03bf2440052626151c14c54abce2726e6f"
+      , "commit": "307c96681e6626286804c45273082dff94127878"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -205,7 +210,7 @@ INFO: Discovered 7 actions, 3 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 7 actions, 1 cache hits.
 INFO: Artifacts built, logical paths are:
-        helloworld [0ec4e36cfb5f2c3efa0fff789349a46694a6d303:132736:x]
+        helloworld [18d25e828a0176cef6fb029bfd83e1862712ec87:132736:x]
 $
 ```
 
@@ -256,7 +261,7 @@ be set for them in `repos.json`:
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "123d8b03bf2440052626151c14c54abce2726e6f"
+      , "commit": "307c96681e6626286804c45273082dff94127878"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -307,7 +312,7 @@ INFO: Discovered 7 actions, 3 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 7 actions, 7 cache hits.
 INFO: Artifacts built, logical paths are:
-        helloworld [0ec4e36cfb5f2c3efa0fff789349a46694a6d303:132736:x]
+        helloworld [18d25e828a0176cef6fb029bfd83e1862712ec87:132736:x]
 $
 $ just-mr build helloworld
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
@@ -317,7 +322,7 @@ INFO: Discovered 4 actions, 2 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 4 actions, 4 cache hits.
 INFO: Artifacts built, logical paths are:
-        helloworld [0ec4e36cfb5f2c3efa0fff789349a46694a6d303:132736:x]
+        helloworld [18d25e828a0176cef6fb029bfd83e1862712ec87:132736:x]
 $
 ```
 
@@ -365,7 +370,7 @@ example, the following `repos.json` defines the overlay
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "123d8b03bf2440052626151c14c54abce2726e6f"
+      , "commit": "307c96681e6626286804c45273082dff94127878"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -425,8 +430,8 @@ different build configuration (production, debug, instrumented for
 performance analysis; cross-compiling for a different target
 architecture), there are also legitimate reasons to use pre-built
 dependencies. The most prominent one is if your project is packaged as
-part of a larger distribution. For that reason, just also has (in
-`etc/import.prebuilt`) target files for all its dependencies assuming
+part of a larger distribution. For that reason, just also has target files
+for all its dependencies assuming
 they are pre-installed. The reason why target files are used at all for
 this situation is twofold.
 
@@ -451,7 +456,7 @@ this situation is twofold.
       description maintainable, as each target still only declares its
       direct dependencies.
 
-The target description for a pre-built version of the format library
+A target description for a pre-built version of the format library
 that was used as an example in this section is shown next; with our
 staging mechanism the logical repository it belongs to is rooted in the
 `fmt` subdirectory of the `include` directory of the ambient system.
@@ -467,7 +472,19 @@ staging mechanism the logical repository it belongs to is rooted in the
 }
 ```
 
----
+However, even specifying all the include locations and headers can
+be tedious and in the end, it is information that `pkg-config` can
+provide as well. So there is a rule to import libraries that way
+and the actual packaging-build version of `libfmt`, as provided in
+`etc/import.pkgconfig`, looks as follows.
+
+``` {.jsonc srcname="etc/import.pkgconfig/TARGETS.fmt}
+{ "fmt":
+  {"type": ["@", "rules", "CC/pkgconfig", "system_library"], "name": ["fmt"]}
+}
+```
+
+
 
 [^1]: Explicit `TREE` references are always a list of length 3, to
       distinguish them from target references of length 2 (module and

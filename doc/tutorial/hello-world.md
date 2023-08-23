@@ -30,7 +30,7 @@ Second, we also need to create the multi-repository configuration
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "123d8b03bf2440052626151c14c54abce2726e6f"
+      , "commit": "307c96681e6626286804c45273082dff94127878"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -46,7 +46,7 @@ Second, we also need to create the multi-repository configuration
 In that configuration, two repositories are defined:
 
 1. The `"rules-cc"` repository located in the subdirectory `rules` of
-   [just-buildsystem/rules-cc:123d8b03bf2440052626151c14c54abce2726e6f](https://github.com/just-buildsystem/rules-cc/tree/123d8b03bf2440052626151c14c54abce2726e6f),
+   [just-buildsystem/rules-cc:307c96681e6626286804c45273082dff94127878](https://github.com/just-buildsystem/rules-cc/tree/307c96681e6626286804c45273082dff94127878),
    which contains the high-level concepts for building C/C++ binaries
    and libraries.
 
@@ -92,8 +92,10 @@ strings or a list of targets, we have to specify the name as a list
 (this rule will simply concatenate all strings given in this field).
 Furthermore, at least one input to the binary is required, which can be
 specified via the target fields `"srcs"` or `"deps"`. In our case, the
-former is used, which contains our single source file (files are
-considered targets).
+former is used, which contains our single source file. Source files are
+also targets, but, as seen in the "Getting Started" section, not the only
+ones; instead of naming a source file, we could also have specified a
+`"generic"` target generating one (or many) of the sources of our binary.
 
 Now, the last file that is missing is the actual source file `main.cpp`:
 
@@ -116,12 +118,11 @@ command line:
 $ just-mr build helloworld
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
-INFO: Export targets found: 0 cached, 0 uncached, 0 not eligible for caching
 INFO: Discovered 2 actions, 1 trees, 0 blobs
-INFO: Building [["@","helloworld","","helloworld"],{}].
+INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 2 actions, 0 cache hits.
 INFO: Artifacts built, logical paths are:
-        helloworld [b5cfca8b810adc4686f5cac00258a137c5d4a3ba:17088:x]
+        helloworld [bd36255e856ddb72c844c2010a785ab70ee75d56:17088:x]
 $
 ```
 
@@ -163,12 +164,11 @@ object that sets `"CXX"` to `"clang++"`:
 $ just-mr build helloworld -D'{"CXX":"clang++"}'
 INFO: Requested target is [["@","tutorial","","helloworld"],{"CXX":"clang++"}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{"CXX":"clang++"}]
-INFO: Export targets found: 0 cached, 0 uncached, 0 not eligible for caching
 INFO: Discovered 2 actions, 1 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{"CXX":"clang++"}].
 INFO: Processed 2 actions, 0 cache hits.
 INFO: Artifacts built, logical paths are:
-        helloworld [b8cf7b8579d9dc7172b61660139e2c14521cedae:16944:x]
+        helloworld [a1e0dc77ec6f171e118a3e6992859f68617a2c6f:16944:x]
 $
 ```
 
@@ -180,8 +180,9 @@ your project, you need to create a separate file root for providing
 required `TARGETS` file, which contains the `"defaults"` target that
 should be used by the rules. This file root is then used as the *target
 root* for the rules, i.e., the search path for `TARGETS` files. In this
-way, the description of the `"defaults"` target is provided in a
-separate file root, to keep the rules repository independent of these
+way, the description of the `"defaults"` target, while logically part
+of the rules repository is physically located in a separate directory
+to keep the rules repository independent of these project-specific
 definitions.
 
 We will call the new file root `tutorial-defaults` and need to create a
@@ -221,7 +222,7 @@ the following content:
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "123d8b03bf2440052626151c14c54abce2726e6f"
+      , "commit": "307c96681e6626286804c45273082dff94127878"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -245,7 +246,11 @@ without specifying any external repository (e.g.,
 full-fledged repository but merely a file root that is considered local
 to the `"rules-cc"` repository. In fact, the `"rules-cc"` repository
 cannot refer to any external repository as it does not have any defined
-bindings.
+bindings. The naming for rules follows the same scheme we've already
+seen for targets, so a single string refers to an entity in the same
+directory. As our `"defaults"` target is in the directory `"CC"` of
+the rules repository we could also have written the rule `"type"`
+simply as `"defaults"`.
 
 To rebuild the project, we need to rerun `just-mr` (note that due to
 configuration changes, rerunning only `just` would not suffice):
@@ -254,16 +259,37 @@ configuration changes, rerunning only `just` would not suffice):
 $ just-mr build helloworld
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
-INFO: Export targets found: 0 cached, 0 uncached, 0 not eligible for caching
 INFO: Discovered 2 actions, 1 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 2 actions, 0 cache hits.
 INFO: Artifacts built, logical paths are:
-        helloworld [487dc9e47b978877ed2f7d80b3395ce84b23be92:16992:x]
+        helloworld [0d5754a83c7c787b1c4dd717c8588ecef203fb72:16992:x]
 $
 ```
 
 Note that the output binary may have changed due to different defaults.
+
+In this tutorial we simply set the correct parameters of the defaults target.
+It is, however, not necessary to remember all the fields of a rule; we can
+always ask `just` to present us the available field names and configuration
+variables together with any documentation the rule author provided. For
+this, we use the `describe` subcommand; as we're interested in a target of
+the `rules-cc` repository, which is not the default repository, we also
+have to specify the repository name.
+
+``` sh
+$ just-mr --main rules-cc describe CC defaults
+```
+
+Of course, the `describe` subcommand works generically on all
+targets. For example, by asking to describe our `helloworld` target,
+we will get reminded about all the various fields and relevant
+configuration variables of a C++ binary.
+
+``` sh
+$ just-mr describe helloworld
+```
+
 
 Modeling target dependencies
 ----------------------------
@@ -352,12 +378,11 @@ binary can be built with the same command as before (no need to rerun
 $ just-mr build helloworld
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
-INFO: Export targets found: 0 cached, 0 uncached, 0 not eligible for caching
 INFO: Discovered 4 actions, 2 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 4 actions, 0 cache hits.
 INFO: Artifacts built, logical paths are:
-        helloworld [2b81e3177afc382452a2df9f294d3df90a9ccaf0:17664:x]
+        helloworld [a0e593e4d52e8b3e14863b3cf1f80809143829ca:17664:x]
 $
 ```
 
@@ -368,7 +393,6 @@ run the following command:
 $ just-mr build greet greet
 INFO: Requested target is [["@","tutorial","greet","greet"],{}]
 INFO: Analysed target [["@","tutorial","greet","greet"],{}]
-INFO: Export targets found: 0 cached, 0 uncached, 0 not eligible for caching
 INFO: Discovered 2 actions, 1 trees, 0 blobs
 INFO: Building [["@","tutorial","greet","greet"],{}].
 INFO: Processed 2 actions, 2 cache hits.

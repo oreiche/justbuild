@@ -89,6 +89,25 @@ std::unordered_map<std::string, CheckoutType> const kCheckoutTypeMap = {
     {"distdir", CheckoutType::Distdir},
     {"git tree", CheckoutType::GitTree}};
 
+/// \brief Pragma "special" value enum
+enum class PragmaSpecial : std::uint8_t {
+    Ignore,
+    ResolvePartially,
+    ResolveCompletely
+};
+
+/// \brief Pragma "special" value map
+std::unordered_map<std::string, PragmaSpecial> const kPragmaSpecialMap = {
+    {"ignore", PragmaSpecial::Ignore},
+    {"resolve-partially", PragmaSpecial::ResolvePartially},
+    {"resolve-completely", PragmaSpecial::ResolveCompletely}};
+
+/// \brief Pragma "special" value inverse map, from enum to string
+std::unordered_map<PragmaSpecial, std::string> const kPragmaSpecialInverseMap =
+    {{PragmaSpecial::Ignore, "ignore"},
+     {PragmaSpecial::ResolvePartially, "resolve-partially"},
+     {PragmaSpecial::ResolveCompletely, "resolve-completely"}};
+
 namespace JustMR {
 
 struct Paths {
@@ -155,6 +174,11 @@ namespace Utils {
 /// content.
 [[nodiscard]] auto GetDistdirTreeIDFile(std::string const& content) noexcept
     -> std::filesystem::path;
+
+/// \brief Get the path to the file storing a resolved tree hash.
+[[nodiscard]] auto GetResolvedTreeIDFile(
+    std::string const& tree_hash,
+    PragmaSpecial const& pragma_special) noexcept -> std::filesystem::path;
 
 /// \brief Write a tree id to file. The parent folder of the file must exist!
 [[nodiscard]] auto WriteTreeIDFile(std::filesystem::path const& tree_id_file,

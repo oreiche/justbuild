@@ -924,6 +924,39 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
         )"_json));
     }
 
+    SECTION("set expression") {
+        auto expr = Expression::FromJson(R"(
+          { "type": "set"
+          , "$1": ["foo", "bar", "baz"]
+          }
+        )"_json);
+        REQUIRE(expr);
+
+        auto result = expr.Evaluate(env, fcts);
+        REQUIRE(result);
+        CHECK(result == Expression::FromJson(R"(
+          { "foo": true
+          , "bar": true
+          , "baz": true
+          }
+        )"_json));
+    }
+
+    SECTION("reverse expression") {
+        auto expr = Expression::FromJson(R"(
+          { "type": "reverse"
+          , "$1": ["foo", "bar", "baz"]
+          }
+        )"_json);
+        REQUIRE(expr);
+
+        auto result = expr.Evaluate(env, fcts);
+        REQUIRE(result);
+        CHECK(result == Expression::FromJson(R"(
+           ["baz", "bar", "foo"]
+        )"_json));
+    }
+
     SECTION("keys expression") {
         auto expr = Expression::FromJson(R"(
             { "type": "keys"

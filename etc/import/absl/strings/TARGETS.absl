@@ -1,6 +1,6 @@
 { "strings":
   { "type": "export"
-  , "target": "strings_internal_"
+  , "target": "strings_internal"
   , "flexible_config":
     [ "ADD_CFLAGS"
     , "ADD_CXXFLAGS"
@@ -8,7 +8,6 @@
     , "ARCH"
     , "CC"
     , "CFLAGS"
-    , "COMPILER_FAMILY"
     , "CXX"
     , "CXXFLAGS"
     , "DEBUG"
@@ -16,9 +15,10 @@
     , "HOST_ARCH"
     , "OS"
     , "TARGET_ARCH"
+    , "TOOLCHAIN_CONFIG"
     ]
   }
-, "strings_internal_":
+, "strings_internal":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["strings"]
   , "stage": ["absl", "strings"]
@@ -66,7 +66,7 @@
     , "internal/memutil.h"
     ]
   , "deps":
-    [ "strings_internal"
+    [ "internal"
     , ["absl/base", "base"]
     , ["absl/base", "config"]
     , ["absl/base", "core_headers"]
@@ -79,9 +79,29 @@
     , ["absl/numeric", "int128"]
     ]
   }
-, "strings_internal":
+, "internal":
+  { "type": "export"
+  , "target": "internal_"
+  , "flexible_config":
+    [ "ADD_CFLAGS"
+    , "ADD_CXXFLAGS"
+    , "AR"
+    , "ARCH"
+    , "CC"
+    , "CFLAGS"
+    , "CXX"
+    , "CXXFLAGS"
+    , "DEBUG"
+    , "ENV"
+    , "HOST_ARCH"
+    , "OS"
+    , "TARGET_ARCH"
+    , "TOOLCHAIN_CONFIG"
+    ]
+  }
+, "internal_":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["strings_internal"]
+  , "name": ["internal"]
   , "stage": ["absl", "strings"]
   , "hdrs":
     [ "internal/char_map.h"
@@ -110,7 +130,6 @@
     , "ARCH"
     , "CC"
     , "CFLAGS"
-    , "COMPILER_FAMILY"
     , "CXX"
     , "CXXFLAGS"
     , "DEBUG"
@@ -118,6 +137,7 @@
     , "HOST_ARCH"
     , "OS"
     , "TARGET_ARCH"
+    , "TOOLCHAIN_CONFIG"
     ]
   }
 , "cord_internal_":
@@ -133,7 +153,7 @@
     , "cordz_statistics"
     , "cordz_update_scope"
     , "cordz_update_tracker"
-    , "strings_internal"
+    , "internal"
     , "str_format"
     , "strings"
     , ["absl/base", "base"]
@@ -219,14 +239,9 @@
     , "expr":
       { "type": "var"
       , "name": "TARGET_ARCH"
-      , "default":
-        { "type": "var"
-        , "name": "ARCH"
-        , "default":
-          {"type": "fail", "msg": "Required variable 'ARCH' is not set."}
-        }
+      , "default": {"type": "var", "name": "ARCH", "default": "unknown"}
       }
-    , "case": {"arm": ["-latomic"]}
+    , "case": {"arm": ["-latomic"], "unknown": ["-latomic"]}
     }
   , "deps":
     [ "cord_internal"
@@ -294,7 +309,6 @@
     , "ARCH"
     , "CC"
     , "CFLAGS"
-    , "COMPILER_FAMILY"
     , "CXX"
     , "CXXFLAGS"
     , "DEBUG"
@@ -302,6 +316,7 @@
     , "HOST_ARCH"
     , "OS"
     , "TARGET_ARCH"
+    , "TOOLCHAIN_CONFIG"
     ]
   }
 , "str_format_internal_":

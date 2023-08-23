@@ -53,10 +53,15 @@ readonly TGZ_REPO_SHA256=$(sha256sum tgz_repo.tar.gz | awk '{print $1}')
 readonly TGZ_REPO_SHA512=$(sha512sum tgz_repo.tar.gz | awk '{print $1}')
 
 echo "Set up file repos"
+# add files
 mkdir -p "${FILE_ROOT}/test_dir1"
 echo test > "${FILE_ROOT}/test_dir1/test_file"
 mkdir -p "${FILE_ROOT}/test_dir2/test_dir3"
 echo test > "${FILE_ROOT}/test_dir2/test_dir3/test_file"
+# add resolvable non-upwards symlink
+ln -s test_file "${FILE_ROOT}/test_dir1/nonupwards"
+# add resolvable upwards symlink
+ln -s ../test_dir3/test_file "${FILE_ROOT}/test_dir2/test_dir3/upwards"
 
 echo "Set up local git repo"
 # NOTE: Libgit2 has no support for Git bundles yet
@@ -67,6 +72,7 @@ mkdir -p foo/bar
 echo foo > foo.txt
 echo bar > foo/bar.txt
 echo baz > foo/bar/baz.txt
+ln -s dummy foo/link
 EOF
 # set up git repo
 (
@@ -88,10 +94,14 @@ readonly GIT_TREE_ID="$(cd "${GIT_ROOT}" && git ls-tree "${GIT_REPO_COMMIT}" foo
 echo "Publish remote repos to HTTP server"
 # start Python server as remote repos location
 port_file="$(mktemp -t port_XXXXXX -p "${TEST_TMPDIR}")"
-python3 -u "${ROOT}/utils/run_test_server.py" >${port_file} & server_pid=$!
-sleep 1s  # give some time to set up properly
+python3 -u "${ROOT}/utils/run_test_server.py" "${port_file}" & server_pid=$!
 # set up cleanup of http server
 trap "server_cleanup ${server_pid}" INT TERM EXIT
+# wait for the server to be available
+while  [ -z "$(cat "${port_file}")" ]
+do
+    sleep 1s
+done
 # get port number as variable
 port_num="$(cat ${port_file})"
 
@@ -118,6 +128,20 @@ cat > test-repos.json <<EOF
       , "sha256": "${ZIP_REPO_SHA256}"
       , "sha512": "${ZIP_REPO_SHA512}"
       , "subdir": "root"
+      , "pragma": {"special": "resolve-partially"}
+      }
+    , "bindings": {"tgz_repo": "tgz_repo", "distdir_repo": "distdir_repo"}
+    }
+  , "zip_repo_resolved":
+    { "repository":
+      { "type": "zip"
+      , "content": "${ZIP_REPO_CONTENT}"
+      , "distfile": "zip_repo.zip"
+      , "fetch": "http://127.0.0.1:${port_num}/zip_repo.zip"
+      , "sha256": "${ZIP_REPO_SHA256}"
+      , "sha512": "${ZIP_REPO_SHA512}"
+      , "subdir": "root"
+      , "pragma": {"special": "resolve-completely"}
       }
     , "bindings": {"tgz_repo": "tgz_repo", "distdir_repo": "distdir_repo"}
     }
@@ -130,6 +154,7 @@ cat > test-repos.json <<EOF
       , "sha256": "${TGZ_REPO_SHA256}"
       , "sha512": "${TGZ_REPO_SHA512}"
       , "subdir": "root/baz"
+      , "pragma": {"special": "ignore"}
       }
     , "bindings": {"git_repo": "git_repo"}
     }
@@ -142,6 +167,16 @@ cat > test-repos.json <<EOF
       , "subdir": "foo"
       }
     }
+  , "git_repo_ignore_special":
+    { "repository":
+      { "type": "git"
+      , "repository": "${GIT_ROOT}"
+      , "branch": "test"
+      , "commit": "${GIT_REPO_COMMIT}"
+      , "subdir": "foo"
+      , "pragma": {"special": "ignore"}
+      }
+    }
   , "git_tree_repo":
     { "repository":
       { "type": "git tree"
@@ -149,26 +184,52 @@ cat > test-repos.json <<EOF
       , "cmd": ["sh", "${SERVER_ROOT}/bin/git_dir_setup.sh"]
       }
     }
+  , "git_tree_repo_ignore_special":
+    { "repository":
+      { "type": "git tree"
+      , "id": "${GIT_TREE_ID}"
+      , "cmd": ["sh", "${SERVER_ROOT}/bin/git_dir_setup.sh"]
+      , "pragma": {"special": "ignore"}
+      }
+    }
   , "file_repo1":
     { "repository":
       { "type": "file"
       , "path": "${FILE_ROOT}/test_dir1"
+      , "pragma": {"to_git": true}
       }
     }
-  , "file_repo2":
+  , "file_repo2_ignore_special":
     { "repository":
       { "type": "file"
       , "path": "${FILE_ROOT}/test_dir2"
-      , "pragma": {"to_git": true}
+      , "pragma": {"special": "ignore"}
       }
-    , "bindings": {"file_repo1": "file_repo1"}
+    }
+  , "file_repo2_resolve_partially":
+    { "repository":
+      { "type": "file"
+      , "path": "${FILE_ROOT}/test_dir2"
+      , "pragma": {"special": "resolve_partially"}
+      }
+    }
+  , "file_repo2_resolve_completely":
+    { "repository":
+      { "type": "file"
+      , "path": "${FILE_ROOT}/test_dir2"
+      , "pragma": {"special": "resolve_completely"}
+      }
     }
   , "distdir_repo":
     { "repository":
       { "type": "distdir"
-      , "repositories": ["git_repo", "zip_repo", "file_repo2"]
+      , "repositories": ["git_repo", "zip_repo", "file_repo1"]
       }
-    , "bindings": {"file_repo1": "file_repo1"}
+    , "bindings":
+      { "file_repo2_ignore_special": "file_repo2_ignore_special"
+      , "file_repo2_resolve_partially": "file_repo2_resolve_partially"
+      , "file_repo2_resolve_completely": "file_repo2_resolve_completely"
+      }
     }
   }
 }

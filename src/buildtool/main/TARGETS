@@ -85,6 +85,7 @@
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/execution_api/remote", "config"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/execution_api/utils", "subobject"]
     ]
   }
 , "analyse":

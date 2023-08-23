@@ -26,11 +26,16 @@ using archive_entry = struct archive_entry;
 }
 
 enum class ArchiveType : size_t {
-    kArchiveTypeZip,
-    kArchiveTypeTar,
-    kArchiveTypeTarGz,
-    kArchiveTypeTarBz2,
-    kArchiveTypeTarXz
+    Zip,
+    _7Zip,
+    ZipAuto,  // autodetect zip-like archives
+    Tar,      // uncompressed
+    TarGz,
+    TarBz2,
+    TarXz,
+    TarLz,
+    TarLzma,
+    TarAuto  // autodetect tarball-type archives
 };
 
 /// \brief Class handling archiving and unarchiving operations via libarchive

@@ -1,6 +1,6 @@
 { "symbolize":
   { "type": ["@", "rules", "CC", "library"]
-  , "arguments_config": ["COMPILER_FAMILY", "ARCH", "TARGET_ARCH"]
+  , "arguments_config": ["TOOLCHAIN_CONFIG", "ARCH", "TARGET_ARCH"]
   , "name": ["symbolize"]
   , "stage": ["absl", "debugging"]
   , "hdrs": ["internal/symbolize.h", "symbolize.h"]
@@ -12,39 +12,28 @@
     , "symbolize_unimplemented.inc"
     , "symbolize_win32.inc"
     ]
-  , "private-cflags":
-    { "type": "case"
-    , "expr":
-      { "type": "var"
-      , "name": "TARGET_ARCH"
-      , "default":
-        { "type": "var"
-        , "name": "ARCH"
-        , "default":
-          {"type": "fail", "msg": "Required variable 'ARCH' is not set."}
-        }
-      }
-    , "case": {"arm": ["-Wno-sign-conversion"]}
-    }
   , "private-ldflags":
     { "type": "++"
     , "$1":
       [ { "type": "case*"
-        , "expr": {"type": "var", "name": "COMPILER_FAMILY"}
+        , "expr":
+          { "type": "lookup"
+          , "map":
+            { "type": "var"
+            , "name": "TOOLCHAIN_CONFIG"
+            , "default": {"type": "empty_map"}
+            }
+          , "key": "FAMILY"
+          }
         , "case": [["mingw", ["-ladvapi32"]]]
         }
       , { "type": "case"
         , "expr":
           { "type": "var"
           , "name": "TARGET_ARCH"
-          , "default":
-            { "type": "var"
-            , "name": "ARCH"
-            , "default":
-              {"type": "fail", "msg": "Required variable 'ARCH' is not set."}
-            }
+          , "default": {"type": "var", "name": "ARCH", "default": "unknown"}
           }
-        , "case": {"arm": ["-latomic"]}
+        , "case": {"arm": ["-latomic"], "unknown": ["-latomic"]}
         }
       ]
     }
@@ -58,6 +47,20 @@
     , ["absl/base", "malloc_internal"]
     , ["absl/base", "raw_logging_internal"]
     , ["absl/strings", "strings"]
+    ]
+  }
+, "examine_stack":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["log_message"]
+  , "stage": ["absl", "debugging"]
+  , "srcs": ["internal/examine_stack.cc"]
+  , "hdrs": ["internal/examine_stack.h"]
+  , "deps":
+    [ "stacktrace"
+    , "symbolize"
+    , ["absl/base", "config"]
+    , ["absl/base", "core_headers"]
+    , ["absl/base", "raw_logging_internal"]
     ]
   }
 , "stacktrace":

@@ -33,6 +33,7 @@
 #include "src/other_tools/ops_maps/git_update_map.hpp"
 #include "src/other_tools/ops_maps/repo_fetch_map.hpp"
 #include "src/other_tools/repo_map/repos_to_setup_map.hpp"
+#include "src/other_tools/symlinks_map/resolve_symlinks_map.hpp"
 
 namespace {
 
@@ -356,6 +357,13 @@ void SetupLogging(MultiRepoLogArguments const& clargs) {
     // read distdirs; user can append, but does not overwrite
     auto distdirs = rc_config["distdirs"];
     if (distdirs.IsNotNull()) {
+        if (not distdirs->IsList()) {
+            Logger::Log(LogLevel::Error,
+                        "Configuration-file provided distdirs has to be a list "
+                        "of strings, but found {}",
+                        distdirs->ToString());
+            std::exit(kExitConfigError);
+        }
         auto const& distdirs_list = distdirs->List();
         for (auto const& l : distdirs_list) {
             auto paths =
@@ -392,9 +400,25 @@ void SetupLogging(MultiRepoLogArguments const& clargs) {
     // read additional just args; user can append, but does not overwrite
     auto just_args = rc_config["just args"];
     if (just_args.IsNotNull()) {
+        if (not just_args->IsMap()) {
+            Logger::Log(LogLevel::Error,
+                        "Configuration-file provided 'just' arguments has to "
+                        "be a map, but found {}",
+                        just_args->ToString());
+            std::exit(kExitConfigError);
+        }
         for (auto const& [cmd_name, cmd_args] : just_args->Map()) {
             // get list of string args for current command
             std::vector<std::string> args{};
+            if (not cmd_args->IsList()) {
+                Logger::Log(
+                    LogLevel::Error,
+                    "Configuration-file provided 'just' argument key {} has to "
+                    "have as value a list of strings, but found {}",
+                    cmd_name,
+                    cmd_args->ToString());
+                std::exit(kExitConfigError);
+            }
             auto const& args_list = cmd_args->List();
             args.reserve(args_list.size());
             for (auto const& arg : args_list) {
@@ -409,8 +433,8 @@ void SetupLogging(MultiRepoLogArguments const& clargs) {
         if (launcher.IsNotNull()) {
             if (not launcher->IsList()) {
                 Logger::Log(LogLevel::Error,
-                            "Configuration-file provided launcher {} is not a "
-                            "list of strings",
+                            "Configuration-file provided launcher has to be a "
+                            "list of strings, but found {}",
                             launcher->ToString());
                 std::exit(kExitConfigError);
             }
@@ -787,9 +811,7 @@ void DefaultReachableRepositories(
                     (*resolved_repo_desc)->Get("sha256", Expression::none_t{});
                 auto repo_desc_sha512 =
                     (*resolved_repo_desc)->Get("sha512", Expression::none_t{});
-                auto repo_desc_ignore_special =
-                    (*resolved_repo_desc)
-                        ->Get("ignore_special", Expression::none_t{});
+
                 ArchiveRepoInfo archive_info = {
                     .archive = {.content = repo_desc_content->get()->String(),
                                 .distfile =
@@ -810,9 +832,8 @@ void DefaultReachableRepositories(
                                 .origin_from_distdir = false},
                     .repo_type = repo_type_str,
                     .subdir = subdir.empty() ? "." : subdir.string(),
-                    .ignore_special = repo_desc_ignore_special->IsBool()
-                                          ? repo_desc_ignore_special->Bool()
-                                          : false};
+                    .pragma_special = std::nullopt  // not used
+                };
                 // add to list
                 repos_to_fetch.emplace_back(std::move(archive_info));
             }
@@ -1147,6 +1168,7 @@ void DefaultReachableRepositories(
                              arguments.common.git_path->string(),
                              *arguments.common.local_launcher,
                              arguments.common.jobs);
+    auto resolve_symlinks_map = CreateResolveSymlinksMap();
 
     auto commit_git_map =
         CreateCommitGitMap(&critical_git_op_map,
@@ -1156,11 +1178,13 @@ void DefaultReachableRepositories(
                            arguments.common.jobs);
     auto content_git_map = CreateContentGitMap(&content_cas_map,
                                                &import_to_git_map,
+                                               &resolve_symlinks_map,
                                                &critical_git_op_map,
                                                arguments.common.jobs);
     auto fpath_git_map = CreateFilePathGitMap(arguments.just_cmd.subcmd_name,
                                               &critical_git_op_map,
                                               &import_to_git_map,
+                                              &resolve_symlinks_map,
                                               arguments.common.jobs);
     auto distdir_git_map = CreateDistdirGitMap(&content_cas_map,
                                                &import_to_git_map,

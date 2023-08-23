@@ -44,14 +44,14 @@ cp distdir/v4.0.0.tar.gz "${DISTDIR}"
 # - fmt
 rm -rf "${LOCALBASE}/include/fmt*"
 rm -rf "${LOCALBASE}/lib/libfmt*"
-cp distdir/fmt-9.1.0.zip "${DISTDIR}"
+cp distdir/fmt-10.0.0.zip "${DISTDIR}"
 
 # bootstrap command
 
 env LOCALBASE=${LOCALBASE} \
     PACKAGE=YES \
     NON_LOCAL_DEPS='["com_github_microsoft_gsl", "fmt"]' \
-    JUST_BUILD_CONF='{"COMPILER_FAMILY":"clang", "PKG_CONFIG_ARGS":["--define-prefix"]}' \
+    JUST_BUILD_CONF='{"TOOLCHAIN_CONFIG":{"FAMILY":"clang"}, "PKG_CONFIG_ARGS":["--define-prefix"]}' \
     python3 ${WRKSRC}/bin/bootstrap.py ${WRKSRC} ${WRKDIR} ${DISTDIR} 2>&1
 
 # Do some sanity checks with the binary

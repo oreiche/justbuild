@@ -16,6 +16,9 @@
 
 #include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
+#ifndef BOOTSTRAP_BUILD_TOOL
+#include "src/buildtool/execution_api/utils/subobject.hpp"
+#endif
 #include "src/buildtool/execution_api/remote/config.hpp"
 
 namespace {
@@ -76,14 +79,39 @@ auto FetchAndInstallArtifacts(
         }
     }
 
+    if (clargs.sub_path) {
+        std::filesystem::path sofar{};
+        auto new_object_info =
+            RetrieveSubPathId(object_info, api, *clargs.sub_path);
+        if (new_object_info) {
+            object_info = *new_object_info;
+        }
+        else {
+            return false;
+        }
+    }
+
     if (clargs.output_path) {
         auto output_path = (*clargs.output_path / "").parent_path();
         if (FileSystemManager::IsDirectory(output_path)) {
             output_path /= object_info.digest.hash();
         }
 
-        if (not FileSystemManager::CreateDirectory(output_path.parent_path()) or
-            not api->RetrieveToPaths(
+        if (not FileSystemManager::CreateDirectory(output_path.parent_path())) {
+            Logger::Log(LogLevel::Error,
+                        "failed to create parent directory {}.",
+                        output_path.parent_path().string());
+            return false;
+        }
+        if (FileSystemManager::Exists(output_path)) {
+            if (not FileSystemManager::RemoveFile(output_path)) {
+                Logger::Log(LogLevel::Error,
+                            "Failed to remote target location {}.",
+                            output_path.string());
+                return false;
+            }
+        }
+        if (not api->RetrieveToPaths(
                 {object_info}, {output_path}, alternative_api)) {
             Logger::Log(LogLevel::Error, "failed to retrieve artifact.");
             return false;

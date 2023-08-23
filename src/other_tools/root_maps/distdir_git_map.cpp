@@ -90,10 +90,8 @@ auto CreateDistdirGitMap(
             critical_git_op_map->ConsumeAfterKeysReady(
                 ts,
                 {std::move(op_key)},
-                [distdir_tree_id = *distdir_tree_id,
-                 ignore_special = key.ignore_special,
-                 setter,
-                 logger](auto const& values) {
+                [distdir_tree_id = *distdir_tree_id, setter, logger](
+                    auto const& values) {
                     GitOpValue op_result = *values[0];
                     // check flag
                     if (not op_result.result) {
@@ -103,14 +101,12 @@ auto CreateDistdirGitMap(
                     }
                     // subdir is ".", so no need to deal with the Git cache
                     // set the workspace root
-                    (*setter)(std::pair(
-                        nlohmann::json::array(
-                            {ignore_special
-                                 ? FileRoot::kGitTreeIgnoreSpecialMarker
-                                 : FileRoot::kGitTreeMarker,
-                             distdir_tree_id,
-                             StorageConfig::GitRoot().string()}),
-                        true));
+                    (*setter)(
+                        std::pair(nlohmann::json::array(
+                                      {FileRoot::kGitTreeMarker,
+                                       distdir_tree_id,
+                                       StorageConfig::GitRoot().string()}),
+                                  true));
                 },
                 [logger, target_path = StorageConfig::GitRoot()](
                     auto const& msg, bool fatal) {
@@ -130,8 +126,6 @@ auto CreateDistdirGitMap(
                 [distdir_tree_id_file,
                  content_id = key.content_id,
                  content_list = key.content_list,
-                 origin = key.origin,
-                 ignore_special = key.ignore_special,
                  import_to_git_map,
                  ts,
                  setter,
@@ -162,8 +156,6 @@ auto CreateDistdirGitMap(
                         {std::move(c_info)},
                         [tmp_dir,  // keep tmp_dir alive
                          distdir_tree_id_file,
-                         origin,
-                         ignore_special,
                          setter,
                          logger](auto const& values) {
                             // check for errors
@@ -187,9 +179,7 @@ auto CreateDistdirGitMap(
                             // set the workspace root
                             (*setter)(std::pair(
                                 nlohmann::json::array(
-                                    {ignore_special
-                                         ? FileRoot::kGitTreeIgnoreSpecialMarker
-                                         : FileRoot::kGitTreeMarker,
+                                    {FileRoot::kGitTreeMarker,
                                      distdir_tree_id,
                                      StorageConfig::GitRoot().string()}),
                                 false));
