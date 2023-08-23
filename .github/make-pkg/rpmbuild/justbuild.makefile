@@ -16,19 +16,24 @@ export SOURCE_DATE_EPOCH = $(shell cat $(DATADIR)/source_date_epoch)
 export INCLUDE_PATH = $(BUILDDIR)/include
 export PKG_CONFIG_PATH = $(BUILDDIR)/pkgconfig
 
+CFLAGS += -I$(INCLUDE_PATH)
+CXXFLAGS += -I$(INCLUDE_PATH)
+
 define JUST_BUILD_CONF
-{ "TOOLCHAIN_CONFIG": {"FAMILY": "clang"}
+{ "TOOLCHAIN_CONFIG": {"FAMILY": "gnu"}
+, "CC": "gcc"
+, "CXX": "g++"
 , "AR": "ar"
 , "ARCH": "$(ARCH)"
 , "TARGET_ARCH": "$(TARGET_ARCH)"
 , "SOURCE_DATE_EPOCH": $(SOURCE_DATE_EPOCH)
-, "ADD_CFLAGS": ["-I$(INCLUDE_PATH)"]
-, "ADD_CXXFLAGS": ["-I$(INCLUDE_PATH)"]
+, "ADD_CFLAGS": [$(shell printf '"%s"\n' $(CFLAGS) | paste -sd,)]
+, "ADD_CXXFLAGS": [$(shell printf '"%s"\n' $(CXXFLAGS) | paste -sd,)]
 }
 endef
 export JUST_BUILD_CONF
 
-# set dummy proxy to prevent _any_ downloads during bootstrap
+# set dummy proxy to prevent _any_ downloads from happening during bootstrap
 export http_proxy = http://8.8.8.8:3128
 export https_proxy = http://8.8.8.8:3128
 

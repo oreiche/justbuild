@@ -2,7 +2,7 @@
   { "type": "deb"
   , "image": "debian:bullseye"
   , "build-depends":
-    [ "clang"
+    [ "g++"
     , "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
@@ -32,7 +32,7 @@
   { "type": "deb"
   , "image": "debian:bookworm"
   , "build-depends":
-    [ "clang"
+    [ "g++"
     , "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
@@ -118,7 +118,7 @@
   , "image": "ubuntu:22.10"
   , "distrelease": "kinetic"
   , "build-depends":
-    [ "clang"
+    [ "g++"
     , "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
@@ -145,7 +145,7 @@
   , "image": "ubuntu:23.04"
   , "distrelease": "lunar"
   , "build-depends":
-    [ "clang"
+    [ "g++"
     , "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
@@ -171,7 +171,7 @@
   { "type": "rpm"
   , "image": "fedora:37"
   , "build-depends":
-    [ "clang"
+    [ "g++"
     , "python3"
     , "pandoc"
     , "patch"
@@ -202,7 +202,7 @@
   { "type": "rpm"
   , "image": "fedora:38"
   , "build-depends":
-    [ "clang"
+    [ "g++"
     , "python3"
     , "pandoc"
     , "patch"
@@ -258,7 +258,7 @@
 , "static-rpm":
   { "type": "rpm"
   , "image": "fedora:33"
-  , "build-depends": ["clang", "python3", "pandoc", "patch", "unzip"]
+  , "build-depends": ["g++", "python3", "pandoc", "patch", "unzip"]
   , "non-local-deps":
     [ "fmt"
     , "ssl"

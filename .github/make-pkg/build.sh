@@ -112,6 +112,13 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     # copy prepared debian files
     cp ${ROOTDIR}/debian/* ./debian/
 
+    # use clang on older platforms
+    if echo ${BUILD_DEPENDS} | grep -q clang; then
+      # overwrite debhelper compile flags and set FAMILY to "clang"
+      sed -i 's/\([C|CXX]FLAGS\) +=/\1 :=/' ./debian/justbuild.makefile
+      sed -i 's/{"FAMILY": "gnu"}/{"FAMILY": "clang"}/' ./debian/justbuild.makefile
+    fi
+
     if [ -d ./debian/third_party ]; then
       mkdir -p ./debian/source
       find debian/third_party -type f -not -name '*.txt' > ./debian/source/include-binaries
