@@ -255,7 +255,7 @@
   , "gen-pkgconfig":
     [{"Name": "gsl", "Cflags": "-I${gen_includes} -I/usr/include"}]
   }
-, "static-deb":
+, "bundled-deb":
   { "type": "deb"
   , "image": "ubuntu:20.04"
   , "build-depends":
@@ -281,7 +281,7 @@
     , "bazel_remote_apis"
     ]
   }
-, "static-rpm":
+, "bundled-rpm":
   { "type": "rpm"
   , "image": "fedora:33"
   , "build-depends": ["g++", "python3", "pandoc", "patch", "unzip"]

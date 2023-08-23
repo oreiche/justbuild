@@ -248,7 +248,7 @@ jobs:
       - name: Restore local cache
         uses: actions/cache/restore@v3
         with:
-          path: ./work_static-deb/build/.just
+          path: ./work_bundled-deb/build/.just
           key: deploy-${{ runner.os }}-deb-pkg
 
       - name: Checkout sources
@@ -260,8 +260,8 @@ jobs:
         run: |
           git fetch https://github.com/just-buildsystem/justbuild master
           BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
-          .github/make-pkg/docker-build.sh ${BASE_COMMIT} static-deb
-          cp ./work_static-deb/source/justbuild_*.deb .
+          .github/make-pkg/docker-build.sh ${BASE_COMMIT} bundled-deb
+          cp ./work_bundled-deb/source/justbuild_*.deb .
 
       - name: Upload Debian package
         uses: actions/upload-artifact@v3
@@ -273,7 +273,7 @@ jobs:
       - name: Run garbage collector and clean cache
         if: ${{ success() }}
         run: |
-          ./work_static-deb/build/out/bin/just gc --local-build-root $(pwd)/work_static-deb/build/.just
+          ./work_bundled-deb/build/out/bin/just gc --local-build-root $(pwd)/work_bundled-deb/build/.just
           gh extension install actions/gh-actions-cache
           if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-deb-pkg')" ]; then
             gh actions-cache delete "deploy-${{ runner.os }}-deb-pkg" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
@@ -285,7 +285,7 @@ jobs:
         uses: actions/cache/save@v3
         if: ${{ success() }}
         with:
-          path: ./work_static-deb/build/.just
+          path: ./work_bundled-deb/build/.just
           key: deploy-${{ runner.os }}-deb-pkg
 
   rpm-package:
@@ -296,7 +296,7 @@ jobs:
       - name: Restore local cache
         uses: actions/cache/restore@v3
         with:
-          path: ./work_static-rpm/build/.just
+          path: ./work_bundled-rpm/build/.just
           key: deploy-${{ runner.os }}-rpm-pkg
 
       - name: Checkout sources
@@ -308,8 +308,8 @@ jobs:
         run: |
           git fetch https://github.com/just-buildsystem/justbuild master
           BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
-          .github/make-pkg/docker-build.sh ${BASE_COMMIT} static-rpm
-          cp ./work_static-rpm/source/rpmbuild/RPMS/x86_64/justbuild-*.rpm .
+          .github/make-pkg/docker-build.sh ${BASE_COMMIT} bundled-rpm
+          cp ./work_bundled-rpm/source/rpmbuild/RPMS/x86_64/justbuild-*.rpm .
 
       - name: Upload RPM package
         uses: actions/upload-artifact@v3
@@ -321,7 +321,7 @@ jobs:
       - name: Run garbage collector and clean cache
         if: ${{ success() }}
         run: |
-          ./work_static-rpm/build/out/bin/just gc --local-build-root $(pwd)/work_static-rpm/build/.just
+          ./work_bundled-rpm/build/out/bin/just gc --local-build-root $(pwd)/work_bundled-rpm/build/.just
           gh extension install actions/gh-actions-cache
           if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-rpm-pkg')" ]; then
             gh actions-cache delete "deploy-${{ runner.os }}-rpm-pkg" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
@@ -333,7 +333,7 @@ jobs:
         uses: actions/cache/save@v3
         if: ${{ success() }}
         with:
-          path: ./work_static-rpm/build/.just
+          path: ./work_bundled-rpm/build/.just
           key: deploy-${{ runner.os }}-rpm-pkg
 
   deploy-packages:
