@@ -2,8 +2,7 @@
   { "type": "deb"
   , "image": "debian:bullseye"
   , "build-depends":
-    [ "g++"
-    , "protobuf-compiler"
+    [ "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
     , "libgrpc++-dev"
@@ -32,8 +31,7 @@
   { "type": "deb"
   , "image": "debian:bookworm"
   , "build-depends":
-    [ "g++"
-    , "protobuf-compiler"
+    [ "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
     , "libgrpc++-dev"
@@ -58,8 +56,7 @@
   { "type": "deb"
   , "image": "debian:sid"
   , "build-depends":
-    [ "g++"
-    , "protobuf-compiler"
+    [ "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
     , "libgrpc++-dev"
@@ -144,8 +141,7 @@
   , "image": "ubuntu:22.10"
   , "distrelease": "kinetic"
   , "build-depends":
-    [ "g++"
-    , "protobuf-compiler"
+    [ "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
     , "libgrpc++-dev"
@@ -171,8 +167,7 @@
   , "image": "ubuntu:23.04"
   , "distrelease": "lunar"
   , "build-depends":
-    [ "g++"
-    , "protobuf-compiler"
+    [ "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
     , "libgrpc++-dev"
