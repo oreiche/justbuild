@@ -9,7 +9,7 @@ function get_size() {
 }
 
 function get_string() {
-  echo "$VERSION_FILE" | sed -n 's/\s*std::string\s'$1'\s=\s\"\(.*\)\";$/\1/p'
+  echo "$VERSION_FILE" | sed -n 's/\s*std::string\s'$1'\s=.*\"\(.*\)\".*;$/\1/p'
 }
 
 readonly MAJOR=$(get_size major)

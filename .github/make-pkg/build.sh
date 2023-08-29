@@ -30,7 +30,7 @@ VERSION_FILE="${SRCDIR}/src/buildtool/main/version.cpp"
 MAJOR=$(cat ${VERSION_FILE} | sed -n 's/\s*std::size_t\smajor\s=\s\([0-9]\+\);$/\1/p')
 MINOR=$(cat ${VERSION_FILE} | sed -n 's/\s*std::size_t\sminor\s=\s\([0-9]\+\);$/\1/p')
 PATCH=$(cat ${VERSION_FILE} | sed -n 's/\s*std::size_t\srevision\s=\s\([0-9]\+\);$/\1/p')
-SUFFIX=$(cat ${VERSION_FILE} | sed -n 's/\s*std::string\ssuffix\s=\s\"\(.*\)\";$/\1/p')
+SUFFIX=$(cat ${VERSION_FILE} | sed -n 's/\s*std::string\ssuffix\s=.*\"\(.*\)\".*;$/\1/p')
 VERSION="$MAJOR.$MINOR.$PATCH"
 if [ -n "$SUFFIX" ]; then
   VERSION="$VERSION$SUFFIX"
