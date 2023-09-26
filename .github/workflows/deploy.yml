@@ -25,7 +25,7 @@ jobs:
 
       - name: Read commit info
         run: |
-          git fetch https://github.com/just-buildsystem/justbuild master
+          git fetch https://github.com/just-buildsystem/justbuild stable-1.2
           BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
           COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
           echo "COMMIT_TIME=${COMMIT_TIME}" >> $GITHUB_ENV
@@ -125,7 +125,7 @@ jobs:
 
       - name: Read commit info
         run: |
-          git fetch https://github.com/just-buildsystem/justbuild master
+          git fetch https://github.com/just-buildsystem/justbuild stable-1.2
           BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
           COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
           echo "COMMIT_TIME=${COMMIT_TIME}" >> $GITHUB_ENV
@@ -258,7 +258,7 @@ jobs:
 
       - name: Build Debian package
         run: |
-          git fetch https://github.com/just-buildsystem/justbuild master
+          git fetch https://github.com/just-buildsystem/justbuild stable-1.2
           BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
           .github/make-pkg/docker-build.sh ${BASE_COMMIT} bundled-deb
           cp ./work_bundled-deb/source/justbuild_*.deb .
@@ -306,7 +306,7 @@ jobs:
 
       - name: Build RPM package
         run: |
-          git fetch https://github.com/just-buildsystem/justbuild master
+          git fetch https://github.com/just-buildsystem/justbuild stable-1.2
           BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
           .github/make-pkg/docker-build.sh ${BASE_COMMIT} bundled-rpm
           cp ./work_bundled-rpm/source/rpmbuild/RPMS/x86_64/justbuild-*.rpm .
@@ -381,7 +381,7 @@ jobs:
 
       - name: Determine package name
         run: |
-          git fetch https://github.com/just-buildsystem/justbuild master
+          git fetch https://github.com/just-buildsystem/justbuild stable-1.2
           BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
           VERSION="$(.github/just-version.sh ${BASE_COMMIT})"
           UNTAGGED=$([[ "$VERSION" = *+* ]] && echo true || echo false)
