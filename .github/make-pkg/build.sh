@@ -144,11 +144,11 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     CHANGE_DATE=$(date -u -R -d @${SOURCE_DATE_EPOCH})
     sed -i '0,/^\(\ -- .*>\ \ \).*/s//\1'"${CHANGE_DATE}"'/' ./debian/changelog
     if [ -n "${RELEASE}" ]; then
-      sed -i 's/UNRELEASED/'${RELEASE}'/' ./debian/changelog
+      sed -i 's/UNRELEASED\|unstable/'${RELEASE}'/' ./debian/changelog
     fi
 
     # remove unused files
-    find ./debian/ -type f -name '*.ex' -delete
+    find ./debian/ -type f -iname '*.ex' -delete
     rm -f ./debian/{README.source,justbuild-docs.docs}
 
     # build source package
