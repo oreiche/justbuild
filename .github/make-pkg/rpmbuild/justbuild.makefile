@@ -78,10 +78,12 @@ install: justbuild $(MANPAGES)
 	install -D $(BUILDDIR)/out/bin/just $(DESTDIR)/$(PREFIX)/bin/just
 	install -D $(BUILDDIR)/out/bin/just-mr $(DESTDIR)/$(PREFIX)/bin/just-mr
 	install -D ./bin/just-import-git.py $(DESTDIR)/$(PREFIX)/bin/just-import-git
+	install -D ./bin/just-deduplicate-repos.py $(DESTDIR)/$(PREFIX)/bin/just-deduplicate-repos
 	install -D ./share/just_complete.bash $(DESTDIR)/$(PREFIX)/share/bash-completion/completions/just
 	install -D $(BUILDDIR)/share/man/just.1 $(DESTDIR)/$(PREFIX)/share/man/man1/just.1
 	install -D $(BUILDDIR)/share/man/just-mr.1 $(DESTDIR)/$(PREFIX)/share/man/man1/just-mr.1
 	install -D $(BUILDDIR)/share/man/just-import-git.1 $(DESTDIR)/$(PREFIX)/share/man/man1/just-import-git.1
+	install -D $(BUILDDIR)/share/man/just-deduplicate-repos.1 $(DESTDIR)/$(PREFIX)/share/man/man1/just-deduplicate-repos.1
 	install -D $(BUILDDIR)/share/man/just-mrrc.5 $(DESTDIR)/$(PREFIX)/share/man/man5/just-mrrc.5
 	install -D $(BUILDDIR)/share/man/just-graph-file.5 $(DESTDIR)/$(PREFIX)/share/man/man5/just-graph-file.5
 	install -D $(BUILDDIR)/share/man/just-repository-config.5 $(DESTDIR)/$(PREFIX)/share/man/man5/just-repository-config.5
