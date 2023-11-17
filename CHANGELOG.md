@@ -1,3 +1,29 @@
+## Release `1.2.3` (2023-11-15)
+
+Bug fixes on top of release `1.2.2`.
+
+### Fixes
+
+- The cache key used for an export target is now based on the
+  export target itself rather than that of the exported target. The
+  latter could lead to spurious cache hits, but only in the case
+  where the exported target was an explicit file reference, and a
+  regular target with the same name existed as well. Where the new
+  cache keys would overlap with the old ones, they would refer to
+  the same configured targets. However, we used the fact that we
+  changed the target cache key to also clean up the serialization
+  format to only contain the JSON object describing repository,
+  target, and effective configuration, instead of a singleton list
+  containing this object. Therefore, old and new cache keys do not
+  overlap at all. In particular, no special care has to be taken
+  on upgrading or downgrading. However, old target-level cache
+  entries will not be used leading potentially to rebuilding of
+  some targets.
+- Fixed a race condition in an internal cache of `just execute` used for keeping
+  track of running operations.
+- Also symlinks are properly unlinked before installing on that
+  location.
+
 ## Release `1.2.2` (2023-10-17)
 
 Bug fixes on top of release `1.2.1`.
