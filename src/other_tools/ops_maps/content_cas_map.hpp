@@ -15,23 +15,29 @@
 #ifndef INCLUDED_SRC_OTHER_TOOLS_OPS_MAPS_CONTENT_CAS_MAP_HPP
 #define INCLUDED_SRC_OTHER_TOOLS_OPS_MAPS_CONTENT_CAS_MAP_HPP
 
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "nlohmann/json.hpp"
+#include "src/buildtool/common/user_structs.hpp"
+#include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
-#include "src/other_tools/just_mr/utils.hpp"
+#include "src/other_tools/just_mr/mirrors.hpp"
 #include "src/utils/cpp/hash_combine.hpp"
 
 struct ArchiveContent {
-    std::string content; /* key */
-    std::optional<std::string> distfile;
-    std::string fetch_url;
-    std::optional<std::string> sha256;
-    std::optional<std::string> sha512;
+    std::string content{}; /* key */
+    std::optional<std::string> distfile{std::nullopt};
+    std::string fetch_url{};
+    std::vector<std::string> mirrors{};
+    std::optional<std::string> sha256{std::nullopt};
+    std::optional<std::string> sha512{std::nullopt};
     // name of repository for which work is done; used in progress reporting
-    std::string origin;
-    // flag deciding whether progress reporting is needed for key
-    bool origin_from_distdir;
+    std::string origin{};
+    // flag to separate logic for pure fetch operations
+    bool fetch_only{};
 
     [[nodiscard]] auto operator==(const ArchiveContent& other) const -> bool {
         return content == other.content;
@@ -40,24 +46,31 @@ struct ArchiveContent {
 
 // Used in callers of ContentCASMap which need extra fields
 struct ArchiveRepoInfo {
-    ArchiveContent archive; /* key */
-    std::string repo_type;  /* key */
-    std::string subdir;     /* key */
+    ArchiveContent archive{}; /* key */
+    std::string repo_type{};  /* key */
+    std::string subdir{};     /* key */
     // create root based on "special" pragma value
     std::optional<PragmaSpecial> pragma_special{std::nullopt}; /* key */
+    // create an absent root
+    bool absent{}; /* key */
 
     [[nodiscard]] auto operator==(const ArchiveRepoInfo& other) const -> bool {
         return archive == other.archive and repo_type == other.repo_type and
                subdir == other.subdir and
-               pragma_special == other.pragma_special;
+               pragma_special == other.pragma_special and
+               absent == other.absent;
     }
 };
 
 /// \brief Maps the content hash of an archive to an "exists" status flag.
 using ContentCASMap = AsyncMapConsumer<ArchiveContent, bool>;
 
-[[nodiscard]] auto CreateContentCASMap(JustMR::PathsPtr const& just_mr_paths,
-                                       JustMR::CAInfoPtr const& ca_info,
+[[nodiscard]] auto CreateContentCASMap(LocalPathsPtr const& just_mr_paths,
+                                       MirrorsPtr const& additional_mirrors,
+                                       CAInfoPtr const& ca_info,
+                                       bool serve_api_exists,
+                                       IExecutionApi* local_api,
+                                       IExecutionApi* remote_api,
                                        std::size_t jobs) -> ContentCASMap;
 
 namespace std {
@@ -79,6 +92,7 @@ struct hash<ArchiveRepoInfo> {
         hash_combine<std::string>(&seed, ct.repo_type);
         hash_combine<std::string>(&seed, ct.subdir);
         hash_combine<std::optional<PragmaSpecial>>(&seed, ct.pragma_special);
+        hash_combine<bool>(&seed, ct.absent);
         return seed;
     }
 };

@@ -47,9 +47,12 @@
 #include "src/buildtool/execution_api/execution_service/server_implementation.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/graph_traverser/graph_traverser.hpp"
+#include "src/buildtool/main/serve.hpp"
 #include "src/buildtool/progress_reporting/progress_reporter.hpp"
+#include "src/buildtool/serve_api/remote/config.hpp"
+#include "src/buildtool/serve_api/serve_service/serve_server_implementation.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
-#endif
+#endif  // BOOTSTRAP_BUILD_TOOL
 #include "src/buildtool/logging/log_config.hpp"
 #include "src/buildtool/logging/log_sink_cmdline.hpp"
 #include "src/buildtool/logging/log_sink_file.hpp"
@@ -131,6 +134,39 @@ void SetupExecutionConfig(EndpointArguments const& eargs,
     }
 }
 
+void SetupServeConfig(ServeArguments const& srvargs) {
+    if (srvargs.remote_serve_address) {
+        if (not RemoteServeConfig::SetRemoteAddress(
+                *srvargs.remote_serve_address)) {
+            Logger::Log(LogLevel::Error,
+                        "setting serve service address '{}' failed.",
+                        *srvargs.remote_serve_address);
+            std::exit(kExitFailure);
+        }
+        // if the user has not provided the --remote-execution-address, we fall
+        // back to the --remote-serve-address
+        if (auto client_remote_address = RemoteExecutionConfig::RemoteAddress();
+            !client_remote_address) {
+            if (!RemoteExecutionConfig::SetRemoteAddress(
+                    *srvargs.remote_serve_address)) {
+                Logger::Log(LogLevel::Error,
+                            "setting remote execution address '{}' failed.",
+                            *srvargs.remote_serve_address);
+                std::exit(kExitFailure);
+            }
+            Logger::Log(LogLevel::Info,
+                        "Using '{}' as the remote execution endpoint.",
+                        *srvargs.remote_serve_address);
+        }
+    }
+    if (not srvargs.repositories.empty() and
+        not RemoteServeConfig::SetKnownRepositories(srvargs.repositories)) {
+        Logger::Log(LogLevel::Error,
+                    "setting serve service repositories failed.");
+        std::exit(kExitFailure);
+    }
+}
+
 void SetupAuthConfig(CommonAuthArguments const& authargs,
                      ClientAuthArguments const& client_authargs,
                      ServerAuthArguments const& server_authargs) {
@@ -191,7 +227,7 @@ void SetupAuthConfig(CommonAuthArguments const& authargs,
     }
 }
 
-void SetupExecutionServiceConfig(ExecutionServiceArguments const& args) {
+void SetupExecutionServiceConfig(ServiceArguments const& args) {
     if (args.port) {
         if (!ServerImpl::SetPort(*args.port)) {
             Logger::Log(LogLevel::Error, "Invalid port '{}'", *args.port);
@@ -227,13 +263,46 @@ void SetupExecutionServiceConfig(ExecutionServiceArguments const& args) {
     }
 }
 
+void SetupServeServiceConfig(ServiceArguments const& args) {
+    if (args.port) {
+        if (!ServeServerImpl::SetPort(*args.port)) {
+            Logger::Log(LogLevel::Error, "Invalid port '{}'", *args.port);
+            std::exit(kExitFailure);
+        }
+    }
+    if (args.info_file) {
+        if (!ServeServerImpl::SetInfoFile(*args.info_file)) {
+            Logger::Log(LogLevel::Error,
+                        "Invalid info-file '{}'",
+                        args.info_file->string());
+            std::exit(kExitFailure);
+        }
+    }
+    if (args.interface) {
+        if (!ServeServerImpl::SetInterface(*args.interface)) {
+            Logger::Log(LogLevel::Error,
+                        "Invalid interface '{}'",
+                        args.info_file->string());
+            std::exit(kExitFailure);
+        }
+    }
+    if (args.pid_file) {
+        if (!ServeServerImpl::SetPidFile(*args.pid_file)) {
+            Logger::Log(LogLevel::Error,
+                        "Invalid pid-file '{}'",
+                        args.info_file->string());
+            std::exit(kExitFailure);
+        }
+    }
+}
+
 void SetupHashFunction() {
     HashFunction::SetHashType(Compatibility::IsCompatible()
                                   ? HashFunction::JustHash::Compatible
                                   : HashFunction::JustHash::Native);
 }
 
-#endif
+#endif  // BOOTSTRAP_BUILD_TOOL
 
 // returns path relative to `root`.
 [[nodiscard]] auto FindRoot(std::filesystem::path const& subdir,
@@ -370,6 +439,36 @@ void SetupHashFunction() {
         return Target::ConfiguredTarget{.target = std::move(*entity),
                                         .config = std::move(config)};
     }
+#ifndef BOOTSTRAP_BUILD_TOOL
+    if (target_root->IsAbsent()) {
+        // since the user has not specified the target to build, we use the most
+        // reasonable default value:
+        //
+        // module -> "." (i.e., current module)
+        // target -> ""  (i.e., firstmost lexicographical target name)
+
+        auto target = nlohmann::json::parse(R"([".",""])");
+        Logger::Log(LogLevel::Debug,
+                    "Detected absent target root for repo {} and no target was "
+                    "given. Assuming default target {}",
+                    main_repo,
+                    target.dump());
+        auto entity = Base::ParseEntityNameFromJson(
+            target,
+            Base::EntityName{Base::NamedTarget{main_repo, current_module, ""}},
+            [&target](std::string const& parse_err) {
+                Logger::Log(LogLevel::Error,
+                            "Parsing target name {} failed with:\n{}",
+                            target.dump(),
+                            parse_err);
+            });
+        if (not entity) {
+            std::exit(kExitFailure);
+        }
+        return Target::ConfiguredTarget{.target = std::move(*entity),
+                                        .config = std::move(config)};
+    }
+#endif
     auto const target_file =
         (std::filesystem::path{current_module} / target_file_name).string();
     if (not target_root->IsFile(target_file)) {
@@ -459,25 +558,31 @@ auto ParseRoot(std::string const& repo,
         return {FileRoot{path}, std::move(path)};
     }
     if (root[0] == FileRoot::kGitTreeMarker) {
-        if (root.size() != 3 or (not root[1].is_string()) or
-            (not root[2].is_string())) {
+        if (not(root.size() == 3 and root[1].is_string() and
+                root[2].is_string()) and
+            not(root.size() == 2 and root[1].is_string())) {
             Logger::Log(LogLevel::Error,
-                        "\"git tree\" scheme expects two string arguments, "
-                        "but found {} for {} of repository {}",
+                        "\"git tree\" scheme expects one or two string "
+                        "arguments, but found {} for {} of repository {}",
                         root.dump(),
                         keyword,
                         repo);
             std::exit(kExitFailure);
         }
-        if (auto git_root = FileRoot::FromGit(root[2], root[1])) {
-            return {std::move(*git_root), std::nullopt};
+        if (root.size() == 3) {
+            if (auto git_root = FileRoot::FromGit(root[2], root[1])) {
+                return {std::move(*git_root), std::nullopt};
+            }
+            Logger::Log(LogLevel::Error,
+                        "Could not create file root for {}tree id {}",
+                        root.size() == 3
+                            ? fmt::format("git repository {} and ", root[2])
+                            : "",
+                        root[1]);
+            std::exit(kExitFailure);
         }
-        Logger::Log(LogLevel::Error,
-                    "Could not create file root for git repository {} and tree "
-                    "id {}",
-                    root[2],
-                    root[1]);
-        std::exit(kExitFailure);
+        // return absent root
+        return {FileRoot{std::string{root[1]}}, std::nullopt};
     }
     if (root[0] == FileRoot::kFileIgnoreSpecialMarker) {
         if (root.size() != 2 or (not root[1].is_string())) {
@@ -494,26 +599,35 @@ auto ParseRoot(std::string const& repo,
         return {FileRoot{path, /*ignore_special=*/true}, std::move(path)};
     }
     if (root[0] == FileRoot::kGitTreeIgnoreSpecialMarker) {
-        if (root.size() != 3 or (not root[1].is_string()) or
-            (not root[2].is_string())) {
-            Logger::Log(LogLevel::Error,
-                        "\"git tree ignore-special\" scheme expects two string "
-                        "arguments, but found {} for {} of repository {}",
-                        root.dump(),
-                        keyword,
-                        repo);
+        if (not(root.size() == 3 and root[1].is_string() and
+                root[2].is_string()) and
+            not(root.size() == 2 and root[1].is_string())) {
+            Logger::Log(
+                LogLevel::Error,
+                "\"git tree ignore-special\" scheme expects one or two string "
+                "arguments, but found {} for {} of repository {}",
+                root.dump(),
+                keyword,
+                repo);
             std::exit(kExitFailure);
         }
-        if (auto git_root =
-                FileRoot::FromGit(root[2], root[1], /*ignore_special=*/true)) {
-            return {std::move(*git_root), std::nullopt};
+        if (root.size() == 3) {
+            if (auto git_root = FileRoot::FromGit(
+                    root[2], root[1], /*ignore_special=*/true)) {
+                return {std::move(*git_root), std::nullopt};
+            }
+            Logger::Log(
+                LogLevel::Error,
+                "Could not create ignore-special file root for {}tree id {}",
+                root.size() == 3
+                    ? fmt::format("git repository {} and ", root[2])
+                    : "",
+                root[1]);
+            std::exit(kExitFailure);
         }
-        Logger::Log(LogLevel::Error,
-                    "Could not create file root for git repository {} and tree "
-                    "id {}",
-                    root[2],
-                    root[1]);
-        std::exit(kExitFailure);
+        // return absent root
+        return {FileRoot{std::string{root[1]}, /*ignore_special=*/true},
+                std::nullopt};
     }
     Logger::Log(LogLevel::Error,
                 "Unknown scheme in the specification {} of {} of repository {}",
@@ -785,31 +899,34 @@ void WriteTargetCacheEntries(
     std::size_t jobs,
     gsl::not_null<IExecutionApi*> const& local_api,
     gsl::not_null<IExecutionApi*> const& remote_api) {
-    auto ts = TaskSystem{jobs};
-    auto downloader = [&local_api, &remote_api](auto infos) {
-        return remote_api->RetrieveToCas(infos, local_api);
+    if (!cache_targets.empty()) {
+        Logger::Log(LogLevel::Info,
+                    "Backing up artifacts of {} export targets",
+                    cache_targets.size());
+    }
+    auto downloader = [&local_api, &remote_api, &jobs](auto infos) {
+        return remote_api->ParallelRetrieveToCas(infos, local_api, jobs, false);
     };
     for (auto const& [key, target] : cache_targets) {
-        ts.QueueTask(
-            [&key = key, &target = target, &extra_infos, &downloader]() {
-                if (auto entry =
-                        TargetCacheEntry::FromTarget(target, extra_infos)) {
-                    if (not Storage::Instance().TargetCache().Store(
-                            key, *entry, downloader)) {
-                        Logger::Log(LogLevel::Warning,
-                                    "Failed writing target cache entry for {}",
-                                    key.Id().ToString());
-                    }
-                }
-                else {
-                    Logger::Log(LogLevel::Warning,
-                                "Failed creating target cache entry for {}",
-                                key.Id().ToString());
-                }
-            });
+        if (auto entry = TargetCacheEntry::FromTarget(target, extra_infos)) {
+            if (not Storage::Instance().TargetCache().Store(
+                    key, *entry, downloader)) {
+                Logger::Log(LogLevel::Warning,
+                            "Failed writing target cache entry for {}",
+                            key.Id().ToString());
+            }
+        }
+        else {
+            Logger::Log(LogLevel::Warning,
+                        "Failed creating target cache entry for {}",
+                        key.Id().ToString());
+        }
     }
+    Logger::Log(LogLevel::Debug,
+                "Finished backing up artifacts of export targets");
 }
-#endif
+
+#endif  // BOOTSTRAP_BUILD_TOOL
 
 }  // namespace
 
@@ -822,6 +939,14 @@ auto main(int argc, char* argv[]) -> int {
             std::cout << version() << std::endl;
             return kExitSuccess;
         }
+
+        // just serve configures all from its config file, so parse that before
+        // doing further setup steps
+#ifndef BOOTSTRAP_BUILD_TOOL
+        if (arguments.cmd == SubCommand::kServe) {
+            ReadJustServeConfig(&arguments);
+        }
+#endif  // BOOTSTRAP_BUILD_TOOL
 
         SetupLogging(arguments.log);
         if (arguments.analysis.expression_log_limit) {
@@ -841,6 +966,7 @@ auto main(int argc, char* argv[]) -> int {
         SetupHashFunction();
         SetupExecutionConfig(
             arguments.endpoint, arguments.build, arguments.rebuild);
+        SetupServeConfig(arguments.serve);
         SetupAuthConfig(arguments.auth, arguments.cauth, arguments.sauth);
 
         if (arguments.cmd == SubCommand::kGc) {
@@ -851,13 +977,22 @@ auto main(int argc, char* argv[]) -> int {
         }
 
         if (arguments.cmd == SubCommand::kExecute) {
-            SetupExecutionServiceConfig(arguments.es);
+            SetupExecutionServiceConfig(arguments.service);
             if (!ServerImpl::Instance().Run()) {
                 return kExitFailure;
             }
             return kExitSuccess;
         }
-#endif
+
+        if (arguments.cmd == SubCommand::kServe) {
+            SetupServeServiceConfig(arguments.service);
+            if (!ServeServerImpl::Instance().Run(
+                    !RemoteExecutionConfig::RemoteAddress())) {
+                return kExitFailure;
+            }
+            return kExitSuccess;
+        }
+#endif  // BOOTSTRAP_BUILD_TOOL
 
         auto jobs = arguments.build.build_jobs > 0 ? arguments.build.build_jobs
                                                    : arguments.common.jobs;
@@ -893,7 +1028,7 @@ auto main(int argc, char* argv[]) -> int {
                        ? kExitSuccess
                        : kExitFailure;
         }
-#endif
+#endif  // BOOTSTRAP_BUILD_TOOL
 
         auto [main_repo, main_ws_root] =
             DetermineRoots(arguments.common, arguments.analysis);
@@ -942,7 +1077,7 @@ auto main(int argc, char* argv[]) -> int {
         }
 
         else {
-#endif
+#endif  // BOOTSTRAP_BUILD_TOOL
             BuildMaps::Target::ResultTargetMap result_map{
                 arguments.common.jobs};
             auto id = ReadConfiguredTarget(
@@ -1023,7 +1158,9 @@ auto main(int argc, char* argv[]) -> int {
                 if (build_result) {
                     WriteTargetCacheEntries(cache_targets,
                                             build_result->extra_infos,
-                                            arguments.common.jobs,
+                                            arguments.build.build_jobs > 0
+                                                ? arguments.build.build_jobs
+                                                : arguments.common.jobs,
                                             traverser.GetLocalApi(),
                                             traverser.GetRemoteApi());
 
@@ -1039,7 +1176,7 @@ auto main(int argc, char* argv[]) -> int {
                                : kExitSuccess;
                 }
             }
-#endif
+#endif  // BOOTSTRAP_BUILD_TOOL
         }
     } catch (std::exception const& ex) {
         Logger::Log(

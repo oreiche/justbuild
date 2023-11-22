@@ -24,7 +24,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include <fmt/format.h>
+#include <fmt/core.h>
 #include <nlohmann/json.hpp>
 
 #include "src/buildtool/build_engine/base_maps/field_reader.hpp"
@@ -43,6 +43,7 @@ auto const kGenericRuleFields =
                                     "deps",
                                     "env",
                                     "execution properties",
+                                    "sh -c",
                                     "tainted",
                                     "timeout scaling",
                                     "type",
@@ -665,6 +666,11 @@ void InstallRuleWithDeps(
         stage = ExpressionPtr{Expression::map_t{stage, to_stage}};
     }
 
+    auto conflict = BuildMaps::Target::Utils::tree_conflict(stage);
+    if (conflict) {
+        (*logger)(fmt::format("TREE conflict on subtree {}", *conflict), true);
+        return;
+    }
     auto const& empty_map = Expression::kEmptyMap;
     auto result = std::make_shared<AnalysedTarget const>(
         TargetResult{
@@ -1092,6 +1098,43 @@ void GenericRuleWithDeps(
         }
     }
 
+    auto sh_exp = desc->ReadOptionalExpression("sh -c", Expression::kEmptyList);
+    if (not sh_exp) {
+        return;
+    }
+    auto sh_val = sh_exp.Evaluate(
+        param_config, string_fields_fcts, [&logger](auto const& msg) {
+            (*logger)(fmt::format("While evaluating sh:\n{}", msg), true);
+        });
+    if (not sh_val) {
+        return;
+    }
+    if (sh_val->IsNone()) {
+        sh_val = Expression::kEmptyList;
+    }
+    if (not sh_val->IsList()) {
+        (*logger)(fmt::format("sh has evaluate to list of strings or null, but "
+                              "found {}",
+                              sh_val->ToString()),
+                  true);
+        return;
+    }
+    for (auto const& entry : sh_val->List()) {
+        if (not entry->IsString()) {
+            (*logger)(fmt::format("sh has evaluate to list of strings or null, "
+                                  "but found {}\nwith non-string entry {}",
+                                  sh_val->ToString(),
+                                  entry->ToString()),
+                      true);
+            return;
+        }
+    }
+    static ExpressionPtr const kShC =
+        Expression::FromJson(R"( ["sh", "-c"] )"_json);
+    if (sh_val->List().empty()) {
+        sh_val = kShC;
+    }
+
     auto scale_exp =
         desc->ReadOptionalExpression("timeout scaling", Expression::kOne);
     if (not scale_exp) {
@@ -1159,11 +1202,18 @@ void GenericRuleWithDeps(
         inputs = ExpressionPtr{Expression::map_t{inputs, (*dep)->Artifacts()}};
     }
 
+    std::vector<std::string> argv{};
+    argv.reserve(sh_val->List().size() + 1);
+    for (auto const& entry : sh_val->List()) {
+        argv.emplace_back(entry->String());
+    }
+    argv.emplace_back(cmd_ss.str());
+
     // Construct our single action, and its artifacts
     auto action = BuildMaps::Target::Utils::createAction(
         outs,
         out_dirs,
-        {"sh", "-c", cmd_ss.str()},
+        argv,
         env_val,
         std::nullopt,
         false,

@@ -54,8 +54,8 @@ recorded as the branch to follow. Defaults to *`"master"`*.
 Use the specified file as the configuration to import into. The string
 *`-`* is treated as a request to take the config from stdin; so a file
 called *`-`* has to be described as *`.`*/*`-`*, or similar. If not
-specified, for a config file is searched in the same way, as **`just-mr`**
-does, when invoked with **`--norc`**.
+specified, a config file is searched for in the same way as **`just-mr`**
+does when invoked with **`--norc`**.
 
 **`-h`**, **`--help`**  
 Output a usage message and exit.
@@ -82,8 +82,18 @@ for a single repository. Useful, if the repository to be imported does
 not have a repository configuration or should be imported without
 dependencies.
 
+**`--mirror`** *`URL`*
+Provides an alternative fetch location for the imported repository.
+Specifying this option multiple times will accumulate URLs in the order
+they appear on the command line. These URLs will not be used during the
+import, but instead will be recorded as the value of the `"mirrors"` key
+in the resulting configuration of the imported repository.
+See **`just-mr-repository-config`**(5).
+
 See also
 ========
 
+**`git`**(1),
+**`just-deduplicate-repos`**(1),
 **`just-mr-repository-config`**(5),
 **`just-mr`**(1)

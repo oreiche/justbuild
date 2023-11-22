@@ -51,13 +51,17 @@ The just-mrrc is given by a JSON object.
    detail). The lookup is performed in the same order the location
    objects appear in the list.
 
+ - The value for the key *`"absent"`*, if provided, is a JSON list
+   of location objects to search for a file specifying the list of
+   absent repositories.
+
  - The value for the key *`"local build root"`* is a single location
    object, specifying the path to use as the local build root. For more
    details, see **`just-mr`**(1).
 
  - The value for the key *`"checkout locations"`* is a single location
-   object, specifying the path to the file for checkout locations. For
-   more details, see **`just-mr`**(1).
+   object, specifying the path to the file describing checkout locations
+   and additional mirror locations. For more details, see **`just-mr`**(1).
 
  - The value for the key *`"distdirs"`* is a JSON list of location
    objects, specifying where to look for distribution files (usually
@@ -87,6 +91,33 @@ The just-mrrc is given by a JSON object.
    objects, specifying additional log files, on top of those specified
    on the command line.
 
+ - The value for the key *`"remote execution"`* is a JSON object specifying the
+   remote execution options for **`just-mr`**.  
+   For subkey *`"address"`* the value is a string specifying the remote
+   execution address in a NAME:PORT format.  
+   For subkey *`"compatible"`* the value is a flag which specifies whether the
+   remote endpoint uses the original remote execution protocol.  
+   Each subkey value can be overwritten by its corresponding command-line
+   argument.
+
+ - The value for the key *`"remote serve"`* is a JSON object specifying the
+   remote serve options for **`just-mr`**.  
+   For subkey *`"address"`* the value is a string specifying the remote
+   serve address in a NAME:PORT format.  
+   Each subkey value can be overwritten by its corresponding command-line
+   argument.
+
+ - The value for the key *`"authentication"`* is a JSON object specifying
+   client-side authentication options for **`just-mr`**.  
+   For subkey *`"ca cert"`* the value is a string specifying the path to a TLS CA
+   certificate.  
+   For subkey *`"client cert"`* the value is a string specifying the path to a
+   TLS client certificate.  
+   For subkey *`"client key"`* the value is a string specifying the path to a TLS
+   client key.  
+   Each subkey value can be overwritten by its corresponding command-line
+   argument.
+
  - The value for the key *`"just args"`* is a JSON object. Its keys are
    **`just`** subcommands and its value is a JSON list of strings. For the
    corresponding subcommand, these strings are prefixed to the **`just`**
@@ -104,6 +135,10 @@ An example just-mrrc file could look like the following:
   , {"root": "home", "path": ".just-repos.json"}
   , {"root": "system", "path": "etc/just-repos.json"}
   ]
+, "absent":
+  [ {"root": "workspace", "path": "etc/absent.json"}
+  , {"root": "home", "path": ".just-absent"}
+  ]
 , "local build root": {"root": "home", "path": ".cache/just"}
 , "checkout locations": {"root": "home", "path": ".just-local.json"}
 , "local launcher": ["env", "--"]
@@ -112,11 +147,11 @@ An example just-mrrc file could look like the following:
 , "distdirs": [{"root": "home", "path": ".distfiles"}]
 , "just": {"root": "system", "path": "usr/bin/just"}
 , "git": {"root": "system", "path": "usr/bin/git"}
+, "remote execution": {"address": "10.0.0.1:8980"}
 , "just args":
-  { "build": ["-r", "10.0.0.1:8980", "--remote-execution-property", "OS:Linux"]
-  , "install": ["-r", "10.0.0.1:8980", "--remote-execution-property", "OS:Linux"]
-  , "rebuild": ["-r", "10.0.0.1:8980", "--remote-execution-property", "OS:Linux"]
-  , "install-cas": ["-r", "10.0.0.1:8980"]
+  { "build": ["--remote-execution-property", "OS:Linux"]
+  , "install": ["--remote-execution-property", "OS:Linux"]
+  , "rebuild": ["--remote-execution-property", "OS:Linux"]
   }
 }
 ```

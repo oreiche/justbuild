@@ -14,80 +14,93 @@
 
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
 
-#include "src/buildtool/crypto/hasher.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
+#include "src/buildtool/storage/fs_utils.hpp"
 #include "src/buildtool/storage/storage.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
-#include "src/other_tools/utils/curl_easy_handle.hpp"
+#include "src/other_tools/utils/content.hpp"
+#include "src/other_tools/utils/curl_url_handle.hpp"
 
-namespace {
-
-/// \brief Fetches a file from the internet and stores its content in memory.
-/// Returns the content.
-[[nodiscard]] auto NetworkFetch(std::string const& fetch_url,
-                                JustMR::CAInfoPtr const& ca_info) noexcept
-    -> std::optional<std::string> {
-    auto curl_handle =
-        CurlEasyHandle::Create(ca_info->no_ssl_verify, ca_info->ca_bundle);
-    if (not curl_handle) {
-        return std::nullopt;
-    }
-    return curl_handle->DownloadToString(fetch_url);
-}
-
-template <Hasher::HashType type>
-[[nodiscard]] auto GetContentHash(std::string const& data) noexcept
-    -> std::string {
-    Hasher hasher{type};
-    hasher.Update(data);
-    auto digest = std::move(hasher).Finalize();
-    return digest.HexString();
-}
-
-}  // namespace
-
-auto CreateContentCASMap(JustMR::PathsPtr const& just_mr_paths,
-                         JustMR::CAInfoPtr const& ca_info,
+auto CreateContentCASMap(LocalPathsPtr const& just_mr_paths,
+                         MirrorsPtr const& additional_mirrors,
+                         CAInfoPtr const& ca_info,
+                         bool serve_api_exists,
+                         IExecutionApi* local_api,
+                         IExecutionApi* remote_api,
                          std::size_t jobs) -> ContentCASMap {
-    auto ensure_in_cas = [just_mr_paths, ca_info](auto /*unused*/,
-                                                  auto setter,
-                                                  auto logger,
-                                                  auto /*unused*/,
-                                                  auto const& key) {
-        // check if content already in CAS
+    auto ensure_in_cas = [just_mr_paths,
+                          additional_mirrors,
+                          ca_info,
+                          serve_api_exists,
+                          local_api,
+                          remote_api](auto /*unused*/,
+                                      auto setter,
+                                      auto logger,
+                                      auto /*unused*/,
+                                      auto const& key) {
         auto const& cas = Storage::Instance().CAS();
         auto digest = ArtifactDigest(key.content, 0, false);
-        if (cas.BlobPath(digest, /*is_executable=*/false)) {
-            (*setter)(true);
-            return;
+        // separate logic if we need a pure fetch
+        if (key.fetch_only) {
+            if (cas.BlobPath(digest, /*is_executable=*/false)) {
+                (*setter)(true);
+                return;
+            }
+            JustMRProgress::Instance().TaskTracker().Start(key.origin);
+            // add distfile to CAS
+            auto repo_distfile =
+                (key.distfile ? key.distfile.value()
+                              : std::filesystem::path(key.fetch_url)
+                                    .filename()
+                                    .string());
+            StorageUtils::AddDistfileToCAS(repo_distfile, just_mr_paths);
+            // check if content is in CAS now
+            if (cas.BlobPath(digest, /*is_executable=*/false)) {
+                JustMRProgress::Instance().TaskTracker().Stop(key.origin);
+                (*setter)(true);
+                return;
+            }
+            // check if content is known to remote serve service
+            if (serve_api_exists and
+                ServeApi::ContentInRemoteCAS(key.content)) {
+                // try to get content from remote CAS
+                if (remote_api != nullptr and local_api != nullptr and
+                    remote_api->RetrieveToCas(
+                        {Artifact::ObjectInfo{.digest = digest,
+                                              .type = ObjectType::File}},
+                        local_api)) {
+                    JustMRProgress::Instance().TaskTracker().Stop(key.origin);
+                    (*setter)(true);
+                    return;
+                }
+            }
         }
-        JustMRProgress::Instance().TaskTracker().Start(key.origin);
-        // add distfile to CAS
-        auto repo_distfile =
-            (key.distfile
-                 ? key.distfile.value()
-                 : std::filesystem::path(key.fetch_url).filename().string());
-        JustMR::Utils::AddDistfileToCAS(repo_distfile, just_mr_paths);
-        // check if content is in CAS now
-        if (cas.BlobPath(digest, /*is_executable=*/false)) {
+        // check if content is in remote CAS, if a remote is given
+        if (remote_api and local_api and remote_api->IsAvailable(digest) and
+            remote_api->RetrieveToCas(
+                {Artifact::ObjectInfo{.digest = digest,
+                                      .type = ObjectType::File}},
+                local_api)) {
             JustMRProgress::Instance().TaskTracker().Stop(key.origin);
             (*setter)(true);
             return;
         }
-        // archive needs fetching
-        // before any network fetching, check that mandatory fields are provided
+        // archive needs network fetching;
+        // first, check that mandatory fields are provided
         if (key.fetch_url.empty()) {
             (*logger)("Failed to provide archive fetch url!",
                       /*fatal=*/true);
             return;
         }
         // now do the actual fetch
-        auto data = NetworkFetch(key.fetch_url, ca_info);
-        if (data == std::nullopt) {
-            (*logger)(fmt::format("Failed to fetch a file with id {} from {}",
-                                  key.content,
-                                  key.fetch_url),
+        auto data = NetworkFetchWithMirrors(
+            key.fetch_url, key.mirrors, ca_info, additional_mirrors);
+        if (not data) {
+            (*logger)(fmt::format("Failed to fetch a file with id {} from "
+                                  "provided remotes",
+                                  key.content),
                       /*fatal=*/true);
             return;
         }
@@ -119,16 +132,27 @@ auto CreateContentCASMap(JustMR::PathsPtr const& just_mr_paths,
             }
         }
         // add the fetched data to CAS
-        auto path = JustMR::Utils::AddToCAS(*data);
+        auto path = StorageUtils::AddToCAS(*data);
         // check one last time if content is in CAS now
         if (not path) {
-            (*logger)(fmt::format("Failed to fetch a file with id {} from {}",
-                                  key.content,
+            (*logger)(fmt::format("Failed to store fetched content from {}",
                                   key.fetch_url),
                       /*fatal=*/true);
             return;
         }
-        JustMRProgress::Instance().TaskTracker().Stop(key.origin);
+        // check that the data we stored actually produces the requested digest
+        if (not cas.BlobPath(digest, /*is_executable=*/false)) {
+            (*logger)(fmt::format(
+                          "Content {} was not found at given fetch location {}",
+                          key.content,
+                          key.fetch_url),
+                      /*fatal=*/true);
+            return;
+        }
+        if (key.fetch_only) {
+            JustMRProgress::Instance().TaskTracker().Stop(key.origin);
+        }
+        // success!
         (*setter)(true);
     };
     return AsyncMapConsumer<ArchiveContent, bool>(ensure_in_cas, jobs);

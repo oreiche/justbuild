@@ -17,9 +17,12 @@
 #include <algorithm>
 
 #include "src/buildtool/file_system/file_root.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/fs_utils.hpp"
 #include "src/other_tools/git_operations/git_repo_remote.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
+#include "src/other_tools/utils/curl_url_handle.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
 namespace {
@@ -33,12 +36,68 @@ namespace {
         });
 }
 
+// Helper function for improved readability. It guarantees the logger is
+// called exactly once with fatal if failure.
+void WriteIdFileAndSetWSRoot(std::string const& root_tree_id,
+                             std::string const& subdir,
+                             bool ignore_special,
+                             GitCASPtr const& git_cas,
+                             std::filesystem::path const& repo_root,
+                             std::filesystem::path const& tree_id_file,
+                             CommitGitMap::SetterPtr const& ws_setter,
+                             CommitGitMap::LoggerPtr const& logger) {
+    // write association of the root tree in id file
+    if (not StorageUtils::WriteTreeIDFile(tree_id_file, root_tree_id)) {
+        (*logger)(fmt::format("Failed to write tree id {} to file {}",
+                              root_tree_id,
+                              tree_id_file.string()),
+                  /*fatal=*/true);
+        return;
+    }
+    // extract the subdir tree
+    auto git_repo = GitRepoRemote::Open(git_cas);  // link fake repo to odb
+    if (not git_repo) {
+        (*logger)(
+            fmt::format("Could not open repository {}", repo_root.string()),
+            /*fatal=*/true);
+        return;
+    }
+    auto wrapped_logger = std::make_shared<AsyncMapConsumerLogger>(
+        [logger, subdir, tree = root_tree_id](auto const& msg, bool fatal) {
+            (*logger)(fmt::format("While getting subdir {} in tree {}:\n{}",
+                                  subdir,
+                                  tree,
+                                  msg),
+                      fatal);
+        });
+    auto tree_id =
+        git_repo->GetSubtreeFromTree(root_tree_id, subdir, wrapped_logger);
+    if (not tree_id) {
+        return;
+    }
+    // set the workspace root as present
+    (*ws_setter)(std::pair(
+        nlohmann::json::array({ignore_special
+                                   ? FileRoot::kGitTreeIgnoreSpecialMarker
+                                   : FileRoot::kGitTreeMarker,
+                               *tree_id,
+                               StorageConfig::GitRoot().string()}),
+        false));
+}
+
 void EnsureCommit(GitRepoInfo const& repo_info,
                   std::filesystem::path const& repo_root,
+                  std::string const& fetch_repo,
+                  MirrorsPtr const& additional_mirrors,
                   GitCASPtr const& git_cas,
                   gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
+                  gsl::not_null<ImportToGitMap*> const& import_to_git_map,
                   std::string const& git_bin,
                   std::vector<std::string> const& launcher,
+                  bool serve_api_exists,
+                  IExecutionApi* local_api,
+                  IExecutionApi* remote_api,
+                  bool fetch_absent,
                   gsl::not_null<TaskSystem*> const& ts,
                   CommitGitMap::SetterPtr const& ws_setter,
                   CommitGitMap::LoggerPtr const& logger) {
@@ -62,26 +121,380 @@ void EnsureCommit(GitRepoInfo const& repo_info,
         return;
     }
     if (not is_commit_present.value()) {
+        auto tree_id_file = StorageUtils::GetCommitTreeIDFile(repo_info.hash);
+        if (FileSystemManager::Exists(tree_id_file)) {
+            // read resolved tree id
+            auto resolved_tree_id = FileSystemManager::ReadFile(tree_id_file);
+            if (not resolved_tree_id) {
+                (*logger)(fmt::format("Failed to read tree id from file {}",
+                                      tree_id_file.string()),
+                          /*fatal=*/true);
+                return;
+            }
+            // extract the subdir tree
+            wrapped_logger = std::make_shared<AsyncMapConsumerLogger>(
+                [logger, subdir = repo_info.subdir, tree = *resolved_tree_id](
+                    auto const& msg, bool fatal) {
+                    (*logger)(
+                        fmt::format("While getting subdir {} in tree {}:\n{}",
+                                    subdir,
+                                    tree,
+                                    msg),
+                        fatal);
+                });
+            auto tree_id = git_repo->GetSubtreeFromTree(
+                *resolved_tree_id, repo_info.subdir, wrapped_logger);
+            if (not tree_id) {
+                return;
+            }
+            // set the workspace root
+            if (repo_info.absent and not fetch_absent) {
+                (*ws_setter)(
+                    std::pair(nlohmann::json::array(
+                                  {repo_info.ignore_special
+                                       ? FileRoot::kGitTreeIgnoreSpecialMarker
+                                       : FileRoot::kGitTreeMarker,
+                                   *tree_id}),
+                              false));
+            }
+            else {
+                (*ws_setter)(
+                    std::pair(nlohmann::json::array(
+                                  {repo_info.ignore_special
+                                       ? FileRoot::kGitTreeIgnoreSpecialMarker
+                                       : FileRoot::kGitTreeMarker,
+                                   *tree_id,
+                                   StorageConfig::GitRoot().string()}),
+                              false));
+            }
+            return;
+        }
         JustMRProgress::Instance().TaskTracker().Start(repo_info.origin);
-        // if commit not there, fetch it
-        auto tmp_dir = JustMR::Utils::CreateTypedTmpDir("fetch");
+        // check if commit is known to remote serve service
+        if (serve_api_exists) {
+            // if root purely absent, request only the subdir tree
+            if (repo_info.absent and not fetch_absent) {
+                if (auto tree_id = ServeApi::RetrieveTreeFromCommit(
+                        repo_info.hash,
+                        repo_info.subdir,
+                        /*sync_tree = */ false)) {
+                    // set the workspace root as absent
+                    JustMRProgress::Instance().TaskTracker().Stop(
+                        repo_info.origin);
+                    (*ws_setter)(std::pair(
+                        nlohmann::json::array(
+                            {repo_info.ignore_special
+                                 ? FileRoot::kGitTreeIgnoreSpecialMarker
+                                 : FileRoot::kGitTreeMarker,
+                             *tree_id}),
+                        false));
+                    return;
+                }
+                // give warning
+                (*logger)(fmt::format("Tree at subdir {} for commit {} could "
+                                      "not be served",
+                                      repo_info.subdir,
+                                      repo_info.hash),
+                          /*fatal=*/false);
+            }
+            // otherwise, request (and sync) the whole commit tree, to ensure
+            // we maintain the id file association
+            else {
+                if (auto root_tree_id = ServeApi::RetrieveTreeFromCommit(
+                        repo_info.hash,
+                        /*subdir = */ ".",
+                        /*sync_tree = */ true)) {
+                    // verify if we know the tree already locally
+                    auto wrapped_logger =
+                        std::make_shared<AsyncMapConsumerLogger>(
+                            [logger, tree = *root_tree_id](auto const& msg,
+                                                           bool fatal) {
+                                (*logger)(
+                                    fmt::format("While verifying presence of "
+                                                "tree {}:\n{}",
+                                                tree,
+                                                msg),
+                                    fatal);
+                            });
+                    auto tree_present = git_repo->CheckTreeExists(
+                        *root_tree_id, wrapped_logger);
+                    if (not tree_present) {
+                        return;
+                    }
+                    if (*tree_present) {
+                        JustMRProgress::Instance().TaskTracker().Stop(
+                            repo_info.origin);
+                        // write association to id file, get subdir tree,
+                        // and set the workspace root
+                        WriteIdFileAndSetWSRoot(*root_tree_id,
+                                                repo_info.subdir,
+                                                repo_info.ignore_special,
+                                                git_cas,
+                                                repo_root,
+                                                tree_id_file,
+                                                ws_setter,
+                                                logger);
+                        return;
+                    }
+                    // try to get root tree from remote execution endpoint
+                    auto root_digest =
+                        ArtifactDigest{*root_tree_id, 0, /*is_tree=*/true};
+                    if (remote_api != nullptr and local_api != nullptr and
+                        remote_api->RetrieveToCas(
+                            {Artifact::ObjectInfo{.digest = root_digest,
+                                                  .type = ObjectType::Tree}},
+                            local_api)) {
+                        JustMRProgress::Instance().TaskTracker().Stop(
+                            repo_info.origin);
+                        // Move tree from CAS to local git storage
+                        auto tmp_dir = StorageUtils::CreateTypedTmpDir(
+                            "fetch-absent-root");
+                        if (not tmp_dir) {
+                            (*logger)(
+                                fmt::format("Failed to create tmp "
+                                            "directory after fetching root "
+                                            "tree {} for absent commit {}",
+                                            *root_tree_id,
+                                            repo_info.hash),
+                                true);
+                            return;
+                        }
+                        if (not local_api->RetrieveToPaths(
+                                {Artifact::ObjectInfo{
+                                    .digest = root_digest,
+                                    .type = ObjectType::Tree}},
+                                {tmp_dir->GetPath()})) {
+                            (*logger)(fmt::format("Failed to copy fetched root "
+                                                  "tree {} to {}",
+                                                  *root_tree_id,
+                                                  tmp_dir->GetPath().string()),
+                                      true);
+                            return;
+                        }
+                        CommitInfo c_info{
+                            tmp_dir->GetPath(), "tree", *root_tree_id};
+                        import_to_git_map->ConsumeAfterKeysReady(
+                            ts,
+                            {std::move(c_info)},
+                            [tmp_dir,  // keep tmp_dir alive
+                             root_tree_id = *root_tree_id,
+                             subdir = repo_info.subdir,
+                             ignore_special = repo_info.ignore_special,
+                             git_cas,
+                             repo_root,
+                             tree_id_file,
+                             ws_setter,
+                             logger](auto const& values) {
+                                if (not values[0]->second) {
+                                    (*logger)("Importing to git failed",
+                                              /*fatal=*/true);
+                                    return;
+                                }
+                                // write association to id file, get subdir
+                                // tree, and set the workspace root
+                                WriteIdFileAndSetWSRoot(root_tree_id,
+                                                        subdir,
+                                                        ignore_special,
+                                                        git_cas,
+                                                        repo_root,
+                                                        tree_id_file,
+                                                        ws_setter,
+                                                        logger);
+                            },
+                            [logger, tmp_dir, root_tree_id](auto const& msg,
+                                                            bool fatal) {
+                                (*logger)(
+                                    fmt::format("While moving root tree {} "
+                                                "from {} to local git:\n{}",
+                                                *root_tree_id,
+                                                tmp_dir->GetPath().string(),
+                                                msg),
+                                    fatal);
+                            });
+
+                        return;
+                    }
+                    // just serve should have made the tree available in the
+                    // remote CAS, so log this attempt and revert to network
+                    (*logger)(fmt::format("Tree {} marked as served, but not "
+                                          "found on remote",
+                                          *root_tree_id),
+                              /*fatal=*/false);
+                }
+                else {
+                    // give warning
+                    (*logger)(fmt::format(
+                                  "Root tree for commit {} could not be served",
+                                  repo_info.hash),
+                              /*fatal=*/false);
+                }
+            }
+        }
+        else {
+            if (repo_info.absent) {
+                // give warning
+                (*logger)(
+                    fmt::format("Missing serve endpoint for Git repository {} "
+                                "marked absent requires slower network fetch.",
+                                repo_root.string()),
+                    /*fatal=*/false);
+            }
+        }
+        // default to fetching it from network
+        auto tmp_dir = StorageUtils::CreateTypedTmpDir("fetch");
         if (not tmp_dir) {
             (*logger)("Failed to create fetch tmp directory!",
                       /*fatal=*/true);
             return;
         }
-        // setup wrapped logger
-        auto wrapped_logger = std::make_shared<AsyncMapConsumerLogger>(
-            [logger](auto const& msg, bool fatal) {
-                (*logger)(fmt::format("While fetching via tmp repo:\n{}", msg),
-                          fatal);
-            });
-        if (not git_repo->FetchViaTmpRepo(tmp_dir->GetPath(),
-                                          repo_info.repo_url,
+        // store failed attempts for subsequent logging
+        bool fetched{false};
+        std::string err_messages{};
+        // try local mirrors first
+        auto local_mirrors =
+            MirrorsUtils::GetLocalMirrors(additional_mirrors, fetch_repo);
+        for (auto mirror : local_mirrors) {
+            if (GitURLIsPath(mirror)) {
+                mirror = std::filesystem::absolute(mirror).string();
+            }
+            auto wrapped_logger = std::make_shared<AsyncMapConsumerLogger>(
+                [mirror, &err_messages](auto const& msg, bool /*fatal*/) {
+                    err_messages += fmt::format(
+                        "\nWhile attempting fetch from local mirror "
+                        "{}:\n{}",
+                        mirror,
+                        msg);
+                });
+            if (git_repo->FetchViaTmpRepo(tmp_dir->GetPath(),
+                                          mirror,
                                           repo_info.branch,
                                           git_bin,
                                           launcher,
                                           wrapped_logger)) {
+                fetched = true;
+                break;
+            }
+        }
+        if (not fetched) {
+            // get preferred hostnames list
+            auto preferred_hostnames =
+                MirrorsUtils::GetPreferredHostnames(additional_mirrors);
+            // try first the main URL, but with each of the preferred
+            // hostnames, if URL is not a path
+            if (not GitURLIsPath(fetch_repo)) {
+                for (auto const& hostname : preferred_hostnames) {
+                    if (auto preferred_url = CurlURLHandle::ReplaceHostname(
+                            fetch_repo, hostname)) {
+                        auto wrapped_logger =
+                            std::make_shared<AsyncMapConsumerLogger>(
+                                [preferred_url, &err_messages](auto const& msg,
+                                                               bool /*fatal*/) {
+                                    err_messages += fmt::format(
+                                        "\nWhile attempting fetch from "
+                                        "remote "
+                                        "{}:\n{}",
+                                        *preferred_url,
+                                        msg);
+                                });
+                        if (git_repo->FetchViaTmpRepo(tmp_dir->GetPath(),
+                                                      *preferred_url,
+                                                      repo_info.branch,
+                                                      git_bin,
+                                                      launcher,
+                                                      wrapped_logger)) {
+                            fetched = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (not fetched) {
+                // now try the original main fetch URL
+                auto wrapped_logger = std::make_shared<AsyncMapConsumerLogger>(
+                    [fetch_repo, &err_messages](auto const& msg,
+                                                bool /*fatal*/) {
+                        err_messages += fmt::format(
+                            "\nWhile attempting fetch from remote "
+                            "{}:\n{}",
+                            fetch_repo,
+                            msg);
+                    });
+                if (not git_repo->FetchViaTmpRepo(tmp_dir->GetPath(),
+                                                  fetch_repo,
+                                                  repo_info.branch,
+                                                  git_bin,
+                                                  launcher,
+                                                  wrapped_logger)) {
+                    // now try to fetch from mirrors, in order, if given
+                    for (auto mirror : repo_info.mirrors) {
+                        if (GitURLIsPath(mirror)) {
+                            mirror = std::filesystem::absolute(mirror).string();
+                        }
+                        else {
+                            // if non-path, try each of the preferred
+                            // hostnames
+                            for (auto const& hostname : preferred_hostnames) {
+                                if (auto preferred_mirror =
+                                        CurlURLHandle::ReplaceHostname(
+                                            mirror, hostname)) {
+                                    wrapped_logger = std::make_shared<
+                                        AsyncMapConsumerLogger>(
+                                        [preferred_mirror, &err_messages](
+                                            auto const& msg, bool /*fatal*/) {
+                                            err_messages += fmt::format(
+                                                "\nWhile attempting fetch "
+                                                "from "
+                                                "mirror {}:\n{}",
+                                                *preferred_mirror,
+                                                msg);
+                                        });
+                                    if (git_repo->FetchViaTmpRepo(
+                                            tmp_dir->GetPath(),
+                                            *preferred_mirror,
+                                            repo_info.branch,
+                                            git_bin,
+                                            launcher,
+                                            wrapped_logger)) {
+                                        fetched = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (fetched) {
+                            break;
+                        }
+                        wrapped_logger =
+                            std::make_shared<AsyncMapConsumerLogger>(
+                                [mirror, &err_messages](auto const& msg,
+                                                        bool /*fatal*/) {
+                                    err_messages += fmt::format(
+                                        "\nWhile attempting fetch from "
+                                        "mirror "
+                                        "{}:\n{}",
+                                        mirror,
+                                        msg);
+                                });
+                        if (git_repo->FetchViaTmpRepo(tmp_dir->GetPath(),
+                                                      mirror,
+                                                      repo_info.branch,
+                                                      git_bin,
+                                                      launcher,
+                                                      wrapped_logger)) {
+                            fetched = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (not fetched) {
+            // log fetch failure details separately to reduce verbosity
+            (*logger)(
+                fmt::format("While fetching via tmp repo:{}", err_messages),
+                /*fatal=*/false);
+            (*logger)("Failed to fetch from provided remotes",
+                      /*fatal=*/true);
             return;
         }
         // setup wrapped logger
@@ -102,7 +515,7 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                                   "{} for remote {}",
                                   repo_info.hash,
                                   repo_info.branch,
-                                  repo_info.repo_url),
+                                  fetch_repo),
                       /*fatal=*/true);
             return;
         }
@@ -118,7 +531,7 @@ void EnsureCommit(GitRepoInfo const& repo_info,
         critical_git_op_map->ConsumeAfterKeysReady(
             ts,
             {std::move(op_key)},
-            [git_cas, repo_info, repo_root, ws_setter, logger](
+            [git_cas, repo_info, repo_root, fetch_absent, ws_setter, logger](
                 auto const& values) {
                 GitOpValue op_result = *values[0];
                 // check flag
@@ -152,14 +565,15 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                 }
                 // set the workspace root
                 JustMRProgress::Instance().TaskTracker().Stop(repo_info.origin);
-                (*ws_setter)(
-                    std::pair(nlohmann::json::array(
-                                  {repo_info.ignore_special
-                                       ? FileRoot::kGitTreeIgnoreSpecialMarker
-                                       : FileRoot::kGitTreeMarker,
-                                   *subtree,
-                                   repo_root}),
-                              false));
+                auto root = nlohmann::json::array(
+                    {repo_info.ignore_special
+                         ? FileRoot::kGitTreeIgnoreSpecialMarker
+                         : FileRoot::kGitTreeMarker,
+                     *subtree});
+                if (fetch_absent or not repo_info.absent) {
+                    root.emplace_back(repo_root);
+                }
+                (*ws_setter)(std::pair(std::move(root), false));
             },
             [logger, target_path = repo_root](auto const& msg, bool fatal) {
                 (*logger)(fmt::format("While running critical Git op "
@@ -170,6 +584,7 @@ void EnsureCommit(GitRepoInfo const& repo_info,
             });
     }
     else {
+        JustMRProgress::Instance().TaskTracker().Start(repo_info.origin);
         // setup wrapped logger
         auto wrapped_logger = std::make_shared<AsyncMapConsumerLogger>(
             [logger](auto const& msg, bool fatal) {
@@ -184,13 +599,14 @@ void EnsureCommit(GitRepoInfo const& repo_info,
             return;
         }
         // set the workspace root
-        (*ws_setter)(std::pair(
-            nlohmann::json::array({repo_info.ignore_special
-                                       ? FileRoot::kGitTreeIgnoreSpecialMarker
-                                       : FileRoot::kGitTreeMarker,
-                                   *subtree,
-                                   repo_root}),
-            true));
+        auto root = nlohmann::json::array(
+            {repo_info.ignore_special ? FileRoot::kGitTreeIgnoreSpecialMarker
+                                      : FileRoot::kGitTreeMarker,
+             *subtree});
+        if (fetch_absent or not repo_info.absent) {
+            root.emplace_back(repo_root);
+        }
+        (*ws_setter)(std::pair(std::move(root), true));
     }
 }
 
@@ -199,18 +615,30 @@ void EnsureCommit(GitRepoInfo const& repo_info,
 /// \brief Create a CommitGitMap object
 auto CreateCommitGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
-    JustMR::PathsPtr const& just_mr_paths,
+    gsl::not_null<ImportToGitMap*> const& import_to_git_map,
+    LocalPathsPtr const& just_mr_paths,
+    MirrorsPtr const& additional_mirrors,
     std::string const& git_bin,
     std::vector<std::string> const& launcher,
+    bool serve_api_exists,
+    IExecutionApi* local_api,
+    IExecutionApi* remote_api,
+    bool fetch_absent,
     std::size_t jobs) -> CommitGitMap {
     auto commit_to_git = [critical_git_op_map,
+                          import_to_git_map,
                           just_mr_paths,
+                          additional_mirrors,
                           git_bin,
-                          launcher](auto ts,
-                                    auto setter,
-                                    auto logger,
-                                    auto /* unused */,
-                                    auto const& key) {
+                          launcher,
+                          serve_api_exists,
+                          local_api,
+                          remote_api,
+                          fetch_absent](auto ts,
+                                        auto setter,
+                                        auto logger,
+                                        auto /* unused */,
+                                        auto const& key) {
         // get root for repo (making sure that if repo is a path, it is
         // absolute)
         std::string fetch_repo = key.repo_url;
@@ -218,7 +646,7 @@ auto CreateCommitGitMap(
             fetch_repo = std::filesystem::absolute(fetch_repo).string();
         }
         std::filesystem::path repo_root =
-            JustMR::Utils::GetGitRoot(just_mr_paths, fetch_repo);
+            StorageUtils::GetGitRoot(just_mr_paths, fetch_repo);
         // ensure git repo
         // define Git operation to be done
         GitOpKey op_key = {
@@ -237,9 +665,16 @@ auto CreateCommitGitMap(
             {std::move(op_key)},
             [key,
              repo_root,
+             fetch_repo,
+             additional_mirrors,
              critical_git_op_map,
+             import_to_git_map,
              git_bin,
              launcher,
+             serve_api_exists,
+             local_api,
+             remote_api,
+             fetch_absent,
              ts,
              setter,
              logger](auto const& values) {
@@ -262,10 +697,17 @@ auto CreateCommitGitMap(
                     });
                 EnsureCommit(key,
                              repo_root,
+                             fetch_repo,
+                             additional_mirrors,
                              op_result.git_cas,
                              critical_git_op_map,
+                             import_to_git_map,
                              git_bin,
                              launcher,
+                             serve_api_exists,
+                             local_api,
+                             remote_api,
+                             fetch_absent,
                              ts,
                              setter,
                              wrapped_logger);

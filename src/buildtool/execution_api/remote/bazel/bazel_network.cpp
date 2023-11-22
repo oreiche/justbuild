@@ -14,7 +14,7 @@
 
 #include "src/buildtool/execution_api/remote/bazel/bazel_network.hpp"
 
-#include "src/buildtool/execution_api/remote/bazel/bazel_client_common.hpp"
+#include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_response.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
@@ -151,6 +151,11 @@ auto BazelNetwork::IsAvailable(bazel_re::Digest const& digest) const noexcept
 auto BazelNetwork::IsAvailable(std::vector<bazel_re::Digest> const& digests)
     const noexcept -> std::vector<bazel_re::Digest> {
     return cas_->FindMissingBlobs(instance_name_, digests);
+}
+
+auto BazelNetwork::SplitBlob(bazel_re::Digest const& digest) const noexcept
+    -> std::optional<std::vector<bazel_re::Digest>> {
+    return cas_->SplitBlob(instance_name_, digest);
 }
 
 template <class T_Iter>

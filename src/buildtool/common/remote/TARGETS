@@ -1,0 +1,32 @@
+{ "client_common":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["client_common"]
+  , "hdrs": ["client_common.hpp"]
+  , "deps":
+    [ ["@", "grpc", "", "grpc++"]
+    , ["src/buildtool/auth", "auth"]
+    , ["src/buildtool/common", "common"]
+    , "port"
+    , ["src/buildtool/logging", "logging"]
+    ]
+  , "stage": ["src", "buildtool", "common", "remote"]
+  }
+, "port":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["port"]
+  , "hdrs": ["port.hpp"]
+  , "deps":
+    [ ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/logging", "logging"]
+    , ["src/utils/cpp", "type_safe_arithmetic"]
+    ]
+  , "stage": ["src", "buildtool", "common", "remote"]
+  }
+, "remote_common":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["remote_common"]
+  , "hdrs": ["remote_common.hpp"]
+  , "deps": [["@", "fmt", "", "fmt"], ["@", "json", "", "json"], "port"]
+  , "stage": ["src", "buildtool", "common", "remote"]
+  }
+}

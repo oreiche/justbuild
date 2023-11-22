@@ -22,12 +22,13 @@
 #include "build/bazel/remote/execution/v2/remote_execution.grpc.pb.h"
 #include "google/longrunning/operations.pb.h"
 #include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/common/remote/port.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
 /// Implements client side for service defined here:
-/// https://github.com/bazelbuild/bazel/blob/4b6ad34dbba15dacebfb6cbf76fa741649cdb007/third_party/remoteapis/build/bazel/remote/execution/v2/remote_execution.proto#L42
+/// https://github.com/bazelbuild/remote-apis/blob/e1fe21be4c9ae76269a5a63215bb3c72ed9ab3f0/build/bazel/remote/execution/v2/remote_execution.proto#L44
 class BazelExecutionClient {
   public:
     struct ExecutionOutput {

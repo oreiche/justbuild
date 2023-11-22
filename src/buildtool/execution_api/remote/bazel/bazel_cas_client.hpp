@@ -17,12 +17,14 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "build/bazel/remote/execution/v2/remote_execution.grpc.pb.h"
 #include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/common/remote/port.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bytestream_client.hpp"
@@ -30,7 +32,7 @@
 #include "src/buildtool/logging/logger.hpp"
 
 /// Implements client side for serivce defined here:
-/// https://github.com/bazelbuild/bazel/blob/4b6ad34dbba15dacebfb6cbf76fa741649cdb007/third_party/remoteapis/build/bazel/remote/execution/v2/remote_execution.proto#L243
+/// https://github.com/bazelbuild/remote-apis/blob/e1fe21be4c9ae76269a5a63215bb3c72ed9ab3f0/build/bazel/remote/execution/v2/remote_execution.proto#L317
 class BazelCasClient {
   public:
     BazelCasClient(std::string const& server, Port port) noexcept;
@@ -126,6 +128,14 @@ class BazelCasClient {
     [[nodiscard]] auto ReadSingleBlob(std::string const& instance_name,
                                       bazel_re::Digest const& digest) noexcept
         -> std::optional<BazelBlob>;
+
+    /// @brief Split single blob into chunks
+    /// @param[in] instance_name Name of the CAS instance
+    /// @param[in] digest        Blob digest to be splitted
+    /// @return The chunk digests of the splitted blob
+    [[nodiscard]] auto SplitBlob(std::string const& instance_name,
+                                 bazel_re::Digest const& digest) noexcept
+        -> std::optional<std::vector<bazel_re::Digest>>;
 
   private:
     std::unique_ptr<ByteStreamClient> stream_{};

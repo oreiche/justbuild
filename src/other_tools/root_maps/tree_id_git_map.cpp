@@ -14,16 +14,18 @@
 
 #include "src/other_tools/root_maps/tree_id_git_map.hpp"
 
+#include <cstdlib>
+
 #include "fmt/core.h"
 #include "src/buildtool/execution_api/common/execution_common.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/fs_utils.hpp"
 #include "src/buildtool/system/system_command.hpp"
 #include "src/other_tools/git_operations/git_repo_remote.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
-#include "src/other_tools/just_mr/utils.hpp"
 
 namespace {
 
@@ -58,16 +60,17 @@ void KeepCommitAndSetRoot(
                           /*fatal=*/true);
                 return;
             }
+            JustMRProgress::Instance().TaskTracker().Stop(tree_id_info.origin);
             // set the workspace root
-            JustMRProgress::Instance().TaskTracker().Start(tree_id_info.origin);
-            (*ws_setter)(
-                std::pair(nlohmann::json::array(
-                              {tree_id_info.ignore_special
-                                   ? FileRoot::kGitTreeIgnoreSpecialMarker
-                                   : FileRoot::kGitTreeMarker,
-                               tree_id_info.hash,
-                               StorageConfig::GitRoot().string()}),
-                          false));
+            auto root = nlohmann::json::array(
+                {tree_id_info.ignore_special
+                     ? FileRoot::kGitTreeIgnoreSpecialMarker
+                     : FileRoot::kGitTreeMarker,
+                 tree_id_info.hash});
+            if (not tree_id_info.absent) {
+                root.emplace_back(StorageConfig::GitRoot().string());
+            }
+            (*ws_setter)(std::pair(std::move(root), false));
         },
         [logger, commit, target_path = tmp_dir->GetPath()](auto const& msg,
                                                            bool fatal) {
@@ -93,7 +96,16 @@ auto CreateTreeIdGitMap(
                            auto logger,
                            auto /*unused*/,
                            auto const& key) {
-        // first, check whether tree exists already in CAS
+        // if root is absent, no work needs to be done
+        if (key.absent) {
+            auto root = nlohmann::json::array(
+                {key.ignore_special ? FileRoot::kGitTreeIgnoreSpecialMarker
+                                    : FileRoot::kGitTreeMarker,
+                 key.hash});
+            (*setter)(std::pair(std::move(root), false));
+            return;
+        }
+        // check whether tree exists already in CAS
         // ensure Git cache
         // define Git operation to be done
         GitOpKey op_key = {.params =
@@ -144,7 +156,7 @@ auto CreateTreeIdGitMap(
                 if (not *tree_found) {
                     JustMRProgress::Instance().TaskTracker().Start(key.origin);
                     // create temporary location for command execution root
-                    auto tmp_dir = JustMR::Utils::CreateTypedTmpDir("git-tree");
+                    auto tmp_dir = StorageUtils::CreateTypedTmpDir("git-tree");
                     if (not tmp_dir) {
                         (*logger)(
                             "Failed to create tmp directory for tree id map!",
@@ -153,7 +165,7 @@ auto CreateTreeIdGitMap(
                     }
                     // create temporary location for storing command result
                     // files
-                    auto out_dir = JustMR::Utils::CreateTypedTmpDir("git-tree");
+                    auto out_dir = StorageUtils::CreateTypedTmpDir("git-tree");
                     if (not out_dir) {
                         (*logger)(
                             "Failed to create tmp directory for tree id map!",
@@ -166,11 +178,15 @@ auto CreateTreeIdGitMap(
                     std::copy(key.command.begin(),
                               key.command.end(),
                               std::back_inserter(cmdline));
-                    auto const command_output =
-                        system.Execute(cmdline,
-                                       key.env_vars,
-                                       tmp_dir->GetPath(),
-                                       out_dir->GetPath());
+                    std::map<std::string, std::string> env{key.env_vars};
+                    for (auto const& k : key.inherit_env) {
+                        const char* v = std::getenv(k.c_str());
+                        if (v != nullptr) {
+                            env[k] = std::string(v);
+                        }
+                    }
+                    auto const command_output = system.Execute(
+                        cmdline, env, tmp_dir->GetPath(), out_dir->GetPath());
                     if (not command_output) {
                         (*logger)(fmt::format("Failed to execute command:\n{}",
                                               nlohmann::json(cmdline).dump()),
@@ -281,7 +297,7 @@ auto CreateTreeIdGitMap(
                             }
                             // define temp repo path
                             auto tmp_dir =
-                                JustMR::Utils::CreateTypedTmpDir("git-tree");
+                                StorageUtils::CreateTypedTmpDir("git-tree");
                             ;
                             if (not tmp_dir) {
                                 (*logger)(fmt::format("Could not create unique "
@@ -345,14 +361,15 @@ auto CreateTreeIdGitMap(
                 }
                 else {
                     // tree found, so return the git tree root as-is
-                    (*setter)(std::pair(
-                        nlohmann::json::array(
-                            {key.ignore_special
-                                 ? FileRoot::kGitTreeIgnoreSpecialMarker
-                                 : FileRoot::kGitTreeMarker,
-                             key.hash,
-                             StorageConfig::GitRoot().string()}),
-                        true));
+                    auto root = nlohmann::json::array(
+                        {key.ignore_special
+                             ? FileRoot::kGitTreeIgnoreSpecialMarker
+                             : FileRoot::kGitTreeMarker,
+                         key.hash});
+                    if (not key.absent) {
+                        root.emplace_back(StorageConfig::GitRoot().string());
+                    }
+                    (*setter)(std::pair(std::move(root), true));
                 }
             },
             [logger, target_path = StorageConfig::GitRoot()](auto const& msg,

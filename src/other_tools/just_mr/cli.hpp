@@ -26,18 +26,22 @@
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/common/clidefaults.hpp"
+#include "src/buildtool/common/user_structs.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
 #include "src/buildtool/logging/log_level.hpp"
+#include "src/other_tools/just_mr/mirrors.hpp"
 #include "src/other_tools/just_mr/utils.hpp"
 
 /// \brief Arguments common to all just-mr subcommands
 struct MultiRepoCommonArguments {
     std::optional<std::filesystem::path> repository_config{std::nullopt};
+    std::optional<std::filesystem::path> absent_repository_file{std::nullopt};
     std::optional<std::filesystem::path> checkout_locations_file{std::nullopt};
     std::vector<std::string> explicit_distdirs{};
-    JustMR::PathsPtr just_mr_paths = std::make_shared<JustMR::Paths>();
+    LocalPathsPtr just_mr_paths = std::make_shared<LocalPaths>();
+    MirrorsPtr alternative_mirrors = std::make_shared<Mirrors>();
     std::optional<std::vector<std::string>> local_launcher{std::nullopt};
-    JustMR::CAInfoPtr ca_info = std::make_shared<JustMR::CAInfo>();
+    CAInfoPtr ca_info = std::make_shared<CAInfo>();
     std::optional<std::filesystem::path> just_path{std::nullopt};
     std::optional<std::string> main{std::nullopt};
     std::optional<std::filesystem::path> rc_path{std::nullopt};
@@ -45,6 +49,10 @@ struct MultiRepoCommonArguments {
     bool norc{false};
     std::size_t jobs{std::max(1U, std::thread::hardware_concurrency())};
     std::vector<std::string> defines{};
+    std::optional<std::string> remote_execution_address;
+    std::optional<bool> compatible{std::nullopt};
+    std::optional<std::string> remote_serve_address;
+    bool fetch_absent{false};
 };
 
 struct MultiRepoLogArguments {
@@ -61,6 +69,7 @@ struct MultiRepoSetupArguments {
 
 struct MultiRepoFetchArguments {
     std::optional<std::filesystem::path> fetch_dir{std::nullopt};
+    bool backup_to_remote{false};
 };
 
 struct MultiRepoUpdateArguments {
@@ -71,6 +80,13 @@ struct MultiRepoJustSubCmdsArguments {
     std::optional<std::string> subcmd_name{std::nullopt};
     std::vector<std::string> additional_just_args{};
     std::unordered_map<std::string, std::vector<std::string>> just_args{};
+};
+
+// corresponding to the similarly-named arguments in 'just'
+struct MultiRepoRemoteAuthArguments {
+    std::optional<std::filesystem::path> tls_ca_cert{std::nullopt};
+    std::optional<std::filesystem::path> tls_client_cert{std::nullopt};
+    std::optional<std::filesystem::path> tls_client_key{std::nullopt};
 };
 
 static inline void SetupMultiRepoCommonArguments(
@@ -84,6 +100,16 @@ static inline void SetupMultiRepoCommonArguments(
                    std::filesystem::absolute(repository_config_raw));
            },
            "Repository-description file to use.")
+        ->type_name("FILE");
+    app->add_option_function<std::string>(
+           "--absent",
+           [clargs](auto const& file_raw) {
+               clargs->absent_repository_file =
+                   std::filesystem::weakly_canonical(
+                       std::filesystem::absolute(file_raw));
+           },
+           "File specifying the repositories to consider absent (overrides the "
+           "pragma in the config file).")
         ->type_name("FILE");
     app->add_option_function<std::string>(
            "--local-build-root",
@@ -167,6 +193,25 @@ static inline void SetupMultiRepoCommonArguments(
         ->type_name("JSON")
         ->trigger_on_parse();  // run callback on all instances while parsing,
                                // not after all parsing is done
+    app->add_option("-r,--remote-execution-address",
+                    clargs->remote_execution_address,
+                    "Address of a remote-execution service.")
+        ->type_name("NAME:PORT");
+    app->add_flag(
+        "--compatible",
+        clargs->compatible,
+        "At increased computational effort, be compatible with the original "
+        "remote build execution protocol. As the change affects identifiers, "
+        "the flag must be used consistently for all related invocations.");
+    app->add_option("-R,--remote-serve-address",
+                    clargs->remote_serve_address,
+                    "Address of a remote 'just serve' service.")
+        ->type_name("NAME:PORT");
+    app->add_flag("--fetch-absent",
+                  clargs->fetch_absent,
+                  "Do not produce absent roots. For Git repositories, try to "
+                  "fetch served commit trees from the remote execution "
+                  "endpoint before reverting to the network.");
 }
 
 static inline auto SetupMultiRepoLogArguments(
@@ -224,6 +269,10 @@ static inline void SetupMultiRepoFetchArguments(
            },
            "Directory to write distfiles when fetching.")
         ->type_name("PATH");
+    app->add_flag("--backup-to-remote",
+                  clargs->backup_to_remote,
+                  "Backup fetched archives to a remote CAS, if a "
+                  "remote-execution service is provided.");
 }
 
 static inline void SetupMultiRepoUpdateArguments(
@@ -232,6 +281,21 @@ static inline void SetupMultiRepoUpdateArguments(
     // take all remaining args as positional
     app->add_option("repo", clargs->repos_to_update, "Repository to update.")
         ->type_name("");
+}
+
+static inline auto SetupMultiRepoRemoteAuthArguments(
+    gsl::not_null<CLI::App*> const& app,
+    gsl::not_null<MultiRepoRemoteAuthArguments*> const& authargs) {
+    app->add_option("--tls-ca-cert",
+                    authargs->tls_ca_cert,
+                    "Path to a TLS CA certificate that is trusted to sign the "
+                    "server certificate.");
+    app->add_option("--tls-client-cert",
+                    authargs->tls_client_cert,
+                    "Path to the TLS client certificate.");
+    app->add_option("--tls-client-key",
+                    authargs->tls_client_key,
+                    "Path to the TLS client key.");
 }
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_JUST_MR_CLI_HPP

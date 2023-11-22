@@ -18,17 +18,18 @@
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/fs_utils.hpp"
 #include "src/other_tools/git_operations/git_repo_remote.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
 namespace {
 
 void ResolveFilePathTree(
-
     std::string const& repo_root,
     std::string const& target_path,
     std::string const& tree_hash,
     std::optional<PragmaSpecial> const& pragma_special,
+    bool absent,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<TaskSystem*> const& ts,
     FilePathGitMap::SetterPtr const& ws_setter,
@@ -36,7 +37,7 @@ void ResolveFilePathTree(
     if (pragma_special) {
         // get the resolved tree
         auto tree_id_file =
-            JustMR::Utils::GetResolvedTreeIDFile(tree_hash, *pragma_special);
+            StorageUtils::GetResolvedTreeIDFile(tree_hash, *pragma_special);
         if (FileSystemManager::Exists(tree_id_file)) {
             // read resolved tree id
             auto resolved_tree_id = FileSystemManager::ReadFile(tree_id_file);
@@ -48,8 +49,12 @@ void ResolveFilePathTree(
                 return;
             }
             // set the workspace root
-            (*ws_setter)(nlohmann::json::array(
-                {FileRoot::kGitTreeMarker, *resolved_tree_id, repo_root}));
+            auto root = nlohmann::json::array(
+                {FileRoot::kGitTreeMarker, *resolved_tree_id});
+            if (not absent) {
+                root.emplace_back(repo_root);
+            }
+            (*ws_setter)(std::move(root));
         }
         else {
             // resolve tree
@@ -63,6 +68,7 @@ void ResolveFilePathTree(
                  tree_hash,
                  repo_root,
                  tree_id_file,
+                 absent,
                  ws_setter,
                  logger](auto const& hashes) {
                     if (not hashes[0]) {
@@ -85,8 +91,8 @@ void ResolveFilePathTree(
                     }
                     auto const& resolved_tree = *hashes[0];
                     // cache the resolved tree in the CAS map
-                    if (not JustMR::Utils::WriteTreeIDFile(tree_id_file,
-                                                           resolved_tree.id)) {
+                    if (not StorageUtils::WriteTreeIDFile(tree_id_file,
+                                                          resolved_tree.id)) {
                         (*logger)(fmt::format("Failed to write resolved tree "
                                               "id to file {}",
                                               tree_id_file.string()),
@@ -94,10 +100,12 @@ void ResolveFilePathTree(
                         return;
                     }
                     // set the workspace root
-                    (*ws_setter)(
-                        nlohmann::json::array({FileRoot::kGitTreeMarker,
-                                               resolved_tree.id,
-                                               repo_root}));
+                    auto root = nlohmann::json::array(
+                        {FileRoot::kGitTreeMarker, resolved_tree.id});
+                    if (not absent) {
+                        root.emplace_back(repo_root);
+                    }
+                    (*ws_setter)(std::move(root));
                 },
                 [logger, target_path](auto const& msg, bool fatal) {
                     (*logger)(fmt::format(
@@ -110,8 +118,12 @@ void ResolveFilePathTree(
     }
     else {
         // set the workspace root as-is
-        (*ws_setter)(nlohmann::json::array(
-            {FileRoot::kGitTreeMarker, tree_hash, repo_root}));
+        auto root =
+            nlohmann::json::array({FileRoot::kGitTreeMarker, tree_hash});
+        if (not absent) {
+            root.emplace_back(repo_root);
+        }
+        (*ws_setter)(std::move(root));
     }
 }
 
@@ -174,6 +186,7 @@ auto CreateFilePathGitMap(
                 {std::move(op_key)},
                 [fpath = key.fpath,
                  pragma_special = key.pragma_special,
+                 absent = key.absent,
                  git_cas = std::move(git_cas),
                  repo_root = std::move(*repo_root),
                  resolve_symlinks_map,
@@ -216,6 +229,7 @@ auto CreateFilePathGitMap(
                                         fpath.string(),
                                         *tree_hash,
                                         pragma_special,
+                                        absent,
                                         resolve_symlinks_map,
                                         ts,
                                         setter,
@@ -233,7 +247,7 @@ auto CreateFilePathGitMap(
         else {
             // warn if import to git is inefficient
             if (current_subcmd) {
-                (*logger)(fmt::format("Warning: Inefficient Git import of file "
+                (*logger)(fmt::format("Inefficient Git import of file "
                                       "path \'{}\'.\nPlease consider using "
                                       "\'just-mr setup\' and \'just {}\' "
                                       "separately to cache the output.",
@@ -242,7 +256,7 @@ auto CreateFilePathGitMap(
                           /*fatal=*/false);
             }
             // it's not a git repo, so import it to git cache
-            auto tmp_dir = JustMR::Utils::CreateTypedTmpDir("file");
+            auto tmp_dir = StorageUtils::CreateTypedTmpDir("file");
             if (not tmp_dir) {
                 (*logger)("Failed to create import-to-git tmp directory!",
                           /*fatal=*/true);
@@ -267,6 +281,7 @@ auto CreateFilePathGitMap(
                 [tmp_dir,
                  fpath = key.fpath,
                  pragma_special = key.pragma_special,
+                 absent = key.absent,
                  resolve_symlinks_map,
                  ts,
                  setter,
@@ -284,6 +299,7 @@ auto CreateFilePathGitMap(
                                         fpath.string(),
                                         tree,
                                         pragma_special,
+                                        absent,
                                         resolve_symlinks_map,
                                         ts,
                                         setter,

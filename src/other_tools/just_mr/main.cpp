@@ -21,6 +21,7 @@
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
+#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/file_system/git_context.hpp"
 #include "src/buildtool/logging/log_config.hpp"
 #include "src/buildtool/logging/log_level.hpp"
@@ -34,6 +35,7 @@
 #include "src/other_tools/just_mr/fetch.hpp"
 #include "src/other_tools/just_mr/launch.hpp"
 #include "src/other_tools/just_mr/setup.hpp"
+#include "src/other_tools/just_mr/setup_utils.hpp"
 #include "src/other_tools/just_mr/update.hpp"
 
 namespace {
@@ -57,6 +59,7 @@ struct CommandLineArguments {
     MultiRepoFetchArguments fetch;
     MultiRepoUpdateArguments update;
     MultiRepoJustSubCmdsArguments just_cmd;
+    MultiRepoRemoteAuthArguments auth;
 };
 
 /// \brief Setup arguments for just-mr itself, common to all subcommands.
@@ -65,6 +68,7 @@ void SetupCommonCommandArguments(
     gsl::not_null<CommandLineArguments*> const& clargs) {
     SetupMultiRepoCommonArguments(app, &clargs->common);
     SetupMultiRepoLogArguments(app, &clargs->log);
+    SetupMultiRepoRemoteAuthArguments(app, &clargs->auth);
 }
 
 /// \brief Setup arguments for subcommand "just-mr fetch".
@@ -418,6 +422,15 @@ void SetupLogging(MultiRepoLogArguments const& clargs) {
             auto const& args_list = cmd_args->List();
             args.reserve(args_list.size());
             for (auto const& arg : args_list) {
+                if (not arg->IsString()) {
+                    Logger::Log(
+                        LogLevel::Error,
+                        "Configuration-file provided 'just' argument key {} "
+                        "must have strings in its list value, but found {}",
+                        cmd_name,
+                        arg->ToString());
+                    std::exit(kExitConfigError);
+                }
                 args.emplace_back(arg->String());
             }
             clargs->just_cmd.just_args[cmd_name] = std::move(args);
@@ -487,6 +500,117 @@ void SetupLogging(MultiRepoLogArguments const& clargs) {
                     clargs->log.log_append ? LogSinkFile::Mode::Append
                                            : LogSinkFile::Mode::Overwrite));
                 clargs->log.log_files.emplace_back(path->first);
+            }
+        }
+    }
+    // read remote exec args; overwritten if user provided it already
+    auto remote = rc_config["remote execution"];
+    if (remote.IsNotNull()) {
+        if (not remote->IsMap()) {
+            Logger::Log(LogLevel::Error,
+                        "Configuration-provided remote execution arguments has "
+                        "to be a map, but found {}",
+                        remote->ToString());
+            std::exit(kExitConfigError);
+        }
+        if (not clargs->common.remote_execution_address) {
+            auto addr = remote->Get("address", Expression::none_t{});
+            if (addr.IsNotNull()) {
+                if (not addr->IsString()) {
+                    Logger::Log(LogLevel::Error,
+                                "Configuration-provided remote execution "
+                                "address has to be a string, but found {}",
+                                addr->ToString());
+                    std::exit(kExitConfigError);
+                }
+                clargs->common.remote_execution_address = addr->String();
+            }
+        }
+        if (not clargs->common.compatible) {
+            auto compat = remote->Get("compatible", Expression::none_t{});
+            if (compat.IsNotNull()) {
+                if (not compat->IsBool()) {
+                    Logger::Log(LogLevel::Error,
+                                "Configuration-provided remote execution "
+                                "compatibility has to be a flag, but found {}",
+                                compat->ToString());
+                    std::exit(kExitConfigError);
+                }
+                clargs->common.compatible = compat->Bool();
+            }
+        }
+    }
+    // read remote exec args; overwritten if user provided it already
+    auto serve = rc_config["remote serve"];
+    if (serve.IsNotNull()) {
+        if (not serve->IsMap()) {
+            Logger::Log(LogLevel::Error,
+                        "Configuration-provided remote serve service arguments "
+                        "has to be a map, but found {}",
+                        serve->ToString());
+            std::exit(kExitConfigError);
+        }
+        if (not clargs->common.remote_execution_address) {
+            auto addr = serve->Get("address", Expression::none_t{});
+            if (addr.IsNotNull()) {
+                if (not addr->IsString()) {
+                    Logger::Log(LogLevel::Error,
+                                "Configuration-provided remote serve service "
+                                "address has to be a string, but found {}",
+                                addr->ToString());
+                    std::exit(kExitConfigError);
+                }
+                clargs->common.remote_execution_address = addr->String();
+            }
+        }
+    }
+    // read authentication args; overwritten if user provided it already
+    auto auth_args = rc_config["authentication"];
+    if (auth_args.IsNotNull()) {
+        if (not auth_args->IsMap()) {
+            Logger::Log(LogLevel::Error,
+                        "Configuration-provided authentication arguments has "
+                        "to be a map, but found {}",
+                        auth_args->ToString());
+            std::exit(kExitConfigError);
+        }
+        if (not clargs->auth.tls_ca_cert) {
+            auto v =
+                ReadLocation(auth_args->Get("ca cert", Expression::none_t{}),
+                             clargs->common.just_mr_paths->workspace_root);
+            if (v) {
+                clargs->auth.tls_ca_cert = v->first;
+            }
+        }
+        if (not clargs->auth.tls_client_cert) {
+            auto v = ReadLocation(
+                auth_args->Get("client cert", Expression::none_t{}),
+                clargs->common.just_mr_paths->workspace_root);
+            if (v) {
+                clargs->auth.tls_client_cert = v->first;
+            }
+        }
+        if (not clargs->auth.tls_client_key) {
+            auto v =
+                ReadLocation(auth_args->Get("client key", Expression::none_t{}),
+                             clargs->common.just_mr_paths->workspace_root);
+            if (v) {
+                clargs->auth.tls_client_key = v->first;
+            }
+        }
+    }
+    // read path to absent repository specification if not already provided by
+    // the user
+    if (not clargs->common.absent_repository_file) {
+        auto absent_order = rc_config["absent"];
+        if (absent_order.IsNotNull() and absent_order->IsList()) {
+            for (auto const& entry : absent_order->List()) {
+                auto path = ReadLocation(
+                    entry, clargs->common.just_mr_paths->workspace_root);
+                if (path and FileSystemManager::IsFile(path->first)) {
+                    clargs->common.absent_repository_file = path->first;
+                    break;
+                }
             }
         }
     }
@@ -561,7 +685,7 @@ auto main(int argc, char* argv[]) -> int {
                 kDefaultDistdirs);
         }
 
-        // read checkout locations
+        // read checkout locations and alternative mirrors
         if (arguments.common.checkout_locations_file) {
             try {
                 std::ifstream ifs(*arguments.common.checkout_locations_file);
@@ -570,6 +694,12 @@ auto main(int argc, char* argv[]) -> int {
                     checkout_locations_json
                         .value("checkouts", nlohmann::json::object())
                         .value("git", nlohmann::json::object());
+                arguments.common.alternative_mirrors->local_mirrors =
+                    checkout_locations_json.value("local mirrors",
+                                                  nlohmann::json::object());
+                arguments.common.alternative_mirrors->preferred_hostnames =
+                    checkout_locations_json.value("preferred hostnames",
+                                                  nlohmann::json::array());
             } catch (std::exception const& e) {
                 Logger::Log(
                     LogLevel::Error,
@@ -614,6 +744,11 @@ auto main(int argc, char* argv[]) -> int {
             return kExitGenericFailure;
         }
 
+        // set remote execution protocol compatibility
+        if (arguments.common.compatible == true) {
+            Compatibility::SetCompatible();
+        }
+
         /**
          * The current implementation of libgit2 uses pthread_key_t incorrectly
          * on POSIX systems to handle thread-specific data, which requires us to
@@ -625,11 +760,20 @@ auto main(int argc, char* argv[]) -> int {
         // Run subcommands known to just and `do`
         if (arguments.cmd == SubCommand::kJustDo or
             arguments.cmd == SubCommand::kJustSubCmd) {
+            // check setup configuration arguments for validity
+            if (Compatibility::IsCompatible() and
+                arguments.common.fetch_absent) {
+                Logger::Log(LogLevel::Error,
+                            "Fetching absent repositories only available in "
+                            "native mode!");
+                return kExitConfigError;
+            }
             return CallJust(config_file,
                             arguments.common,
                             arguments.setup,
                             arguments.just_cmd,
                             arguments.log,
+                            arguments.auth,
                             forward_build_root);
         }
         auto lock = GarbageCollector::SharedLock();
@@ -638,16 +782,26 @@ auto main(int argc, char* argv[]) -> int {
         }
 
         // The remaining options all need the config file
-        auto config = JustMR::Utils::ReadConfiguration(config_file);
+        auto config = JustMR::Utils::ReadConfiguration(
+            config_file, arguments.common.absent_repository_file);
 
         // Run subcommand `setup` or `setup-env`
         if (arguments.cmd == SubCommand::kSetup or
             arguments.cmd == SubCommand::kSetupEnv) {
+            // check setup configuration arguments for validity
+            if (Compatibility::IsCompatible() and
+                arguments.common.fetch_absent) {
+                Logger::Log(LogLevel::Error,
+                            "Fetching absent repositories only available in "
+                            "native mode!");
+                return kExitConfigError;
+            }
             auto mr_config_path = MultiRepoSetup(
                 config,
                 arguments.common,
                 arguments.setup,
                 arguments.just_cmd,
+                arguments.auth,
                 /*interactive=*/(arguments.cmd == SubCommand::kSetupEnv));
             // dump resulting config to stdout
             if (not mr_config_path) {
@@ -667,8 +821,28 @@ auto main(int argc, char* argv[]) -> int {
 
         // Run subcommand `fetch`
         if (arguments.cmd == SubCommand::kFetch) {
-            return MultiRepoFetch(
-                config, arguments.common, arguments.setup, arguments.fetch);
+            // check fetch configuration arguments for validity
+            if (Compatibility::IsCompatible()) {
+                if (arguments.common.remote_execution_address and
+                    arguments.fetch.backup_to_remote) {
+                    Logger::Log(
+                        LogLevel::Error,
+                        "Remote backup for fetched archives only available "
+                        "in native mode!");
+                    return kExitConfigError;
+                }
+                if (arguments.common.fetch_absent) {
+                    Logger::Log(LogLevel::Error,
+                                "Fetching absent repositories only available "
+                                "in native mode!");
+                    return kExitConfigError;
+                }
+            }
+            return MultiRepoFetch(config,
+                                  arguments.common,
+                                  arguments.setup,
+                                  arguments.fetch,
+                                  arguments.auth);
         }
 
         // Unknown subcommand should fail

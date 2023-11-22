@@ -2,7 +2,7 @@
   { "doc":
     [ "A rule to provide defaults."
     , "All targets take their defaults for PATCH from the target"
-    , "[\"\", \"defaults\"]. This is probably the only sensible"
+    , "[\"patch\", \"defaults\"]. This is probably the only sensible"
     , "use of this rule. As targets form a different root, the defaults"
     , "can be provided without changing this directory."
     ]
@@ -26,9 +26,10 @@
       , "with \":\". Specifying this field extends values from \"base\"."
       ]
     }
-  , "config_vars": ["ARCH", "HOST_ARCH", "TARGET_ARCH"]
+  , "config_vars": ["ARCH", "HOST_ARCH"]
   , "imports":
     { "base-provides": ["CC", "defaults-base-provides"]
+    , "base-provides-++": ["CC", "defaults-base-provides-++"]
     , "base-provides-list": ["CC", "defaults-base-provides-list"]
     , "artifacts_list": ["", "field_artifacts_list"]
     , "nub_left": ["", "nub_left"]
@@ -54,9 +55,7 @@
         , { "type": "++"
           , "$1":
             [ {"type": "var", "name": "PATH"}
-            , { "type": "++"
-              , "$1": {"type": "CALL_EXPRESSION", "name": "base-provides-list"}
-              }
+            , {"type": "CALL_EXPRESSION", "name": "base-provides-++"}
             ]
           }
         ]

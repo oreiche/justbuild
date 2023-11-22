@@ -19,16 +19,18 @@
 
 #include <sys/types.h>
 
-#include "fmt/format.h"
+#include "fmt/core.h"
 #include "grpcpp/grpcpp.h"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/common/remote/port.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/execution_api/execution_service/ac_server.hpp"
 #include "src/buildtool/execution_api/execution_service/bytestream_server.hpp"
 #include "src/buildtool/execution_api/execution_service/capabilities_server.hpp"
 #include "src/buildtool/execution_api/execution_service/cas_server.hpp"
 #include "src/buildtool/execution_api/execution_service/execution_server.hpp"
+#include "src/buildtool/execution_api/execution_service/file_chunker.hpp"
 #include "src/buildtool/execution_api/execution_service/operations_server.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -115,6 +117,7 @@ auto ServerImpl::Run() -> bool {
         }
     }
 
+    FileChunker::Initialize();
     server->Wait();
     return true;
 }

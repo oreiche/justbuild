@@ -25,7 +25,7 @@
 #include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
 #include "src/other_tools/just_mr/setup.hpp"
-#include "src/other_tools/just_mr/utils.hpp"
+#include "src/other_tools/just_mr/setup_utils.hpp"
 #include "src/utils/cpp/file_locking.hpp"
 
 auto CallJust(std::optional<std::filesystem::path> const& config_file,
@@ -33,6 +33,7 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
               MultiRepoSetupArguments const& setup_args,
               MultiRepoJustSubCmdsArguments const& just_cmd_args,
               MultiRepoLogArguments const& log_args,
+              MultiRepoRemoteAuthArguments const& auth_args,
               bool forward_build_root) -> int {
     // check if subcmd_name can be taken from additional args
     auto additional_args_offset = 0U;
@@ -46,6 +47,9 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
     bool use_build_root{false};
     bool use_launcher{false};
     bool supports_defines{false};
+    bool supports_remote{false};
+    bool supports_cacert{false};
+    bool supports_client_auth{false};
     std::optional<std::filesystem::path> mr_config_path{std::nullopt};
 
     std::optional<LockFile> lock{};
@@ -56,13 +60,15 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
             if (not lock) {
                 return kExitGenericFailure;
             }
-            auto config = JustMR::Utils::ReadConfiguration(config_file);
+            auto config = JustMR::Utils::ReadConfiguration(
+                config_file, common_args.absent_repository_file);
 
             use_config = true;
             mr_config_path = MultiRepoSetup(config,
                                             common_args,
                                             setup_args,
                                             just_cmd_args,
+                                            auth_args,
                                             /*interactive=*/false);
             if (not mr_config_path) {
                 Logger::Log(LogLevel::Error,
@@ -74,6 +80,10 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
         use_build_root = kKnownJustSubcommands.at(*subcommand).build_root;
         use_launcher = kKnownJustSubcommands.at(*subcommand).launch;
         supports_defines = kKnownJustSubcommands.at(*subcommand).defines;
+        supports_remote = kKnownJustSubcommands.at(*subcommand).remote;
+        supports_cacert = kKnownJustSubcommands.at(*subcommand).cacert;
+        supports_client_auth =
+            kKnownJustSubcommands.at(*subcommand).client_auth;
     }
     // build just command
     std::vector<std::string> cmd = {common_args.just_path->string()};
@@ -133,6 +143,33 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
         if (not overlay_config.Expr()->Map().empty()) {
             cmd.emplace_back("-D");
             cmd.emplace_back(overlay_config.ToString());
+        }
+    }
+    // forward remote execution arguments
+    if (supports_remote and (common_args.compatible == true)) {
+        cmd.emplace_back("--compatible");
+    }
+    if (supports_remote and common_args.remote_execution_address) {
+        cmd.emplace_back("-r");
+        cmd.emplace_back(*common_args.remote_execution_address);
+    }
+    if (supports_remote and common_args.remote_serve_address) {
+        cmd.emplace_back("--remote-serve-address");
+        cmd.emplace_back(*common_args.remote_serve_address);
+    }
+    // forward mutual TLS arguments
+    if (supports_cacert and auth_args.tls_ca_cert) {
+        cmd.emplace_back("--tls-ca-cert");
+        cmd.emplace_back(auth_args.tls_ca_cert->string());
+    }
+    if (supports_client_auth) {
+        if (auth_args.tls_client_cert) {
+            cmd.emplace_back("--tls-client-cert");
+            cmd.emplace_back(auth_args.tls_client_cert->string());
+        }
+        if (auth_args.tls_client_key) {
+            cmd.emplace_back("--tls-client-key");
+            cmd.emplace_back(auth_args.tls_client_key->string());
         }
     }
     // add args read from just-mrrc

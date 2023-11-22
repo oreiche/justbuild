@@ -30,9 +30,11 @@
 #include "fmt/core.h"
 #include "gsl/gsl"
 #include "src/buildtool/common/cli.hpp"
+#include "src/buildtool/common/remote/remote_common.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/common/tree.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
+#include "src/buildtool/execution_api/common/create_execution_api.hpp"
 #include "src/buildtool/execution_api/local/local_api.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_api.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
@@ -144,7 +146,8 @@ class GraphTraverser {
         }
 
         if (clargs_.stage->remember) {
-            if (not remote_api_->RetrieveToCas(*object_infos, GetLocalApi())) {
+            if (not remote_api_->ParallelRetrieveToCas(
+                    *object_infos, GetLocalApi(), clargs_.jobs, true)) {
                 Logger::Log(LogLevel::Warning, "Failed to copy objects to CAS");
             }
         }
@@ -267,19 +270,6 @@ class GraphTraverser {
         return std::make_tuple(std::move(*blobs_opt),
                                std::move(*trees_opt),
                                std::move(*actions_opt));
-    }
-
-    [[nodiscard]] static auto CreateExecutionApi(
-        std::optional<RemoteExecutionConfig::ServerAddress> const& address)
-        -> gsl::not_null<IExecutionApi::Ptr> {
-        if (address) {
-            ExecutionConfiguration config;
-            config.skip_cache_lookup = false;
-
-            return std::make_unique<BazelApi>(
-                "remote-execution", address->host, address->port, config);
-        }
-        return std::make_unique<LocalApi>();
     }
 
     /// \brief Requires for the executor to upload blobs to CAS. In the case any
@@ -532,15 +522,7 @@ class GraphTraverser {
         std::vector<std::filesystem::path> output_paths{};
         output_paths.reserve(rel_paths.size());
         for (auto const& rel_path : rel_paths) {
-            auto output_path = clargs_.stage->output_dir / rel_path;
-            if (FileSystemManager::IsFile(output_path) and
-                not FileSystemManager::RemoveFile(output_path)) {
-                Logger::Log(LogLevel::Error,
-                            "Could not clean output path {}",
-                            output_path.string());
-                return std::nullopt;
-            }
-            output_paths.emplace_back(std::move(output_path));
+            output_paths.emplace_back(clargs_.stage->output_dir / rel_path);
         }
         return output_paths;
     }

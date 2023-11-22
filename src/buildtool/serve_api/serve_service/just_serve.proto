@@ -1,0 +1,254 @@
+// Copyright 2023 Huawei Cloud Computing Technology Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package justbuild.just_serve;
+
+import "build/bazel/remote/execution/v2/remote_execution.proto";
+
+// A request message for
+// [TargetLevelCache.ServeCommitTree][justbuild.just_serve.TargetLevelCache.ServeCommitTree].
+message ServeCommitTreeRequest {
+  // The Git commit identifier to be searched on the server.
+  string commit = 1;
+
+  // Relative path of requested tree with respect to the commit root.
+  string subdir = 2;
+
+  // If set to true and the tree is found, it will be uploaded to the
+  // remote-execution end point.
+  bool sync_tree = 3;
+}
+
+
+// A response message for
+// [TargetLevelCache.ServeCommitTree][justbuild.just_serve.TargetLevelCache.ServeCommitTree].
+message ServeCommitTreeResponse {
+  // The requested Git tree hash.
+  string tree = 1;
+
+  enum ServeCommitTreeStatus {
+    // All good
+    OK = 0;
+
+    // Failed to upload tree remotely
+    SYNC_ERROR = 1;
+
+    // Tree not found
+    NOT_FOUND = 2;
+
+    // Internally, something is very broken
+    INTERNAL_ERROR = 3;
+  }
+
+  // If the status has a code `OK` or `SYNC_ERROR`, the tree is correct.
+  // For any other value, the `tree` field is not set.
+  ServeCommitTreeStatus status = 2;
+}
+
+// A request message for
+// [TargetLevelCache.ServeArchiveTree][justbuild.just_serve.TargetLevelCache.ServeArchiveTree].
+message ServeArchiveTreeRequest {
+  // The git blob identifier of the archive.
+  string content = 1;
+
+  enum ArchiveType {
+    TAR = 0;
+    ZIP = 1;
+  }
+
+  // The type of archive this blob should be treated as.
+  ArchiveType archive_type = 2;
+
+  // Relative path of requested tree with respect to the commit root.
+  string subdir = 3;
+
+  enum SymlinksResolve {
+    // Process archive as-is
+    NONE = 0;
+
+    // Ignore all symlinks
+    IGNORE = 1;
+
+    // Resolve only
+    PARTIAL = 2;
+
+    // Resolve all symlinks
+    COMPLETE = 3;
+  }
+
+  // How symlinks inside the archive should be handled.
+  SymlinksResolve resolve_symlinks = 4;
+
+  // If set to true and the tree is found, it will be uploaded to the
+  // remote-execution end point.
+  bool sync_tree = 5;
+}
+
+// A response message for
+// [TargetLevelCache.ServeArchiveTree][justbuild.just_serve.TargetLevelCache.ServeArchiveTree].
+message ServeArchiveTreeResponse {
+  // The requested Git tree hash.
+  string tree = 1;
+
+  enum ServeArchiveTreeStatus{
+    // All good
+    OK = 0;
+
+    // Failed to upload tree remotely
+    SYNC_ERROR = 1;
+
+    // Failed to unpack as archive of the specified type
+    UNPACK_ERROR = 2;
+
+    // Failed to resolve symlinks as requested
+    RESOLVE_ERROR = 3;
+
+    // Tree not found
+    NOT_FOUND = 4;
+
+    // Internally, something is very broken
+    INTERNAL_ERROR = 5;
+  }
+
+  // If the status has a code `OK` or `SYNC_ERROR`, the tree is correct.
+  // For any other value, the `tree` field is not set.
+  ServeArchiveTreeStatus status = 2;
+}
+
+// A request message for
+// [TargetLevelCache.ServeContent][justbuild.just_serve.TargetLevelCache.ServeContent].
+message ServeContentRequest {
+  // The git blob identifier of the archive.
+  string content = 1;
+}
+
+// A response message for
+// [TargetLevelCache.ServeContent][justbuild.just_serve.TargetLevelCache.ServeContent].
+message ServeContentResponse {
+  enum ServeContentStatus{
+    // All good
+    OK = 0;
+
+    // Content blob not known
+    NOT_FOUND = 1;
+
+    // Failed to upload archive content to remote CAS
+    SYNC_ERROR = 2;
+
+    // Internally, something is very broken
+    INTERNAL_ERROR = 3;
+  }
+
+  // If the status has a code `OK`, the archive content is in the remote CAS
+  ServeContentStatus status = 1;
+}
+
+// Services for improved interaction with the target-level cache.
+service SourceTree {
+  // Retrieve the Git-subtree identifier from a given Git commit.
+  //
+  // There are no method-specific errors.
+  rpc ServeCommitTree(ServeCommitTreeRequest) returns (ServeCommitTreeResponse) {}
+
+  // Retrieve the Git-subtree identifier for the tree obtained
+  // by unpacking an archive with a given blob identifier.
+  //
+  // There are no method-specific errors.
+  rpc ServeArchiveTree(ServeArchiveTreeRequest) returns (ServeArchiveTreeResponse) {}
+
+  // Make the blob identifier of an archive content available in
+  // remote CAS, if blob is known.
+  //
+  // There are no method-specific errors.
+  rpc ServeContent(ServeContentRequest) returns (ServeContentResponse) {}
+}
+
+message ServeTargetRequest {
+  // Digest of the blob containing the target description
+  //
+  // The client has to guarantee that the blob is present in the remote CAS
+  // before calling ServeTarget
+  build.bazel.remote.execution.v2.Digest target_cache_key_id = 1;
+
+  // Digest of the blob containing the execution backend description
+  //
+  // The client has to guarantee that the blob has been uploaded to the remote
+  // CAS
+  build.bazel.remote.execution.v2.Digest execution_backend_description_id  = 2;
+}
+
+message ServeTargetResponse {
+  // Digest of the blob with the JSON object containing the target-cache value
+  // The implementation must guarantee that all the referenced objects are
+  // present in the remote CAS.
+  build.bazel.remote.execution.v2.Digest target_value = 1;
+}
+
+message ServeTargetVariablesRequest {
+  // Git hash of the target-level root tree.
+  string root_tree = 1;
+
+  // Relative path of the targets file inside the root tree.
+  string target_file = 2;
+
+  // Name of the export target to look up.
+  string target = 3;
+}
+
+message ServeTargetVariablesResponse {
+  // List of flexible configuration variables.
+  repeated string flexible_config = 1;
+}
+
+service Target {
+  // Given a target-level caching key, returns the computed value. In doing so,
+  // it can build on the associated end-point passing the
+  // RemoteExecutionProperties contained in the ServeTargetRequest.
+  //
+  // If the status has a code different from `OK`, the response MUST not be used.
+  //
+  // Errors:
+  // * `FAILED_PRECONDITION`: Failed to find required information in the CAS or
+  //   the target cache key is malformed.
+  // * `UNAVAILABLE`: Could not communicate with the remote execution endpoint.
+  // * `INTERNAL`: Internally, something is very broken.
+  rpc ServeTarget(ServeTargetRequest) returns (ServeTargetResponse) {}
+
+  // Given the target-level root tree and the name of an export target, returns
+  // the list of flexible variables from that target's description.
+  //
+  // If the status has a code different from `OK`, the response MUST not be used.
+  //
+  // Errors:
+  // * `FAILED_PRECONDITION`: An error occurred in retrieving the configuration
+  //   of the requested target, such as missing entries (target-root, target
+  //   file, target name), unparsable target file, or requested target not
+  //   being of "type" : "export".
+  // * `INTERNAL`: Internally, something is very broken.
+  rpc ServeTargetVariables(ServeTargetVariablesRequest) returns (ServeTargetVariablesResponse) {}
+}
+
+message RemoteExecutionEndpointRequest {}
+
+message RemoteExecutionEndpointResponse {
+  string address = 1;
+}
+
+// This service can be used by the client to double check the server configuration
+service Configuration {
+  // Returns the address of the associated remote endpoint
+  rpc RemoteExecutionEndpoint(RemoteExecutionEndpointRequest) returns (RemoteExecutionEndpointResponse) {}
+}

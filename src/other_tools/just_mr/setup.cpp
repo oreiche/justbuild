@@ -17,12 +17,17 @@
 #include <filesystem>
 
 #include "nlohmann/json.hpp"
+#include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/execution_api/local/local_api.hpp"
+#include "src/buildtool/file_system/symlinks_map/resolve_symlinks_map.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
+#include "src/buildtool/storage/fs_utils.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress_reporter.hpp"
+#include "src/other_tools/just_mr/setup_utils.hpp"
 #include "src/other_tools/just_mr/utils.hpp"
 #include "src/other_tools/ops_maps/critical_git_op_map.hpp"
 #include "src/other_tools/repo_map/repos_to_setup_map.hpp"
@@ -31,12 +36,12 @@
 #include "src/other_tools/root_maps/distdir_git_map.hpp"
 #include "src/other_tools/root_maps/fpath_git_map.hpp"
 #include "src/other_tools/root_maps/tree_id_git_map.hpp"
-#include "src/other_tools/symlinks_map/resolve_symlinks_map.hpp"
 
 auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                     MultiRepoCommonArguments const& common_args,
                     MultiRepoSetupArguments const& setup_args,
                     MultiRepoJustSubCmdsArguments const& just_cmd_args,
+                    MultiRepoRemoteAuthArguments const& auth_args,
                     bool interactive) -> std::optional<std::filesystem::path> {
     // provide report
     Logger::Log(LogLevel::Info, "Performing repositories setup");
@@ -84,11 +89,27 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
         JustMR::Utils::ReachableRepositories(repos, *main, setup_repos);
     }
 
+    // setup the APIs for archive fetches
+    auto remote_api = JustMR::Utils::GetRemoteApi(
+        common_args.remote_execution_address, auth_args);
+    IExecutionApi::Ptr local_api{remote_api ? std::make_unique<LocalApi>()
+                                            : nullptr};
+
+    // setup the API for serving trees of Git repos or archives
+    auto serve_api_exists = JustMR::Utils::SetupServeApi(
+        common_args.remote_serve_address, auth_args);
+
     // setup the required async maps
     auto crit_git_op_ptr = std::make_shared<CriticalGitOpGuard>();
     auto critical_git_op_map = CreateCriticalGitOpMap(crit_git_op_ptr);
-    auto content_cas_map = CreateContentCASMap(
-        common_args.just_mr_paths, common_args.ca_info, common_args.jobs);
+    auto content_cas_map =
+        CreateContentCASMap(common_args.just_mr_paths,
+                            common_args.alternative_mirrors,
+                            common_args.ca_info,
+                            serve_api_exists,
+                            local_api ? &(*local_api) : nullptr,
+                            remote_api ? &(*remote_api) : nullptr,
+                            common_args.jobs);
     auto import_to_git_map =
         CreateImportToGitMap(&critical_git_op_map,
                              common_args.git_path->string(),
@@ -96,16 +117,31 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                              common_args.jobs);
     auto resolve_symlinks_map = CreateResolveSymlinksMap();
 
-    auto commit_git_map = CreateCommitGitMap(&critical_git_op_map,
-                                             common_args.just_mr_paths,
-                                             common_args.git_path->string(),
-                                             *common_args.local_launcher,
-                                             common_args.jobs);
-    auto content_git_map = CreateContentGitMap(&content_cas_map,
-                                               &import_to_git_map,
-                                               &resolve_symlinks_map,
-                                               &critical_git_op_map,
-                                               common_args.jobs);
+    auto commit_git_map =
+        CreateCommitGitMap(&critical_git_op_map,
+                           &import_to_git_map,
+                           common_args.just_mr_paths,
+                           common_args.alternative_mirrors,
+                           common_args.git_path->string(),
+                           *common_args.local_launcher,
+                           serve_api_exists,
+                           local_api ? &(*local_api) : nullptr,
+                           remote_api ? &(*remote_api) : nullptr,
+                           common_args.fetch_absent,
+                           common_args.jobs);
+    auto content_git_map =
+        CreateContentGitMap(&content_cas_map,
+                            &import_to_git_map,
+                            common_args.just_mr_paths,
+                            common_args.alternative_mirrors,
+                            common_args.ca_info,
+                            &resolve_symlinks_map,
+                            &critical_git_op_map,
+                            serve_api_exists,
+                            local_api ? &(*local_api) : nullptr,
+                            remote_api ? &(*remote_api) : nullptr,
+                            common_args.fetch_absent,
+                            common_args.jobs);
     auto fpath_git_map = CreateFilePathGitMap(just_cmd_args.subcmd_name,
                                               &critical_git_op_map,
                                               &import_to_git_map,
@@ -127,6 +163,7 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                                                     &fpath_git_map,
                                                     &distdir_git_map,
                                                     &tree_id_git_map,
+                                                    common_args.fetch_absent,
                                                     common_args.jobs);
 
     // set up progress observer
@@ -202,5 +239,5 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
         return std::nullopt;
     }
     // if successful, return the output config
-    return JustMR::Utils::AddToCAS(mr_config.dump(2));
+    return StorageUtils::AddToCAS(mr_config.dump(2));
 }

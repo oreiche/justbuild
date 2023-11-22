@@ -189,7 +189,8 @@ auto CurlURLHandle::CreatePermissive(std::string const& url,
                                      bool use_non_support_scheme,
                                      bool use_no_authority,
                                      bool use_path_as_is,
-                                     bool use_allow_space) noexcept
+                                     bool use_allow_space,
+                                     bool ignore_fatal) noexcept
     -> std::optional<CurlURLHandlePtr> {
     try {
         auto url_h = std::make_shared<CurlURLHandle>();
@@ -231,7 +232,7 @@ auto CurlURLHandle::CreatePermissive(std::string const& url,
         url_h->handle_.reset(handle);
         return std::make_optional<CurlURLHandlePtr>(url_h);
     } catch (std::exception const& ex) {
-        Logger::Log(LogLevel::Error,
+        Logger::Log(ignore_fatal ? LogLevel::Debug : LogLevel::Error,
                     "CurlURLHandle: creating permissive curl URL handle failed "
                     "unexpectedly with:\n{}",
                     ex.what());
@@ -255,7 +256,8 @@ auto CurlURLHandle::Duplicate() noexcept -> CurlURLHandlePtr {
 
 auto CurlURLHandle::GetURL(bool use_default_port,
                            bool use_default_scheme,
-                           bool use_no_default_port) noexcept
+                           bool use_no_default_port,
+                           bool ignore_fatal) noexcept
     -> std::optional<std::string> {
     try {
         // set up flags
@@ -274,7 +276,7 @@ auto CurlURLHandle::GetURL(bool use_default_port,
         char* url = nullptr;
         auto rc = curl_url_get(handle_.get(), CURLUPART_URL, &url, flags);
         if (rc != CURLUE_OK) {
-            Logger::Log(LogLevel::Error,
+            Logger::Log(ignore_fatal ? LogLevel::Debug : LogLevel::Error,
                         "CurlURLHandle: retrieving URL failed with:\n{}",
                         curl_url_strerror(rc));
             return std::nullopt;
@@ -285,7 +287,7 @@ auto CurlURLHandle::GetURL(bool use_default_port,
         return url_str;
     } catch (std::exception const& ex) {
         Logger::Log(
-            LogLevel::Error,
+            ignore_fatal ? LogLevel::Debug : LogLevel::Error,
             "CurlURLHandle: retrieving URL failed unexpectedly with:\n{}",
             ex.what());
         return std::nullopt;
@@ -785,4 +787,50 @@ auto CurlURLHandle::NoproxyStringMatches(std::string const& no_proxy) noexcept
                     ex.what());
         return std::nullopt;
     }
+}
+
+auto CurlURLHandle::ReplaceHostname(std::string const& url,
+                                    std::string const& hostname) noexcept
+    -> std::optional<std::string> {
+    try {
+        // We should not guess the scheme based on current hostname, as it may
+        // cause the URL with the new hostname to falsely fail; we set
+        // use_default_scheme instead. Additionally, we set use_no_authority to
+        // false as the given URL MUST already have a hostname to be replaced.
+        if (auto parsed_url = CreatePermissive(url,
+                                               false /*use_guess_scheme*/,
+                                               true /*use_default_scheme*/,
+                                               true /*use_non_support_scheme*/,
+                                               false /*use_no_authority*/,
+                                               true /*use_path_as_is*/,
+                                               true /*use_allow_space*/,
+                                               true /*ignore_fatal*/)) {
+            if (*parsed_url == nullptr) {
+                return std::nullopt;
+            }
+            auto rc = curl_url_set(parsed_url.value()->handle_.get(),
+                                   CURLUPART_HOST,
+                                   hostname.c_str(),
+                                   0U);
+            if (rc != CURLUE_OK) {
+                Logger::Log(LogLevel::Debug,
+                            "CurlURLHandle: setting hostname {} in URL {} "
+                            "failed with:\n{}",
+                            hostname,
+                            url,
+                            curl_url_strerror(rc));
+                return std::nullopt;
+            }
+            return parsed_url.value()->GetURL(false /*use_default_port*/,
+                                              true /*use_default_scheme*/,
+                                              false /*use_no_default_port*/,
+                                              true /*ignore_fatal*/);
+        }
+    } catch (std::exception const& ex) {
+        Logger::Log(LogLevel::Debug,
+                    "CurlURLHandle: Replacing URL hostname failed unexpectedly "
+                    "with:\n{}",
+                    ex.what());
+    }
+    return std::nullopt;
 }

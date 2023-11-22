@@ -17,6 +17,7 @@
     , ["src/buildtool/storage", "storage"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , "operation_cache"
+    , ["src/utils/cpp", "verify_hash"]
     ]
   , "private-ldflags": ["-pthread"]
   }
@@ -35,6 +36,7 @@
   , "private-deps":
     [ ["src/buildtool/storage", "storage"]
     , ["src/buildtool/execution_api/local", "local"]
+    , ["src/utils/cpp", "verify_hash"]
     ]
   }
 , "cas_server":
@@ -48,17 +50,19 @@
     [ ["src/buildtool/logging", "logging"]
     , ["src/buildtool/common", "bazel_types"]
     , ["src/buildtool/storage", "storage"]
+    , ["@", "gsl", "", "gsl"]
     ]
   , "private-deps":
     [ ["src/buildtool/compatibility", "compatibility"]
     , ["@", "fmt", "", "fmt"]
     , ["src/buildtool/storage", "storage"]
-    , ["src/buildtool/execution_api/local", "local"]
+    , ["src/utils/cpp", "verify_hash"]
+    , "file_chunker"
     ]
   }
 , "server_implementation":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["sever_implemenation"]
+  , "name": ["server_implementation"]
   , "hdrs": ["server_implementation.hpp"]
   , "srcs": ["server_implementation.cpp"]
   , "stage": ["src", "buildtool", "execution_api", "execution_service"]
@@ -69,12 +73,16 @@
     , "bytestream_server"
     , "capabilities_server"
     , "operations_server"
+    , "file_chunker"
     , ["src/buildtool/execution_api/remote", "config"]
     , ["src/buildtool/auth", "auth"]
     , ["@", "json", "", "json"]
     , ["src/buildtool/execution_api/local", "local"]
     , ["@", "grpc", "", "grpc++"]
     , ["src/buildtool/execution_api/remote", "config"]
+    , ["@", "fmt", "", "fmt"]
+    , ["src/buildtool/compatibility", "compatibility"]
+    , ["src/buildtool/common/remote", "port"]
     ]
   }
 , "bytestream_server":
@@ -95,6 +103,7 @@
     , ["@", "fmt", "", "fmt"]
     , ["src/buildtool/storage", "storage"]
     , ["src/buildtool/execution_api/local", "local"]
+    , ["src/utils/cpp", "verify_hash"]
     ]
   }
 , "capabilities_server":
@@ -127,6 +136,14 @@
   , "deps": [["src/buildtool/logging", "logging"]]
   , "proto": [["@", "googleapis", "", "google_longrunning_operations_proto"]]
   , "stage": ["src", "buildtool", "execution_api", "execution_service"]
-  , "private-deps": ["operation_cache"]
+  , "private-deps": ["operation_cache", ["src/utils/cpp", "verify_hash"]]
+  }
+, "file_chunker":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["file_chunker"]
+  , "hdrs": ["file_chunker.hpp"]
+  , "srcs": ["file_chunker.cpp"]
+  , "stage": ["src", "buildtool", "execution_api", "execution_service"]
+  , "private-deps": [["@", "gsl", "", "gsl"]]
   }
 }

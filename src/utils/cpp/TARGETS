@@ -16,7 +16,12 @@
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["json"]
   , "hdrs": ["json.hpp"]
-  , "deps": ["gsl", ["@", "json", "", "json"], ["@", "gsl", "", "gsl"]]
+  , "deps":
+    [ "gsl"
+    , ["@", "json", "", "json"]
+    , ["@", "gsl", "", "gsl"]
+    , ["@", "fmt", "", "fmt"]
+    ]
   , "stage": ["src", "utils", "cpp"]
   }
 , "concepts":
@@ -81,6 +86,13 @@
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["path_hash"]
   , "hdrs": ["path_hash.hpp"]
+  , "stage": ["src", "utils", "cpp"]
+  }
+, "verify_hash":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["verify_hash"]
+  , "hdrs": ["verify_hash.hpp"]
+  , "deps": [["@", "fmt", "", "fmt"]]
   , "stage": ["src", "utils", "cpp"]
   }
 }

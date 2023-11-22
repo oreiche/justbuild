@@ -1,3 +1,56 @@
+## Release `1.3.0` (UNRELEASED)
+
+A feature release on top of `1.2.0`, backwards compatible.
+
+### Major new features
+
+- New subcommand `just serve` to start server answering queries
+  about the tree of a given commit, if known. The functionality
+  of this subcommand will be extended over time to eventually
+  provide a target-level caching service as described in the
+  corresponding design document.
+- `just-mr` is able to back up and retrieve distribution files
+  from a remote execution endpoint. This simplifies usage in an
+  environment with restricted internet access.
+
+### Other changes
+
+- New script `just-deduplicate-repos` to avoid blow up of the
+  `repos.json` in the case of chained imports with common dependencies.
+- The built-in `"generic"` rule now supports an argument `"sh -c"`,
+  allowing to specify the invocation of the shell (defaulting to
+  `["sh", "-c"]`).
+- `just describe` also shows the values of the implicit dependencies.
+- When `just-mr` executes the action to generate the desired tree of a
+  `"git tree"` repository, it can be specified that certain variables
+  of the environment can be inherited.
+
+### Fixes
+
+- The cache key used for an export target is now based on the
+  export target itself rather than that of the exported target. The
+  latter could lead to spurious cache hits, but only in the case
+  where the exported target was an explicit file reference, and a
+  regular target with the same name existed as well. Where the new
+  cache keys would overlap with the old ones, they would refer to
+  the same configured targets. However, we used the fact that we
+  changed the target cache key to also clean up the serialization
+  format to only contain the JSON object describing repository,
+  target, and effective configuration, instead of a singleton list
+  containing this object. Therefore, old and new cache keys do not
+  overlap at all. In particular, no special care has to be taken
+  on upgrading or downgrading. However, old target-level cache
+  entries will not be used leading potentially to rebuilding of
+  some targets.
+- Improved portability and update of the bundled dependencies.
+- Various minor improvements and typo fixes in the documentation.
+- Fixed a race condition in an internal cache of `just execute`
+  used for keeping track of running operations.
+- The built-in rule `"install"` now properly enforces that the
+  resulting stage is well-formed, i.e., without tree conflicts.
+- Local execution and `just execute` now correctly create empty
+  directories if they are part of the action's input.
+
 ## Release `1.2.0` (2023-08-25)
 
 A feature release on top of `1.1.0`, backwards compatible.

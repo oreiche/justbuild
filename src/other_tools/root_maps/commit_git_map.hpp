@@ -17,10 +17,15 @@
 
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "nlohmann/json.hpp"
-#include "src/other_tools/just_mr/utils.hpp"
+#include "src/buildtool/common/user_structs.hpp"
+#include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
+#include "src/other_tools/just_mr/mirrors.hpp"
 #include "src/other_tools/ops_maps/critical_git_op_map.hpp"
+#include "src/other_tools/ops_maps/import_to_git_map.hpp"
 #include "src/utils/cpp/hash_combine.hpp"
 
 struct GitRepoInfo {
@@ -29,14 +34,18 @@ struct GitRepoInfo {
     std::string repo_url{};
     std::string branch{};
     std::string subdir{}; /* key */
+    std::vector<std::string> mirrors{};
     // name of repository for which work is done; used in progress reporting
     std::string origin{};
     // create root that ignores symlinks
     bool ignore_special{}; /* key */
+    // create an absent root
+    bool absent{}; /* key */
 
     [[nodiscard]] auto operator==(const GitRepoInfo& other) const -> bool {
         return hash == other.hash and subdir == other.subdir and
-               ignore_special == other.ignore_special;
+               ignore_special == other.ignore_special and
+               absent == other.absent;
     }
 };
 
@@ -49,6 +58,7 @@ struct hash<GitRepoInfo> {
         hash_combine<std::string>(&seed, ct.hash);
         hash_combine<std::string>(&seed, ct.subdir);
         hash_combine<bool>(&seed, ct.ignore_special);
+        hash_combine<bool>(&seed, ct.absent);
         return seed;
     }
 };
@@ -61,9 +71,15 @@ using CommitGitMap =
 
 [[nodiscard]] auto CreateCommitGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
-    JustMR::PathsPtr const& just_mr_paths,
+    gsl::not_null<ImportToGitMap*> const& import_to_git_map,
+    LocalPathsPtr const& just_mr_paths,
+    MirrorsPtr const& additional_mirrors,
     std::string const& git_bin,
     std::vector<std::string> const& launcher,
+    bool serve_api_exists,
+    IExecutionApi* local_api,
+    IExecutionApi* remote_api,
+    bool fetch_absent,
     std::size_t jobs) -> CommitGitMap;
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_ROOT_MAPS_COMMIT_GIT_MAP_HPP

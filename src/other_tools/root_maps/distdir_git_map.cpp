@@ -20,6 +20,7 @@
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/fs_utils.hpp"
 #include "src/buildtool/storage/storage.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
@@ -65,7 +66,7 @@ auto CreateDistdirGitMap(
                                                 auto /* unused */,
                                                 auto const& key) {
         auto distdir_tree_id_file =
-            JustMR::Utils::GetDistdirTreeIDFile(key.content_id);
+            StorageUtils::GetDistdirTreeIDFile(key.content_id);
         if (FileSystemManager::Exists(distdir_tree_id_file)) {
             // read distdir_tree_id from file tree_id_file
             auto distdir_tree_id =
@@ -90,8 +91,10 @@ auto CreateDistdirGitMap(
             critical_git_op_map->ConsumeAfterKeysReady(
                 ts,
                 {std::move(op_key)},
-                [distdir_tree_id = *distdir_tree_id, setter, logger](
-                    auto const& values) {
+                [distdir_tree_id = *distdir_tree_id,
+                 absent = key.absent,
+                 setter,
+                 logger](auto const& values) {
                     GitOpValue op_result = *values[0];
                     // check flag
                     if (not op_result.result) {
@@ -101,12 +104,12 @@ auto CreateDistdirGitMap(
                     }
                     // subdir is ".", so no need to deal with the Git cache
                     // set the workspace root
-                    (*setter)(
-                        std::pair(nlohmann::json::array(
-                                      {FileRoot::kGitTreeMarker,
-                                       distdir_tree_id,
-                                       StorageConfig::GitRoot().string()}),
-                                  true));
+                    auto root = nlohmann::json::array(
+                        {FileRoot::kGitTreeMarker, distdir_tree_id});
+                    if (not absent) {
+                        root.emplace_back(StorageConfig::GitRoot().string());
+                    }
+                    (*setter)(std::pair(std::move(root), true));
                 },
                 [logger, target_path = StorageConfig::GitRoot()](
                     auto const& msg, bool fatal) {
@@ -126,13 +129,14 @@ auto CreateDistdirGitMap(
                 [distdir_tree_id_file,
                  content_id = key.content_id,
                  content_list = key.content_list,
+                 absent = key.absent,
                  import_to_git_map,
                  ts,
                  setter,
                  logger]([[maybe_unused]] auto const& values) mutable {
                     // repos are in CAS
                     // create the links to CAS
-                    auto tmp_dir = JustMR::Utils::CreateTypedTmpDir("distdir");
+                    auto tmp_dir = StorageUtils::CreateTypedTmpDir("distdir");
                     if (not tmp_dir) {
                         (*logger)(fmt::format("Failed to create tmp path for "
                                               "distdir target {}",
@@ -156,6 +160,7 @@ auto CreateDistdirGitMap(
                         {std::move(c_info)},
                         [tmp_dir,  // keep tmp_dir alive
                          distdir_tree_id_file,
+                         absent,
                          setter,
                          logger](auto const& values) {
                             // check for errors
@@ -167,7 +172,7 @@ auto CreateDistdirGitMap(
                             // only the tree is of interest
                             std::string distdir_tree_id = values[0]->first;
                             // write to tree id file
-                            if (not JustMR::Utils::WriteTreeIDFile(
+                            if (not StorageUtils::WriteTreeIDFile(
                                     distdir_tree_id_file, distdir_tree_id)) {
                                 (*logger)(
                                     fmt::format(
@@ -177,12 +182,13 @@ auto CreateDistdirGitMap(
                                 return;
                             }
                             // set the workspace root
-                            (*setter)(std::pair(
-                                nlohmann::json::array(
-                                    {FileRoot::kGitTreeMarker,
-                                     distdir_tree_id,
-                                     StorageConfig::GitRoot().string()}),
-                                false));
+                            auto root = nlohmann::json::array(
+                                {FileRoot::kGitTreeMarker, distdir_tree_id});
+                            if (not absent) {
+                                root.emplace_back(
+                                    StorageConfig::GitRoot().string());
+                            }
+                            (*setter)(std::pair(std::move(root), false));
                         },
                         [logger, target_path = tmp_dir->GetPath()](
                             auto const& msg, bool fatal) {

@@ -59,6 +59,10 @@ The following fields are supported:
    This entry is optional. If missing, the basename of the fetch URL is
    used.
 
+ - *`"mirrors"`* is an optional list of alternative locations to try to
+   fetch from if contacting the main fetch location fails. This entry is
+   optional.
+
  - *`"sha256"`*,
 
  - *`"sha512"`* provide optional checksum hashes in order to verify the
@@ -86,14 +90,35 @@ The following fields are supported:
  - *`"branch"`* provides the branch name, with the promise that it
    contains the aforementioned commit. This entry is mandatory.
 
+ - *`"mirrors"`* is an optional list of alternative locations to try to
+   fetch from if contacting the main repository fails. This entry is
+   optional.
+
  - *`"subdir"`* specifies the subdirectory containing the distribution
    files. This entry is optional. If missing, the root directory of the
    Git repository is used.
 
 ### *`"git tree"`*
 
-It defines as workspace root a known Git tree obtainable by a generic
-command.
+It defines as workspace root as a fixed `git` tree, given by the
+corresponding tree identifier. If that tree is not known already to
+`just-mr`, a specified command will be executed in a fresh directory
+that is expected to produce the given tree somewhere below the
+working directory.
+
+This type of root is the way builds against sources versioned in
+arbitrary version-control systems can be carried out. The command
+then would be a call to the version control system requesting an
+export at a particular version.
+
+As the root is already fully determined by the specified `git` tree
+identifier, the corresponding action need not be fully isolated.
+In fact, to check out a repository it might be necessary to provide
+credentials (which do not matter for the checked-out tree, but
+differ from user to user). To support this, the description of the
+root can specify environment variables to inherit from the ambient
+environment. E.g., `SSH_AUTH_SOCK` can be specified here to support
+`ssh`-based authentication.
 
 The following fields are supported:
 
@@ -107,6 +132,9 @@ The following fields are supported:
 
  - *`"env"`* provides a map of envariables to be set for executing the
    command.
+
+ - *`"inherit env"`* provides a list of variables to be inherited from the
+   environment `just-mr` is called within, if set there.
 
 ### *`"distdir"`*
 
@@ -142,6 +170,10 @@ resolve all confined relative symbolic links, while a value of
 *`"resolve-partially"`* indicates that the workspace root should resolve only
 the confined relative upwards symbolic links; for a *`"file"`* workspace root
 these two values imply *`"to_git"`* is *`true`*.
+
+For all workspace roots the pragma key *`"absent"`* is supported. If its value
+is *`true`* then it indicates that an absent root should be generated, i.e., one
+given only by its Git tree without any explicit witnessing repository.
 
 Repository description
 ----------------------

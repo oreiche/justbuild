@@ -15,10 +15,12 @@
     , ["@", "json", "", "json"]
     , ["src/buildtool/storage", "storage"]
     , ["src/buildtool/file_system", "git_context"]
+    , ["src/buildtool/compatibility", "compatibility"]
     , "fetch"
     , "update"
     , "setup"
     , "launch"
+    , "setup_utils"
     ]
   , "stage": ["src", "other_tools", "just_mr"]
   , "private-ldflags":
@@ -39,18 +41,12 @@
   , "hdrs": ["utils.hpp"]
   , "srcs": ["utils.cpp"]
   , "deps":
-    [ ["src/utils/cpp", "tmp_dir"]
+    [ ["@", "gsl", "", "gsl"]
+    , ["@", "json", "", "json"]
     , ["src/buildtool/storage", "config"]
-    , ["src/buildtool/main", "constants"]
     , ["src/buildtool/build_engine/expression", "expression"]
     ]
   , "stage": ["src", "other_tools", "just_mr"]
-  , "private-deps":
-    [ ["src/utils/cpp", "path"]
-    , ["src/buildtool/execution_api/local", "local"]
-    , ["src/buildtool/file_system", "file_storage"]
-    , "exit_codes"
-    ]
   }
 , "exit_codes":
   { "type": ["@", "rules", "CC", "library"]
@@ -68,12 +64,37 @@
     , ["@", "gsl", "", "gsl"]
     , ["@", "json", "", "json"]
     , ["src/buildtool/common", "clidefaults"]
+    , ["src/buildtool/common", "user_structs"]
     , ["src/buildtool/execution_api/local", "config"]
-    , ["src/other_tools/just_mr", "utils"]
     , ["src/buildtool/logging", "log_level"]
+    , "mirrors"
+    , "utils"
     ]
   , "stage": ["src", "other_tools", "just_mr"]
-  , "private-deps": [["src/buildtool/logging", "logging"]]
+  }
+, "setup_utils":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["setup_utils"]
+  , "hdrs": ["setup_utils.hpp"]
+  , "srcs": ["setup_utils.cpp"]
+  , "deps":
+    [ ["src/buildtool/build_engine/expression", "expression_ptr_interface"]
+    , ["src/buildtool/build_engine/expression", "expression"]
+    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/serve_api/remote", "serve_api"]
+    , "cli"
+    ]
+  , "stage": ["src", "other_tools", "just_mr"]
+  , "private-deps":
+    [ ["@", "json", "", "json"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/logging", "logging"]
+    , "exit_codes"
+    , ["src/buildtool/auth", "auth"]
+    , ["src/buildtool/execution_api/bazel_msg", "bazel_msg"]
+    , ["src/buildtool/execution_api/remote", "bazel"]
+    , ["src/buildtool/serve_api/remote", "config"]
+    ]
   }
 , "fetch":
   { "type": ["@", "rules", "CC", "library"]
@@ -89,9 +110,11 @@
     , "exit_codes"
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
     , ["src/other_tools/just_mr/progress_reporting", "progress_reporter"]
-    , "utils"
     , ["src/other_tools/ops_maps", "content_cas_map"]
     , ["src/other_tools/ops_maps", "repo_fetch_map"]
+    , "setup_utils"
+    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/execution_api/local", "local"]
     ]
   }
 , "update":
@@ -105,6 +128,7 @@
     [ ["@", "json", "", "json"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/multithreading", "task_system"]
+    , ["src/buildtool/storage", "fs_utils"]
     , ["src/other_tools/git_operations", "git_repo_remote"]
     , "exit_codes"
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
@@ -124,6 +148,7 @@
     [ ["@", "json", "", "json"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/multithreading", "task_system"]
+    , ["src/buildtool/storage", "fs_utils"]
     , "exit_codes"
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
     , ["src/other_tools/just_mr/progress_reporting", "progress_reporter"]
@@ -135,7 +160,10 @@
     , ["src/other_tools/root_maps", "distdir_git_map"]
     , ["src/other_tools/root_maps", "fpath_git_map"]
     , ["src/other_tools/root_maps", "tree_id_git_map"]
-    , ["src/other_tools/symlinks_map", "resolve_symlinks_map"]
+    , ["src/buildtool/file_system/symlinks_map", "resolve_symlinks_map"]
+    , "setup_utils"
+    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/execution_api/local", "local"]
     ]
   }
 , "launch":
@@ -155,6 +183,14 @@
     , "setup"
     , "utils"
     , ["src/utils/cpp", "file_locking"]
+    , "setup_utils"
     ]
+  }
+, "mirrors":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["mirrors"]
+  , "hdrs": ["mirrors.hpp"]
+  , "deps": [["@", "json", "", "json"], ["src/buildtool/logging", "logging"]]
+  , "stage": ["src", "other_tools", "just_mr"]
   }
 }

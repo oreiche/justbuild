@@ -25,7 +25,7 @@
   , "private-deps":
     [ ["@", "src", "src/buildtool/file_system", "file_system_manager"]
     , ["@", "src", "src/buildtool/logging", "logging"]
-    , ["@", "src", "src/other_tools/utils", "archive_ops"]
+    , ["@", "src", "src/utils/archive", "archive_ops"]
     , ["@", "src", "src/utils/cpp", "tmp_dir"]
     ]
   , "private-ldflags": ["-pthread"]
@@ -35,6 +35,16 @@
   { "type": ["@", "rules", "shell/test", "script"]
   , "name": ["just_mr_mp"]
   , "test": ["just-mr.test.sh"]
+  , "deps":
+    [ "create_test_archives"
+    , ["utils", "test_utils_install"]
+    , ["end-to-end", "mr-tool-under-test"]
+    ]
+  }
+, "just_mr_mirrors":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["just_mr_mirrors"]
+  , "test": ["just-mr-mirrors.test.sh"]
   , "deps":
     [ "create_test_archives"
     , ["utils", "test_utils_install"]
@@ -67,10 +77,97 @@
   , "deps":
     [["end-to-end", "mr-tool-under-test"], ["end-to-end", "tool-under-test"]]
   }
+, "fetch-remote":
+  { "type": ["end-to-end", "with remote"]
+  , "name": ["fetch-remote"]
+  , "test": ["fetch-remote.sh"]
+  , "deps": [["end-to-end", "mr-tool-under-test"]]
+  }
+, "absent-roots":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["absent-roots"]
+  , "test": ["absent-roots.sh"]
+  , "deps":
+    [["end-to-end", "mr-tool-under-test"], ["end-to-end", "tool-under-test"]]
+  }
+, "fetch-absent":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["fetch-absent"]
+  , "test": ["fetch-absent.sh"]
+  , "deps":
+    [["end-to-end", "mr-tool-under-test"], ["end-to-end", "tool-under-test"]]
+  , "repos": ["fetch-absent (data)"]
+  }
+, "absent-config":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["absent-config"]
+  , "test": ["absent-config.sh"]
+  , "deps":
+    [["end-to-end", "mr-tool-under-test"], ["end-to-end", "tool-under-test"]]
+  , "repos": ["fetch-absent (data)"]
+  }
+, "fetch-absent-archives":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["fetch-absent-archives"]
+  , "test": ["fetch-absent-archives.sh"]
+  , "deps":
+    [ ["end-to-end", "mr-tool-under-test"]
+    , ["end-to-end", "tool-under-test"]
+    , "fetch-absent (data)"
+    ]
+  , "repos": ["fetch-absent (data)"]
+  }
+, "fetch-absent-archives-symlinks":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["fetch-absent-archives-symlinks"]
+  , "test": ["fetch-absent-archives-symlinks.sh"]
+  , "deps":
+    [ ["end-to-end", "mr-tool-under-test"]
+    , ["end-to-end", "tool-under-test"]
+    , "fetch-absent-with-symlinks (data)"
+    ]
+  , "repos": ["fetch-absent-with-symlinks (data)"]
+  }
+, "fetch-absent-distdir-archive":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["fetch-absent-distdir-archive"]
+  , "test": ["fetch-absent-distdir-archive.sh"]
+  , "deps":
+    [ ["end-to-end", "mr-tool-under-test"]
+    , ["end-to-end", "tool-under-test"]
+    , "fetch-absent (data)"
+    ]
+  , "repos": ["fetch-absent (data)"]
+  }
+, "fetch-absent (data)":
+  { "type": "generic"
+  , "out_dirs": ["src"]
+  , "cmds":
+    [ "for i in `seq 1 10` ; do echo $i > src/$i.txt ; done"
+    , "tar cf src/data.tar src/*.txt"
+    ]
+  }
+, "fetch-absent-with-symlinks (data)":
+  { "type": "generic"
+  , "out_dirs": ["src"]
+  , "cmds":
+    [ "mkdir -p src/foo"
+    , "echo x > src/foo/data.txt"
+    , "ln -s foo/data.txt src/link"
+    , "tar cf src/data.tar src/*"
+    ]
+  }
+, "git-tree-env":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["git-tree-git-tree-env"]
+  , "test": ["git-tree-env.sh"]
+  , "deps":
+    [["end-to-end", "mr-tool-under-test"], ["end-to-end", "tool-under-test"]]
+  }
 , "TESTS":
   { "type": "install"
   , "tainted": ["test"]
-  , "arguments_config": ["TEST_BOOTSTRAP_JUST_MR"]
+  , "arguments_config": ["TEST_BOOTSTRAP_JUST_MR", "TEST_COMPATIBLE_REMOTE"]
   , "deps":
     { "type": "++"
     , "$1":
@@ -79,11 +176,30 @@
         , "cond": {"type": "var", "name": "TEST_BOOTSTRAP_JUST_MR"}
         , "then": []
         , "else":
-          [ "install-roots-symlinks"
-          , "just_mr_mp"
-          , "git-tree-verbosity"
-          , "defaults"
-          ]
+          { "type": "++"
+          , "$1":
+            [ [ "install-roots-symlinks"
+              , "just_mr_mp"
+              , "just_mr_mirrors"
+              , "git-tree-verbosity"
+              , "git-tree-env"
+              , "defaults"
+              , "absent-roots"
+              ]
+            , { "type": "if"
+              , "cond": {"type": "var", "name": "TEST_COMPATIBLE_REMOTE"}
+              , "then": []
+              , "else":
+                [ "fetch-remote"
+                , "fetch-absent"
+                , "absent-config"
+                , "fetch-absent-archives"
+                , "fetch-absent-archives-symlinks"
+                , "fetch-absent-distdir-archive"
+                ]
+              }
+            ]
+          }
         }
       ]
     }

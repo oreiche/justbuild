@@ -1,14 +1,4 @@
-{ "archive_ops":
-  { "type": ["@", "rules", "CC", "library"]
-  , "name": ["archive_ops"]
-  , "hdrs": ["archive_ops.hpp"]
-  , "srcs": ["archive_ops.cpp"]
-  , "deps": [["@", "gsl", "", "gsl"]]
-  , "stage": ["src", "other_tools", "utils"]
-  , "private-deps":
-    [["src/buildtool/file_system", "file_system_manager"], ["", "libarchive"]]
-  }
-, "curl_context":
+{ "curl_context":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["curl_context"]
   , "hdrs": ["curl_context.hpp"]
@@ -21,11 +11,15 @@
   , "name": ["curl_easy_handle"]
   , "hdrs": ["curl_easy_handle.hpp"]
   , "srcs": ["curl_easy_handle.cpp"]
-  , "deps": ["curl_context", ["@", "gsl", "", "gsl"]]
+  , "deps":
+    [ "curl_context"
+    , ["src/buildtool/logging", "log_level"]
+    , ["@", "gsl", "", "gsl"]
+    ]
   , "stage": ["src", "other_tools", "utils"]
   , "private-deps":
-    [ ["src/buildtool/logging", "logging"]
-    , ["src/buildtool/file_system", "file_system_manager"]
+    [ ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/logging", "logging"]
     , ["", "libcurl"]
     ]
   }
@@ -37,5 +31,19 @@
   , "deps": ["curl_context", ["@", "gsl", "", "gsl"]]
   , "stage": ["src", "other_tools", "utils"]
   , "private-deps": [["src/buildtool/logging", "logging"], ["", "libcurl"]]
+  }
+, "content":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["content"]
+  , "hdrs": ["content.hpp"]
+  , "deps":
+    [ "curl_easy_handle"
+    , "curl_url_handle"
+    , ["src/buildtool/common", "user_structs"]
+    , ["src/buildtool/crypto", "hasher"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/other_tools/just_mr", "mirrors"]
+    ]
+  , "stage": ["src", "other_tools", "utils"]
   }
 }

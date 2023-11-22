@@ -11,10 +11,10 @@ SYNOPSIS
 
 **`just-mr`** \[*`OPTION`*\]... **`mrversion`**  
 **`just-mr`** \[*`OPTION`*\]... {**`setup`**|**`setup-env`**} \[**`--all`**\] \[*`main-repo`*\]  
-**`just-mr`** \[*`OPTION`*\]... **`fetch`** \[**`--all`**\] \[**`-o`** *`fetch-dir`*\] \[*`main-repo`*\]  
+**`just-mr`** \[*`OPTION`*\]... **`fetch`** \[**`--all`**\] \[**`--backup-to-remote`**] \[**`-o`** *`fetch-dir`*\] \[*`main-repo`*\]  
 **`just-mr`** \[*`OPTION`*\]... **`update`** \[*`repo`*\]...  
 **`just-mr`** \[*`OPTION`*\]... **`do`** \[*`JUST_ARG`*\]...  
-**`just-mr`** \[*`OPTION`*\]... {**`version`**|**`analyse`**|**`build`**|**`install`**|**`install-cas`**|**`describe`**|**`rebuild`**} \[*`JUST_ARG`*\]...  
+**`just-mr`** \[*`OPTION`*\]... {**`version`**|**`describe`**|**`analyse`**|**`build`**|**`install`**|**`install-cas`**|**`rebuild`**|**`gc`**} \[*`JUST_ARG`*\]...  
 
 DESCRIPTION
 ===========
@@ -53,6 +53,12 @@ order:
 The default configuration lookup order can be adjusted in the just-mrrc
 file. See **`just-mrrc`**(5) for more details.
 
+**`--absent`** *`PATH`*  
+Path to a file specifying which repositories are to be considered
+absent, overriding the values set by the *`"pragma"`* entries in the
+multi-repository configuration. The file has to contain a JSON array
+of those repository names to be considered absent.
+
 **`-D`**, **`--defines`** *`JSON`*  
 Defines, via an in-line JSON object, an overlay configuration for
 **`just`**(1); if used as a launcher for a subcommand known to support
@@ -68,14 +74,24 @@ set in the **`just-mrrc`**(5) file.
 Default: path *`".cache/just"`* in user's home directory.
 
 **`--checkout-locations`** *`PATH`*  
-Specification file for checkout locations. This file contains a JSON
-object, for which under the key *`"<version control>"`* of key
-*`"checkouts"`* we get pairs of repository URLs as keys and absolute
-paths as values. Currently supported version control is Git, therefore
-the respective key is *`"git"`*. The paths contained for each repository
-URL point to existing locations on the filesystem containing the
-checkout of the respective repository. This options overwrites any
-values set in the **`just-mrrc`**(5) file.  
+Specification file for checkout locations and additional mirrors.
+This file contains a JSON object with several known keys:
+
+ - the key *`"<version control>"`* of key *`"checkouts"`* specifies
+   pairs of repository URLs as keys and absolute paths as values.
+   Currently supported version control is Git, therefore
+   the respective key is *`"git"`*. The paths contained for each repository
+   URL point to existing locations on the filesystem containing the
+   checkout of the respective repository.  
+ - the key *`"local mirrors"`*, if given, is a JSON object mapping primary
+   URLs to a list of local (non-public) mirrors. These mirrors are always
+   tried first (in the given order) before any other URL is contacted.
+ - the key *`"preferred hostnames"`*, if given, is a list of strings
+   specifying known hostnames. When fetching from a non-local URL, URLs
+   with hostnames in the given list are preferred (in the order given)
+   over URLs with other hostnames.
+
+This options overwrites any values set in the **`just-mrrc`**(5) file.  
 Default: file path *`".just-local.json"`* in user's home directory.
 
 **`-L`**, **`--local-launcher`** *`JSON_ARRAY`*  
@@ -117,6 +133,23 @@ archives (for which we verify the hash anyway) from remote.
 Path to the CA certificate bundle containing one or more certificates to
 be used to peer verify archive fetches from remote.
 
+**`-r`**, **`--remote-execution-address`** *`NAME`*:*`PORT`*  
+Address of a remote execution service. This is used as an intermediary fetch
+location for archives, between local CAS (or distdirs) and the network.
+
+**`-R`**, **`--remote-serve-address`** *`NAME`*:*`PORT`*  
+Address of a **`just`** **`serve`** service. This is used as intermediary fetch
+location for Git commits, between local CAS and the network.
+
+**`--fetch-absent`**  
+Try to make available all repositories, including those marked as absent.
+This option cannot be set together with **`--compatible`**.
+
+**`--compatible`**  
+At increased computational effort, be compatible with the original remote build
+execution protocol. If a remote execution service address is provided, this 
+option can be used to match the artifacts expected by the remote endpoint.
+
 **`--just`** *`PATH`*  
 Name of the just binary in *`PATH`* or path to the just binary.  
 Default: *`"just"`*.
@@ -133,6 +166,24 @@ Default: *`"git"`*.
 
 **`--norc`**  
 Option to prevent reading any **`just-mrrc`**(5) file.
+
+Authentication options
+----------------------
+
+Only TLS and mutual TLS (mTLS) are supported.
+They mirror the **`just`**(1) options.
+
+**`--tls-ca-cert`** *`PATH`*  
+Path to a TLS CA certificate that is trusted to sign the server
+certificate.
+
+**`--tls-client-cert`** *`PATH`*  
+Path to a TLS client certificate to enable mTLS. It must be passed in
+conjunction with **`--tls-client-key`** and **`--tls-ca-cert`**.
+
+**`--tls-client-key`** *`PATH`*  
+Path to a TLS client key to enable mTLS. It must be passed in
+conjunction with **`--tls-client-cert`** and **`--tls-ca-cert`**.
 
 SUBCOMMANDS
 ===========
@@ -192,6 +243,10 @@ existing distribution directory can be found an error is produced. To
 define an output directory that is independent of the given distribution
 directories, use the **`-o`** option.
 
+Additionally, and only in *native mode*, the **`--backup-to-remote`** option can
+be used in combination with the **`--remote-execution-address`** argument to
+synchronize the locally fetched archives with a remote endpoint.
+
 update
 ------
 
@@ -214,7 +269,8 @@ do
 This subcommand is used as the canonical way of specifying just
 arguments and calling **`just`** via **`execvp`**(2). Any subsequent argument
 is unconditionally forwarded to **`just`**. For *known* subcommands
-(**`version`**, **`describe`**, **`analyse`**, **`build`**, **`install`**, **`install-cas`**, **`rebuild`**), the
+(**`version`**, **`describe`**, **`analyse`**, **`build`**, **`install`**, 
+**`install-cas`**, **`rebuild`**, **`gc`**), the
 **`just-mr setup`** step is performed first for those commands accepting a
 configuration and the produced configuration is prefixed to the provided
 arguments. The main repository for the **`setup`** step can be provided in
@@ -230,6 +286,15 @@ messages will get overwritten.
 The **`--local-launcher`** argument is passed to **`just`** as early
 argument for those *known* subcommands that accept it (build, install,
 rebuild).
+
+The **`--remote-execution-address`**, **`--compatible`**, and 
+**`--remote-serve-address`** arguments are passed to **`just`** as early
+arguments for those *known* subcommands that accept them
+(analyse, build, install-cas, install, rebuild, traverse).
+
+The *authentication options* given to **`just-mr`** are passed to **`just`** as
+early arguments for those *known* subcommands that accept them, according to
+**`just`**(1).
 
 **`version`**|**`describe`**|**`analyse`**|**`build`**|**`install`**|**`install-cas`**|**`rebuild`**|**`gc`**
 -------------------------------------------------------------------------------------------------------------

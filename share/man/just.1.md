@@ -16,7 +16,8 @@ SYNOPSIS
 **`just`** **`rebuild`** \[*`OPTION`*\]... \[\[*`module`*\] *`target`*\]  
 **`just`** **`traverse`** \[*`OPTION`*\]... **`-o`** *`OUTPUT_DIR`* **`-g`** *`GRAPH_FILE`*  
 **`just`** **`gc`** \[*`OPTION`*\]...  
-**`just`** **`execute`** \[*`OPTION`*\]...
+**`just`** **`execute`** \[*`OPTION`*\]...  
+**`just`** **`serve`** *`SERVE_CONFIG_FILE`*
 
 DESCRIPTION
 ===========
@@ -50,11 +51,11 @@ modules.
 
 The main repository is the repository containing the target specified on
 the command line. The main repository can either be read from the
-multi-repository configuration file if it contains the key *`main`* or
+multi-repository configuration file if it contains the key *`"main"`* or
 through the option **`--main`**. The command-line option **`--main`**
 overrides what is eventually read from the multi-repository
 configuration file. If neither the multi-repository configuration file
-contains the *`main`* key nor the **`--main`** option is provided, the
+contains the *`"main"`* key nor the **`--main`** option is provided, the
 lexicographical first repository from the multi-repository configuration
 file is used as main.
 
@@ -273,6 +274,14 @@ the just native remote protocol.
 If the flag **`--compatible`** is provided, the execution service will
 honor the original remote build execution protocol.
 
+**`serve`**
+-----------
+
+This subcommand starts a service that provides target dependencies needed for a
+remote execution build. It expects as its only and mandatory argument the path
+to a configuration file, following the format described in
+**`just-serve-config`**(5).
+
 OPTIONS
 =======
 
@@ -436,7 +445,8 @@ number of characters (default: 320).
 Supported by: analyse|build|install.
 
 **`-P`**, **`--print-to-stdout`** *`LOGICAL_PATH`*  
-After building, print the specified artifact to stdout.
+After building, print the specified artifact to stdout.  
+Supported by: build|install|rebuild|traverse.
 
 **`-s`**, **`--show-runfiles`**  
 Do not omit runfiles in build report.  
@@ -502,7 +512,7 @@ Supported by: analyse|build|install-cas|install|rebuild|traverse.
 
 **`--endpoint-configuration`** FILE  
 File containing a description on how to dispatch to different
-remote-execution endpoints based on the the execution properties.
+remote-execution endpoints based on the execution properties.
 The format is a JSON list of pairs (lists of length two) of an object
 of strings and a string. The first entry describes a condition (the
 remote-execution properties have to agree on the domain of this
@@ -513,6 +523,12 @@ as specified by **`-r`**, or local execution if no endpoint is
 specified).  
 Supported by: analyse|build|install-cas|install|rebuild|traverse.
 
+Remote serve options
+--------------------
+
+**`-R`**, **`--remote-serve-address`** *`NAME`*:*`PORT`*  
+Address of the remote execution service.  
+Supported by: analyse|build|install-cas|install|rebuild|traverse.
 
 Authentication options
 ----------------------
@@ -695,4 +711,5 @@ See also
 ========
 
 **`just-repository-config`**(5),
+**`just-serve-config`**(5),
 **`just-mr`**(1)
