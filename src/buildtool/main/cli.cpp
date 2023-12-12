@@ -14,9 +14,8 @@
 
 #include "src/buildtool/main/cli.hpp"
 
+#include "gsl/gsl"
 #include "src/buildtool/main/exit_codes.hpp"
-
-#include <gsl/gsl>
 
 namespace {
 
@@ -38,7 +37,8 @@ auto SetupAnalyseCommandArguments(
     SetupLogArguments(app, &clargs->log);
     SetupAnalysisArguments(app, &clargs->analysis);
     SetupCacheArguments(app, &clargs->endpoint);
-    SetupEndpointArguments(app, &clargs->endpoint);
+    SetupExecutionEndpointArguments(app, &clargs->endpoint);
+    SetupExecutionPropertiesArguments(app, &clargs->endpoint);
     SetupServeEndpointArguments(app, &clargs->serve);
     SetupDiagnosticArguments(app, &clargs->diagnose);
     SetupCompatibilityArguments(app);
@@ -52,12 +52,14 @@ auto SetupBuildCommandArguments(
     SetupLogArguments(app, &clargs->log);
     SetupAnalysisArguments(app, &clargs->analysis);
     SetupCacheArguments(app, &clargs->endpoint);
-    SetupEndpointArguments(app, &clargs->endpoint);
+    SetupExecutionEndpointArguments(app, &clargs->endpoint);
+    SetupExecutionPropertiesArguments(app, &clargs->endpoint);
     SetupServeEndpointArguments(app, &clargs->serve);
     SetupCommonAuthArguments(app, &clargs->auth);
     SetupClientAuthArguments(app, &clargs->cauth);
     SetupCommonBuildArguments(app, &clargs->build);
     SetupBuildArguments(app, &clargs->build);
+    SetupTCArguments(app, &clargs->tc);
     SetupCompatibilityArguments(app);
 }
 
@@ -83,7 +85,7 @@ auto SetupInstallCasCommandArguments(
     gsl::not_null<CommandLineArguments*> const& clargs) {
     SetupCompatibilityArguments(app);
     SetupCacheArguments(app, &clargs->endpoint);
-    SetupEndpointArguments(app, &clargs->endpoint);
+    SetupExecutionEndpointArguments(app, &clargs->endpoint);
     SetupServeEndpointArguments(app, &clargs->serve);
     SetupCommonAuthArguments(app, &clargs->auth);
     SetupClientAuthArguments(app, &clargs->cauth);
@@ -98,7 +100,8 @@ auto SetupTraverseCommandArguments(
     SetupCommonArguments(app, &clargs->common);
     SetupLogArguments(app, &clargs->log);
     SetupCacheArguments(app, &clargs->endpoint);
-    SetupEndpointArguments(app, &clargs->endpoint);
+    SetupExecutionEndpointArguments(app, &clargs->endpoint);
+    SetupExecutionPropertiesArguments(app, &clargs->endpoint);
     SetupServeEndpointArguments(app, &clargs->serve);
     SetupCommonAuthArguments(app, &clargs->auth);
     SetupClientAuthArguments(app, &clargs->cauth);

@@ -26,7 +26,7 @@
 /// \brief API for local execution.
 class GitApi final : public IExecutionApi {
   public:
-    GitApi() : repo_config_{&RepositoryConfig::Instance()} {}
+    GitApi() = delete;
     explicit GitApi(gsl::not_null<RepositoryConfig*> const& repo_config)
         : repo_config_{repo_config} {}
     auto CreateAction(
@@ -83,6 +83,9 @@ class GitApi final : public IExecutionApi {
                     not FileSystemManager::WriteFileAs</*kSetEpochTime=*/true,
                                                        /*kSetWritable=*/true>(
                         *blob, output_paths[i], info.type)) {
+                    Logger::Log(LogLevel::Error,
+                                "staging to output path {} failed.",
+                                output_paths[i].string());
                     return false;
                 }
             }

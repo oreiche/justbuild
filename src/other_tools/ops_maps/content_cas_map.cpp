@@ -45,7 +45,7 @@ auto CreateContentCASMap(LocalPathsPtr const& just_mr_paths,
         // separate logic if we need a pure fetch
         if (key.fetch_only) {
             if (cas.BlobPath(digest, /*is_executable=*/false)) {
-                (*setter)(true);
+                (*setter)(nullptr);
                 return;
             }
             JustMRProgress::Instance().TaskTracker().Start(key.origin);
@@ -59,7 +59,7 @@ auto CreateContentCASMap(LocalPathsPtr const& just_mr_paths,
             // check if content is in CAS now
             if (cas.BlobPath(digest, /*is_executable=*/false)) {
                 JustMRProgress::Instance().TaskTracker().Stop(key.origin);
-                (*setter)(true);
+                (*setter)(nullptr);
                 return;
             }
             // check if content is known to remote serve service
@@ -72,7 +72,7 @@ auto CreateContentCASMap(LocalPathsPtr const& just_mr_paths,
                                               .type = ObjectType::File}},
                         local_api)) {
                     JustMRProgress::Instance().TaskTracker().Stop(key.origin);
-                    (*setter)(true);
+                    (*setter)(nullptr);
                     return;
                 }
             }
@@ -84,7 +84,7 @@ auto CreateContentCASMap(LocalPathsPtr const& just_mr_paths,
                                       .type = ObjectType::File}},
                 local_api)) {
             JustMRProgress::Instance().TaskTracker().Stop(key.origin);
-            (*setter)(true);
+            (*setter)(nullptr);
             return;
         }
         // archive needs network fetching;
@@ -95,12 +95,15 @@ auto CreateContentCASMap(LocalPathsPtr const& just_mr_paths,
             return;
         }
         // now do the actual fetch
-        auto data = NetworkFetchWithMirrors(
+        auto res = NetworkFetchWithMirrors(
             key.fetch_url, key.mirrors, ca_info, additional_mirrors);
+        auto data =
+            std::get_if<1>(&res);  // get pointer to fetched data, or nullptr
         if (not data) {
             (*logger)(fmt::format("Failed to fetch a file with id {} from "
-                                  "provided remotes",
-                                  key.content),
+                                  "provided remotes:{}",
+                                  key.content,
+                                  std::get<0>(res)),
                       /*fatal=*/true);
             return;
         }
@@ -153,7 +156,8 @@ auto CreateContentCASMap(LocalPathsPtr const& just_mr_paths,
             JustMRProgress::Instance().TaskTracker().Stop(key.origin);
         }
         // success!
-        (*setter)(true);
+        (*setter)(nullptr);
     };
-    return AsyncMapConsumer<ArchiveContent, bool>(ensure_in_cas, jobs);
+    return AsyncMapConsumer<ArchiveContent, std::nullptr_t>(ensure_in_cas,
+                                                            jobs);
 }

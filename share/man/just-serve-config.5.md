@@ -69,7 +69,29 @@ The configuration file is given by a JSON object.
    For subkey *`"address"`* the value is a string specifying the remote
    execution address in a NAME:PORT format.  
    For subkey *`"compatible"`* the value is a flag which specifies whether
-   the remote endpoint uses the original remote execution protocol.
+   the remote endpoint uses the original remote execution protocol.  
+
+ - The value for the key *`"jobs"`* specifies the number of jobs to run. If
+   unset, the number of available cores is used.  
+
+ - The value for the key *`"build"`* is a JSON object specifying arguments used
+   by **`just`** **`serve`** to orchestrate remote builds.  
+   For subkey *`"build jobs"`* the value specifies the number of jobs to run
+   during a remote build. If unset, the same value as for outer key *`"jobs"`*
+   is used.  
+   For subkey *`"action timeout"`* the value in a number specifying the timeout
+   limit in seconds for actions run during a remote build. If unset, the default
+   value 300 is used.  
+   For subkey *`"target-cache write strategy"`* the value has to
+   be one of the values *`"disable"`*, *`"sync"`*, or *`"split"`*.
+   The default is *`"sync"`*, giving the instruction to
+   synchronize artifacts and write target-level cache entries.
+   The value *`"split"`* does the same using blob splitting
+   when synchronizing artifacts, provided it is supported by the
+   remote-execution endpoint. The value *`"disable"`* disables
+   adding new entries to the target-level cache, which defeats the
+   purpose of typical set up to share target-level computations
+   between clients.
 
 
 See also

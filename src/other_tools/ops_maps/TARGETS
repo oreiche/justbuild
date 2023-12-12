@@ -76,11 +76,11 @@
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
     ]
   }
-, "repo_fetch_map":
+, "archive_fetch_map":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["repo_fetch_map"]
-  , "hdrs": ["repo_fetch_map.hpp"]
-  , "srcs": ["repo_fetch_map.cpp"]
+  , "name": ["archive_fetch_map"]
+  , "hdrs": ["archive_fetch_map.hpp"]
+  , "srcs": ["archive_fetch_map.cpp"]
   , "deps":
     ["content_cas_map", ["src/buildtool/execution_api/common", "common"]]
   , "stage": ["src", "other_tools", "ops_maps"]
@@ -90,6 +90,35 @@
     , ["src/buildtool/file_system", "file_storage"]
     , ["src/other_tools/just_mr/progress_reporting", "statistics"]
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
+    ]
+  }
+, "git_tree_fetch_map":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["git_tree_fetch_map"]
+  , "hdrs": ["git_tree_fetch_map.hpp"]
+  , "srcs": ["git_tree_fetch_map.cpp"]
+  , "deps":
+    [ ["@", "json", "", "json"]
+    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/other_tools/ops_maps", "critical_git_op_map"]
+    , ["src/other_tools/ops_maps", "import_to_git_map"]
+    ]
+  , "stage": ["src", "other_tools", "ops_maps"]
+  , "private-deps":
+    [ ["src/other_tools/ops_maps", "critical_git_op_map"]
+    , ["src/buildtool/common", "config"]
+    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/serve_api/remote", "serve_api"]
+    , ["src/buildtool/storage", "config"]
+    , ["src/buildtool/storage", "fs_utils"]
+    , ["src/buildtool/system", "system_command"]
+    , ["src/other_tools/git_operations", "git_repo_remote"]
+    , ["src/other_tools/just_mr/progress_reporting", "progress"]
+    , ["src/other_tools/just_mr/progress_reporting", "statistics"]
+    , ["src/other_tools/ops_maps", "content_cas_map"]
+    , ["src/other_tools/ops_maps", "import_to_git_map"]
+    , ["@", "fmt", "", "fmt"]
     ]
   }
 }

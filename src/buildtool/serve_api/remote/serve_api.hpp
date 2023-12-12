@@ -61,6 +61,11 @@ class ServeApi final {
         return Instance().stc_->ServeContent(content);
     }
 
+    [[nodiscard]] static auto TreeInRemoteCAS(std::string const& tree_id)
+        -> bool {
+        return Instance().stc_->ServeTree(tree_id);
+    }
+
     [[nodiscard]] static auto ServeTargetVariables(
         std::string const& target_root_id,
         std::string const& target_file,
@@ -69,9 +74,10 @@ class ServeApi final {
             target_root_id, target_file, target);
     }
 
-    [[nodiscard]] static auto ServeTarget(const TargetCacheKey& key)
+    [[nodiscard]] static auto ServeTarget(const TargetCacheKey& key,
+                                          const std::string& repo_key)
         -> std::optional<std::pair<TargetCacheEntry, Artifact::ObjectInfo>> {
-        return Instance().tc_->ServeTarget(key);
+        return Instance().tc_->ServeTarget(key, repo_key);
     }
 
     [[nodiscard]] static auto CheckServeRemoteExecution() -> bool {

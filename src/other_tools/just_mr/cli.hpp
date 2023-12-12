@@ -80,6 +80,8 @@ struct MultiRepoJustSubCmdsArguments {
     std::optional<std::string> subcmd_name{std::nullopt};
     std::vector<std::string> additional_just_args{};
     std::unordered_map<std::string, std::vector<std::string>> just_args{};
+    std::optional<std::filesystem::path> config{};
+    std::optional<std::filesystem::path> endpoint_configuration{};
 };
 
 // corresponding to the similarly-named arguments in 'just'
@@ -87,6 +89,28 @@ struct MultiRepoRemoteAuthArguments {
     std::optional<std::filesystem::path> tls_ca_cert{std::nullopt};
     std::optional<std::filesystem::path> tls_client_cert{std::nullopt};
     std::optional<std::filesystem::path> tls_client_key{std::nullopt};
+};
+
+enum class SubCommand {
+    kUnknown,
+    kMRVersion,
+    kFetch,
+    kUpdate,
+    kSetup,
+    kSetupEnv,
+    kJustDo,
+    kJustSubCmd
+};
+
+struct CommandLineArguments {
+    SubCommand cmd{SubCommand::kUnknown};
+    MultiRepoCommonArguments common;
+    MultiRepoLogArguments log;
+    MultiRepoSetupArguments setup;
+    MultiRepoFetchArguments fetch;
+    MultiRepoUpdateArguments update;
+    MultiRepoJustSubCmdsArguments just_cmd;
+    MultiRepoRemoteAuthArguments auth;
 };
 
 static inline void SetupMultiRepoCommonArguments(

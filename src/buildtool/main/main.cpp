@@ -29,6 +29,7 @@
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
+#include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/main/analyse.hpp"
 #include "src/buildtool/main/cli.hpp"
 #include "src/buildtool/main/constants.hpp"
@@ -39,8 +40,6 @@
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/buildtool/storage/target_cache.hpp"
-#include "src/buildtool/storage/target_cache_entry.hpp"
-#include "src/buildtool/storage/target_cache_key.hpp"
 #ifndef BOOTSTRAP_BUILD_TOOL
 #include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/execution_api/execution_service/operation_cache.hpp"
@@ -56,6 +55,7 @@
 #include "src/buildtool/logging/log_config.hpp"
 #include "src/buildtool/logging/log_sink_cmdline.hpp"
 #include "src/buildtool/logging/log_sink_file.hpp"
+#include "src/buildtool/main/build_utils.hpp"
 #include "src/buildtool/main/version.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
@@ -94,13 +94,13 @@ void SetupExecutionConfig(EndpointArguments const& eargs,
             (StorageConfig::SetBuildRoot(*eargs.local_root))) or
         not(not bargs.local_launcher or
             LocalConfig::SetLauncher(*bargs.local_launcher))) {
-        Logger::Log(LogLevel::Error, "failed to configure local execution.");
+        Logger::Log(LogLevel::Error, "Failed to configure local execution.");
         std::exit(kExitFailure);
     }
     for (auto const& property : eargs.platform_properties) {
         if (not RemoteConfig::AddPlatformProperty(property)) {
             Logger::Log(LogLevel::Error,
-                        "addding platform property '{}' failed.",
+                        "Adding platform property '{}' failed.",
                         property);
             std::exit(kExitFailure);
         }
@@ -109,7 +109,7 @@ void SetupExecutionConfig(EndpointArguments const& eargs,
         if (not RemoteConfig::SetRemoteAddress(
                 *eargs.remote_execution_address)) {
             Logger::Log(LogLevel::Error,
-                        "setting remote execution address '{}' failed.",
+                        "Setting remote execution address '{}' failed.",
                         *eargs.remote_execution_address);
             std::exit(kExitFailure);
         }
@@ -118,7 +118,7 @@ void SetupExecutionConfig(EndpointArguments const& eargs,
         if (not RemoteConfig::SetRemoteExecutionDispatch(
                 *eargs.remote_execution_dispatch_file)) {
             Logger::Log(LogLevel::Error,
-                        "setting remote execution dispatch based on file '{}'",
+                        "Setting remote execution dispatch based on file '{}'",
                         eargs.remote_execution_dispatch_file->string());
             std::exit(kExitFailure);
         }
@@ -127,19 +127,22 @@ void SetupExecutionConfig(EndpointArguments const& eargs,
         if (not(RemoteConfig::SetCacheAddress(*rargs.cache_endpoint) ==
                 (*rargs.cache_endpoint != "local"))) {
             Logger::Log(LogLevel::Error,
-                        "setting cache endpoint address '{}' failed.",
+                        "Setting cache endpoint address '{}' failed.",
                         *rargs.cache_endpoint);
             std::exit(kExitFailure);
         }
     }
 }
 
-void SetupServeConfig(ServeArguments const& srvargs) {
+void SetupServeConfig(ServeArguments const& srvargs,
+                      CommonArguments const& cargs,
+                      BuildArguments const& bargs,
+                      TCArguments const& tc) {
     if (srvargs.remote_serve_address) {
         if (not RemoteServeConfig::SetRemoteAddress(
                 *srvargs.remote_serve_address)) {
             Logger::Log(LogLevel::Error,
-                        "setting serve service address '{}' failed.",
+                        "Setting serve service address '{}' failed.",
                         *srvargs.remote_serve_address);
             std::exit(kExitFailure);
         }
@@ -150,7 +153,7 @@ void SetupServeConfig(ServeArguments const& srvargs) {
             if (!RemoteExecutionConfig::SetRemoteAddress(
                     *srvargs.remote_serve_address)) {
                 Logger::Log(LogLevel::Error,
-                            "setting remote execution address '{}' failed.",
+                            "Setting remote execution address '{}' failed.",
                             *srvargs.remote_serve_address);
                 std::exit(kExitFailure);
             }
@@ -162,8 +165,27 @@ void SetupServeConfig(ServeArguments const& srvargs) {
     if (not srvargs.repositories.empty() and
         not RemoteServeConfig::SetKnownRepositories(srvargs.repositories)) {
         Logger::Log(LogLevel::Error,
-                    "setting serve service repositories failed.");
+                    "Setting serve service repositories failed.");
         std::exit(kExitFailure);
+    }
+    // make parallelism and build options available for remote builds
+    if (not RemoteServeConfig::SetJobs(cargs.jobs)) {
+        Logger::Log(LogLevel::Error, "Setting jobs failed.");
+        std::exit(kExitFailure);
+    }
+    if (bargs.build_jobs > 0 and
+        not RemoteServeConfig::SetBuildJobs(bargs.build_jobs)) {
+        Logger::Log(LogLevel::Error, "Setting build jobs failed.");
+        std::exit(kExitFailure);
+    }
+    if (not RemoteServeConfig::SetActionTimeout(bargs.timeout)) {
+        Logger::Log(LogLevel::Error, "Setting action timeout failed.");
+        std::exit(kExitFailure);
+    }
+    RemoteServeConfig::SetTCStrategy(tc.target_cache_write_strategy);
+    if (tc.target_cache_write_strategy == TargetCacheWriteStrategy::Disable) {
+        Logger::Log(LogLevel::Info,
+                    "Target-level cache writing of serve service is disabled.");
     }
 }
 
@@ -402,12 +424,11 @@ void SetupHashFunction() {
 }
 
 [[nodiscard]] auto ReadConfiguredTarget(
-    AnalysisArguments const& clargs,
     std::string const& main_repo,
-    std::optional<std::filesystem::path> const& main_ws_root)
-    -> Target::ConfiguredTarget {
-    auto const* target_root =
-        RepositoryConfig::Instance().TargetRoot(main_repo);
+    std::optional<std::filesystem::path> const& main_ws_root,
+    gsl::not_null<RepositoryConfig*> const& repo_config,
+    AnalysisArguments const& clargs) -> Target::ConfiguredTarget {
+    auto const* target_root = repo_config->TargetRoot(main_repo);
     if (target_root == nullptr) {
         Logger::Log(LogLevel::Error,
                     "Cannot obtain target root for main repo {}.",
@@ -415,8 +436,7 @@ void SetupHashFunction() {
         std::exit(kExitFailure);
     }
     auto current_module = std::string{"."};
-    std::string target_file_name =
-        *RepositoryConfig::Instance().TargetFileName(main_repo);
+    std::string target_file_name = *repo_config->TargetFileName(main_repo);
     if (main_ws_root) {
         // module detection only works if main workspace is on the file system
         current_module = DetermineCurrentModule(
@@ -427,6 +447,7 @@ void SetupHashFunction() {
         auto entity = Base::ParseEntityNameFromJson(
             *clargs.target,
             Base::EntityName{Base::NamedTarget{main_repo, current_module, ""}},
+            repo_config,
             [&clargs](std::string const& parse_err) {
                 Logger::Log(LogLevel::Error,
                             "Parsing target name {} failed with:\n{}",
@@ -456,6 +477,7 @@ void SetupHashFunction() {
         auto entity = Base::ParseEntityNameFromJson(
             target,
             Base::EntityName{Base::NamedTarget{main_repo, current_module, ""}},
+            repo_config,
             [&target](std::string const& parse_err) {
                 Logger::Log(LogLevel::Error,
                             "Parsing target name {} failed with:\n{}",
@@ -530,116 +552,10 @@ void SetupHashFunction() {
     return root / *root_dir;
 }
 
-// returns FileRoot and optional local path, if the root is local
-auto ParseRoot(std::string const& repo,
-               std::string const& keyword,
-               nlohmann::json const& root)
-    -> std::pair<FileRoot, std::optional<std::filesystem::path>> {
-    if ((not root.is_array()) or root.empty()) {
-        Logger::Log(LogLevel::Error,
-                    "Expected {} for {} to be of the form [<scheme>, ...], but "
-                    "found {}",
-                    keyword,
-                    repo,
-                    root.dump());
-        std::exit(kExitFailure);
-    }
-    if (root[0] == "file") {
-        if (root.size() != 2 or (not root[1].is_string())) {
-            Logger::Log(LogLevel::Error,
-                        "\"file\" scheme expects precisely one string "
-                        "argument, but found {} for {} of repository {}",
-                        root.dump(),
-                        keyword,
-                        repo);
-            std::exit(kExitFailure);
-        }
-        auto path = std::filesystem::path{root[1].get<std::string>()};
-        return {FileRoot{path}, std::move(path)};
-    }
-    if (root[0] == FileRoot::kGitTreeMarker) {
-        if (not(root.size() == 3 and root[1].is_string() and
-                root[2].is_string()) and
-            not(root.size() == 2 and root[1].is_string())) {
-            Logger::Log(LogLevel::Error,
-                        "\"git tree\" scheme expects one or two string "
-                        "arguments, but found {} for {} of repository {}",
-                        root.dump(),
-                        keyword,
-                        repo);
-            std::exit(kExitFailure);
-        }
-        if (root.size() == 3) {
-            if (auto git_root = FileRoot::FromGit(root[2], root[1])) {
-                return {std::move(*git_root), std::nullopt};
-            }
-            Logger::Log(LogLevel::Error,
-                        "Could not create file root for {}tree id {}",
-                        root.size() == 3
-                            ? fmt::format("git repository {} and ", root[2])
-                            : "",
-                        root[1]);
-            std::exit(kExitFailure);
-        }
-        // return absent root
-        return {FileRoot{std::string{root[1]}}, std::nullopt};
-    }
-    if (root[0] == FileRoot::kFileIgnoreSpecialMarker) {
-        if (root.size() != 2 or (not root[1].is_string())) {
-            Logger::Log(
-                LogLevel::Error,
-                "\"file ignore-special\" scheme expects precisely one string "
-                "argument, but found {} for {} of repository {}",
-                root.dump(),
-                keyword,
-                repo);
-            std::exit(kExitFailure);
-        }
-        auto path = std::filesystem::path{root[1].get<std::string>()};
-        return {FileRoot{path, /*ignore_special=*/true}, std::move(path)};
-    }
-    if (root[0] == FileRoot::kGitTreeIgnoreSpecialMarker) {
-        if (not(root.size() == 3 and root[1].is_string() and
-                root[2].is_string()) and
-            not(root.size() == 2 and root[1].is_string())) {
-            Logger::Log(
-                LogLevel::Error,
-                "\"git tree ignore-special\" scheme expects one or two string "
-                "arguments, but found {} for {} of repository {}",
-                root.dump(),
-                keyword,
-                repo);
-            std::exit(kExitFailure);
-        }
-        if (root.size() == 3) {
-            if (auto git_root = FileRoot::FromGit(
-                    root[2], root[1], /*ignore_special=*/true)) {
-                return {std::move(*git_root), std::nullopt};
-            }
-            Logger::Log(
-                LogLevel::Error,
-                "Could not create ignore-special file root for {}tree id {}",
-                root.size() == 3
-                    ? fmt::format("git repository {} and ", root[2])
-                    : "",
-                root[1]);
-            std::exit(kExitFailure);
-        }
-        // return absent root
-        return {FileRoot{std::string{root[1]}, /*ignore_special=*/true},
-                std::nullopt};
-    }
-    Logger::Log(LogLevel::Error,
-                "Unknown scheme in the specification {} of {} of repository {}",
-                root.dump(),
-                keyword,
-                repo);
-    std::exit(kExitFailure);
-}
-
 // Set all roots and name mappings from the command-line arguments and
 // return the name of the main repository and main workspace path if local.
-auto DetermineRoots(CommonArguments const& cargs,
+auto DetermineRoots(gsl::not_null<RepositoryConfig*> const& repository_config,
+                    CommonArguments const& cargs,
                     AnalysisArguments const& aargs)
     -> std::pair<std::string, std::optional<std::filesystem::path>> {
     std::optional<std::filesystem::path> main_ws_root;
@@ -699,15 +615,22 @@ auto DetermineRoots(CommonArguments const& cargs,
         repos[main_repo] = nlohmann::json::object();
     }
 
+    std::string error_msg;
     for (auto const& [repo, desc] : repos.items()) {
         std::optional<FileRoot> ws_root{};
         bool const is_main_repo{repo == main_repo};
         auto it_ws = desc.find("workspace_root");
         if (it_ws != desc.end()) {
-            auto [root, path] = ParseRoot(repo, "workspace_root", *it_ws);
-            ws_root = std::move(root);
-            if (is_main_repo and path.has_value()) {
-                main_ws_root = std::move(path);
+            if (auto parsed_root = FileRoot::ParseRoot(
+                    repo, "workspace_root", *it_ws, &error_msg)) {
+                ws_root = std::move(parsed_root->first);
+                if (is_main_repo and parsed_root->second.has_value()) {
+                    main_ws_root = std::move(parsed_root->second);
+                }
+            }
+            else {
+                Logger::Log(LogLevel::Error, error_msg);
+                std::exit(kExitFailure);
             }
         }
         if (is_main_repo) {
@@ -730,13 +653,22 @@ auto DetermineRoots(CommonArguments const& cargs,
             std::exit(kExitFailure);
         }
         auto info = RepositoryConfig::RepositoryInfo{std::move(*ws_root)};
-        auto parse_keyword_root = [&desc = desc, &repo = repo, is_main_repo](
-                                      FileRoot* keyword_root,
-                                      std::string const& keyword,
-                                      auto const& keyword_carg) {
+        auto parse_keyword_root = [&desc = desc,
+                                   &repo = repo,
+                                   &error_msg = error_msg,
+                                   is_main_repo](FileRoot* keyword_root,
+                                                 std::string const& keyword,
+                                                 auto const& keyword_carg) {
             auto it = desc.find(keyword);
             if (it != desc.end()) {
-                (*keyword_root) = ParseRoot(repo, keyword, *it).first;
+                if (auto parsed_root =
+                        FileRoot::ParseRoot(repo, keyword, *it, &error_msg)) {
+                    (*keyword_root) = parsed_root->first;
+                }
+                else {
+                    Logger::Log(LogLevel::Error, error_msg);
+                    std::exit(kExitFailure);
+                }
             }
 
             if (is_main_repo && keyword_carg) {
@@ -800,27 +732,10 @@ auto DetermineRoots(CommonArguments const& cargs,
                                 "expression_file_name",
                                 aargs.expression_file_name);
 
-        RepositoryConfig::Instance().SetInfo(repo, std::move(info));
+        repository_config->SetInfo(repo, std::move(info));
     }
 
     return {main_repo, main_ws_root};
-}
-
-// Return disjoint maps for artifacts and runfiles
-[[nodiscard]] auto ReadOutputArtifacts(AnalysedTargetPtr const& target)
-    -> std::pair<std::map<std::string, ArtifactDescription>,
-                 std::map<std::string, ArtifactDescription>> {
-    std::map<std::string, ArtifactDescription> artifacts{};
-    std::map<std::string, ArtifactDescription> runfiles{};
-    for (auto const& [path, artifact] : target->Artifacts()->Map()) {
-        artifacts.emplace(path, artifact->Artifact());
-    }
-    for (auto const& [path, artifact] : target->RunFiles()->Map()) {
-        if (not artifacts.contains(path)) {
-            runfiles.emplace(path, artifact->Artifact());
-        }
-    }
-    return {artifacts, runfiles};
 }
 
 void ReportTaintedness(const AnalysisResult& result) {
@@ -840,9 +755,11 @@ void ReportTaintedness(const AnalysisResult& result) {
 auto DetermineNonExplicitTarget(
     std::string const& main_repo,
     std::optional<std::filesystem::path> const& main_ws_root,
+    gsl::not_null<RepositoryConfig*> const& repo_config,
     AnalysisArguments const& clargs)
     -> std::optional<BuildMaps::Target::ConfiguredTarget> {
-    auto id = ReadConfiguredTarget(clargs, main_repo, main_ws_root);
+    auto id =
+        ReadConfiguredTarget(main_repo, main_ws_root, repo_config, clargs);
     switch (id.target.GetNamedTarget().reference_t) {
         case Base::ReferenceType::kFile:
             std::cout << id.ToString() << " is a source file." << std::endl;
@@ -878,56 +795,6 @@ void DumpArtifactsToBuild(
     os << dump_string << std::endl;
 }
 
-auto CollectNonKnownArtifacts(
-    std::unordered_map<TargetCacheKey, AnalysedTargetPtr> const& cache_targets)
-    -> std::vector<ArtifactDescription> {
-    auto cache_artifacts = std::unordered_set<ArtifactDescription>{};
-    for (auto const& [_, target] : cache_targets) {
-        auto artifacts = target->ContainedNonKnownArtifacts();
-        cache_artifacts.insert(std::make_move_iterator(artifacts.begin()),
-                               std::make_move_iterator(artifacts.end()));
-    }
-    return {std::make_move_iterator(cache_artifacts.begin()),
-            std::make_move_iterator(cache_artifacts.end())};
-}
-
-#ifndef BOOTSTRAP_BUILD_TOOL
-void WriteTargetCacheEntries(
-    std::unordered_map<TargetCacheKey, AnalysedTargetPtr> const& cache_targets,
-    std::unordered_map<ArtifactDescription, Artifact::ObjectInfo> const&
-        extra_infos,
-    std::size_t jobs,
-    gsl::not_null<IExecutionApi*> const& local_api,
-    gsl::not_null<IExecutionApi*> const& remote_api) {
-    if (!cache_targets.empty()) {
-        Logger::Log(LogLevel::Info,
-                    "Backing up artifacts of {} export targets",
-                    cache_targets.size());
-    }
-    auto downloader = [&local_api, &remote_api, &jobs](auto infos) {
-        return remote_api->ParallelRetrieveToCas(infos, local_api, jobs, false);
-    };
-    for (auto const& [key, target] : cache_targets) {
-        if (auto entry = TargetCacheEntry::FromTarget(target, extra_infos)) {
-            if (not Storage::Instance().TargetCache().Store(
-                    key, *entry, downloader)) {
-                Logger::Log(LogLevel::Warning,
-                            "Failed writing target cache entry for {}",
-                            key.Id().ToString());
-            }
-        }
-        else {
-            Logger::Log(LogLevel::Warning,
-                        "Failed creating target cache entry for {}",
-                        key.Id().ToString());
-        }
-    }
-    Logger::Log(LogLevel::Debug,
-                "Finished backing up artifacts of export targets");
-}
-
-#endif  // BOOTSTRAP_BUILD_TOOL
-
 }  // namespace
 
 auto main(int argc, char* argv[]) -> int {
@@ -954,6 +821,9 @@ auto main(int argc, char* argv[]) -> int {
                 *arguments.analysis.expression_log_limit);
         }
 
+        // global repository configuration
+        RepositoryConfig repo_config{};
+
 #ifndef BOOTSTRAP_BUILD_TOOL
         /**
          * The current implementation of libgit2 uses pthread_key_t incorrectly
@@ -966,7 +836,8 @@ auto main(int argc, char* argv[]) -> int {
         SetupHashFunction();
         SetupExecutionConfig(
             arguments.endpoint, arguments.build, arguments.rebuild);
-        SetupServeConfig(arguments.serve);
+        SetupServeConfig(
+            arguments.serve, arguments.common, arguments.build, arguments.tc);
         SetupAuthConfig(arguments.auth, arguments.cauth, arguments.sauth);
 
         if (arguments.cmd == SubCommand::kGc) {
@@ -1013,11 +884,11 @@ auto main(int argc, char* argv[]) -> int {
                                         std::move(arguments.build),
                                         std::move(stage_args),
                                         std::move(rebuild_args)},
+                                       &repo_config,
                                        ProgressReporter::Reporter()};
 
         if (arguments.cmd == SubCommand::kInstallCas) {
-            if (not RepositoryConfig::Instance().SetGitCAS(
-                    StorageConfig::GitRoot())) {
+            if (not repo_config.SetGitCAS(StorageConfig::GitRoot())) {
                 Logger::Log(LogLevel::Debug,
                             "Failed set Git CAS {}.",
                             StorageConfig::GitRoot().string());
@@ -1031,7 +902,7 @@ auto main(int argc, char* argv[]) -> int {
 #endif  // BOOTSTRAP_BUILD_TOOL
 
         auto [main_repo, main_ws_root] =
-            DetermineRoots(arguments.common, arguments.analysis);
+            DetermineRoots(&repo_config, arguments.common, arguments.analysis);
 
 #ifndef BOOTSTRAP_BUILD_TOOL
         auto lock = GarbageCollector::SharedLock();
@@ -1049,8 +920,7 @@ auto main(int argc, char* argv[]) -> int {
                                 "--compatible");
                     std::exit(EXIT_FAILURE);
                 }
-                if (not RepositoryConfig::Instance().SetGitCAS(
-                        *arguments.graph.git_cas)) {
+                if (not repo_config.SetGitCAS(*arguments.graph.git_cas)) {
                     Logger::Log(LogLevel::Warning,
                                 "Failed set Git CAS {}.",
                                 arguments.graph.git_cas->string());
@@ -1062,14 +932,18 @@ auto main(int argc, char* argv[]) -> int {
             }
         }
         else if (arguments.cmd == SubCommand::kDescribe) {
-            if (auto id = DetermineNonExplicitTarget(
-                    main_repo, main_ws_root, arguments.analysis)) {
+            if (auto id = DetermineNonExplicitTarget(main_repo,
+                                                     main_ws_root,
+                                                     &repo_config,
+                                                     arguments.analysis)) {
                 return arguments.describe.describe_rule
                            ? DescribeUserDefinedRule(
                                  id->target,
+                                 &repo_config,
                                  arguments.common.jobs,
                                  arguments.describe.print_json)
                            : DescribeTarget(*id,
+                                            &repo_config,
                                             arguments.common.jobs,
                                             arguments.describe.print_json);
             }
@@ -1081,9 +955,13 @@ auto main(int argc, char* argv[]) -> int {
             BuildMaps::Target::ResultTargetMap result_map{
                 arguments.common.jobs};
             auto id = ReadConfiguredTarget(
-                arguments.analysis, main_repo, main_ws_root);
-            auto result = AnalyseTarget(
-                id, &result_map, arguments.common.jobs, arguments.analysis);
+                main_repo, main_ws_root, &repo_config, arguments.analysis);
+            auto result =
+                AnalyseTarget(id,
+                              &result_map,
+                              &repo_config,
+                              arguments.common.jobs,
+                              arguments.analysis.request_action_input);
             if (result) {
                 if (arguments.analysis.graph_file) {
                     result_map.ToFile(*arguments.analysis.graph_file);
@@ -1156,13 +1034,13 @@ auto main(int argc, char* argv[]) -> int {
                                             trees,
                                             std::move(cache_artifacts));
                 if (build_result) {
-                    WriteTargetCacheEntries(cache_targets,
-                                            build_result->extra_infos,
-                                            arguments.build.build_jobs > 0
-                                                ? arguments.build.build_jobs
-                                                : arguments.common.jobs,
-                                            traverser.GetLocalApi(),
-                                            traverser.GetRemoteApi());
+                    WriteTargetCacheEntries(
+                        cache_targets,
+                        build_result->extra_infos,
+                        jobs,
+                        traverser.GetLocalApi(),
+                        traverser.GetRemoteApi(),
+                        arguments.tc.target_cache_write_strategy);
 
                     // Repeat taintedness message to make the user aware that
                     // the artifacts are not for production use.

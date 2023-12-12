@@ -350,6 +350,8 @@ void EnsureCommit(GitRepoInfo const& repo_info,
         // store failed attempts for subsequent logging
         bool fetched{false};
         std::string err_messages{};
+        // keep all remotes checked to report them in case fetch fails
+        std::string remotes_buffer{};
         // try local mirrors first
         auto local_mirrors =
             MirrorsUtils::GetLocalMirrors(additional_mirrors, fetch_repo);
@@ -360,8 +362,7 @@ void EnsureCommit(GitRepoInfo const& repo_info,
             auto wrapped_logger = std::make_shared<AsyncMapConsumerLogger>(
                 [mirror, &err_messages](auto const& msg, bool /*fatal*/) {
                     err_messages += fmt::format(
-                        "\nWhile attempting fetch from local mirror "
-                        "{}:\n{}",
+                        "\nWhile attempting fetch from local mirror {}:\n{}",
                         mirror,
                         msg);
                 });
@@ -374,6 +375,8 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                 fetched = true;
                 break;
             }
+            // add local mirror to buffer
+            remotes_buffer.append(fmt::format("\n> {}", mirror));
         }
         if (not fetched) {
             // get preferred hostnames list
@@ -390,8 +393,7 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                                 [preferred_url, &err_messages](auto const& msg,
                                                                bool /*fatal*/) {
                                     err_messages += fmt::format(
-                                        "\nWhile attempting fetch from "
-                                        "remote "
+                                        "\nWhile attempting fetch from remote "
                                         "{}:\n{}",
                                         *preferred_url,
                                         msg);
@@ -405,6 +407,9 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                             fetched = true;
                             break;
                         }
+                        // add preferred  to buffer
+                        remotes_buffer.append(
+                            fmt::format("\n> {}", *preferred_url));
                     }
                 }
             }
@@ -414,8 +419,7 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                     [fetch_repo, &err_messages](auto const& msg,
                                                 bool /*fatal*/) {
                         err_messages += fmt::format(
-                            "\nWhile attempting fetch from remote "
-                            "{}:\n{}",
+                            "\nWhile attempting fetch from remote {}:\n{}",
                             fetch_repo,
                             msg);
                     });
@@ -425,14 +429,15 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                                                   git_bin,
                                                   launcher,
                                                   wrapped_logger)) {
+                    // add main fetch URL to buffer
+                    remotes_buffer.append(fmt::format("\n> {}", fetch_repo));
                     // now try to fetch from mirrors, in order, if given
                     for (auto mirror : repo_info.mirrors) {
                         if (GitURLIsPath(mirror)) {
                             mirror = std::filesystem::absolute(mirror).string();
                         }
                         else {
-                            // if non-path, try each of the preferred
-                            // hostnames
+                            // if non-path, try each of the preferred hostnames
                             for (auto const& hostname : preferred_hostnames) {
                                 if (auto preferred_mirror =
                                         CurlURLHandle::ReplaceHostname(
@@ -442,8 +447,7 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                                         [preferred_mirror, &err_messages](
                                             auto const& msg, bool /*fatal*/) {
                                             err_messages += fmt::format(
-                                                "\nWhile attempting fetch "
-                                                "from "
+                                                "\nWhile attempting fetch from "
                                                 "mirror {}:\n{}",
                                                 *preferred_mirror,
                                                 msg);
@@ -458,6 +462,9 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                                         fetched = true;
                                         break;
                                     }
+                                    // add preferred mirror to buffer
+                                    remotes_buffer.append(fmt::format(
+                                        "\n> {}", *preferred_mirror));
                                 }
                             }
                         }
@@ -469,8 +476,7 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                                 [mirror, &err_messages](auto const& msg,
                                                         bool /*fatal*/) {
                                     err_messages += fmt::format(
-                                        "\nWhile attempting fetch from "
-                                        "mirror "
+                                        "\nWhile attempting fetch from mirror "
                                         "{}:\n{}",
                                         mirror,
                                         msg);
@@ -484,6 +490,8 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                             fetched = true;
                             break;
                         }
+                        // add mirror to buffer
+                        remotes_buffer.append(fmt::format("\n> {}", mirror));
                     }
                 }
             }
@@ -493,7 +501,8 @@ void EnsureCommit(GitRepoInfo const& repo_info,
             (*logger)(
                 fmt::format("While fetching via tmp repo:{}", err_messages),
                 /*fatal=*/false);
-            (*logger)("Failed to fetch from provided remotes",
+            (*logger)(fmt::format("Failed to fetch from provided remotes:{}",
+                                  remotes_buffer),
                       /*fatal=*/true);
             return;
         }

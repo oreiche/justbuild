@@ -24,6 +24,7 @@
 
 #include "fmt/core.h"
 #include "gsl/gsl"
+#include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/compatibility/native_support.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_blob.hpp"
@@ -38,6 +39,10 @@
 /// \brief API for local execution.
 class LocalApi final : public IExecutionApi {
   public:
+    explicit LocalApi(std::optional<gsl::not_null<RepositoryConfig*>>
+                          repo_config = std::nullopt)
+        : repo_config_{std::move(repo_config)} {}
+
     auto CreateAction(
         ArtifactDigest const& root_digest,
         std::vector<std::string> const& command,
@@ -74,12 +79,13 @@ class LocalApi final : public IExecutionApi {
                     info.digest, output_paths[i]);
                 if (not infos) {
                     if (Compatibility::IsCompatible()) {
-                        // infos not availablble, and in compatible mode cannot
+                        // infos not available, and in compatible mode cannot
                         // fall back to git
                         return false;
                     }
-                    if (not GitApi().RetrieveToPaths({info},
-                                                     {output_paths[i]})) {
+                    if (repo_config_ and
+                        not GitApi(repo_config_.value())
+                                .RetrieveToPaths({info}, {output_paths[i]})) {
                         return false;
                     }
                 }
@@ -92,12 +98,13 @@ class LocalApi final : public IExecutionApi {
                     info.digest, IsExecutableObject(info.type));
                 if (not blob_path) {
                     if (Compatibility::IsCompatible()) {
-                        // infos not availablble, and in compatible mode cannot
+                        // infos not available, and in compatible mode cannot
                         // fall back to git
                         return false;
                     }
-                    if (not GitApi().RetrieveToPaths({info},
-                                                     {output_paths[i]})) {
+                    if (repo_config_ and
+                        not GitApi(repo_config_.value())
+                                .RetrieveToPaths({info}, {output_paths[i]})) {
                         return false;
                     }
                 }
@@ -107,6 +114,9 @@ class LocalApi final : public IExecutionApi {
                              /*kSetEpochTime=*/true,
                              /*kSetWritable=*/true>(
                              *blob_path, output_paths[i], info.type)) {
+                    Logger::Log(LogLevel::Error,
+                                "staging to output path {} failed.",
+                                output_paths[i].string());
                     return false;
                 }
             }
@@ -140,11 +150,13 @@ class LocalApi final : public IExecutionApi {
                         info.ToString(),
                         fd);
                     if (Compatibility::IsCompatible()) {
-                        // infos not availablble, and in compatible mode cannot
+                        // infos not available, and in compatible mode cannot
                         // fall back to git
                         return false;
                     }
-                    if (not GitApi().RetrieveToFds({info}, {fd}, raw_tree)) {
+                    if (repo_config_ and
+                        not GitApi(repo_config_.value())
+                                .RetrieveToFds({info}, {fd}, raw_tree)) {
                         return false;
                     }
                 }
@@ -273,6 +285,34 @@ class LocalApi final : public IExecutionApi {
             }
         }
         return true;
+    }
+
+    [[nodiscard]] auto UploadFile(std::filesystem::path const& file_path,
+                                  ObjectType type) noexcept -> bool override {
+        Logger::Log(LogLevel::Trace, [&file_path, &type]() {
+            return fmt::format("Storing {} of type {} directly to CAS.",
+                               file_path.string(),
+                               ToChar(type));
+        });
+        switch (type) {
+            case ObjectType::Tree:
+                return storage_->CAS()
+                    .StoreTree</* kOwner= */ true>(file_path)
+                    .has_value();
+            case ObjectType::Symlink:
+            case ObjectType::File:
+                return storage_->CAS()
+                    .StoreBlob</* kOwner= */ true>(file_path,
+                                                   /* is_executable= */ false)
+                    .has_value();
+            case ObjectType::Executable:
+                return storage_->CAS()
+                    .StoreBlob</* kOwner= */ true>(file_path,
+                                                   /* is_executable= */ true)
+                    .has_value();
+        }
+        Ensures(false);  // unreachable
+        return false;
     }
 
     /// NOLINTNEXTLINE(misc-no-recursion)
@@ -413,6 +453,7 @@ class LocalApi final : public IExecutionApi {
     }
 
   private:
+    std::optional<gsl::not_null<RepositoryConfig*>> repo_config_{};
     gsl::not_null<Storage const*> storage_ = &Storage::Instance();
 };
 

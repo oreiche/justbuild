@@ -22,6 +22,7 @@
     , ["src/buildtool/execution_api/execution_service", "operation_cache"]
     , ["src/buildtool/execution_api/local", "config"]
     , ["src/buildtool/execution_api/remote", "config"]
+    , ["src/buildtool/file_system", "file_root"]
     , ["src/buildtool/serve_api/remote", "config"]
     , ["src/buildtool/serve_api/serve_service", "serve_server_implementation"]
     , "common"
@@ -33,6 +34,7 @@
     , "diagnose"
     , "constants"
     , "serve"
+    , "build_utils"
     ]
   , "stage": ["src", "buildtool", "main"]
   , "private-ldflags":
@@ -55,11 +57,12 @@
   , "deps":
     [ ["src/buildtool/build_engine/base_maps", "entity_name"]
     , ["src/buildtool/build_engine/target_map", "configured_target"]
-    , ["@", "json", "", "json"]
+    , ["src/buildtool/common", "config"]
     ]
   , "stage": ["src", "buildtool", "main"]
   , "private-deps":
-    [ ["src/buildtool/build_engine/base_maps", "rule_map"]
+    [ ["@", "json", "", "json"]
+    , ["src/buildtool/build_engine/base_maps", "rule_map"]
     , ["src/buildtool/build_engine/base_maps", "targets_file_map"]
     , ["src/buildtool/build_engine/target_map", "target_map"]
     , ["src/buildtool/logging", "logging"]
@@ -111,6 +114,7 @@
     , ["src/buildtool/build_engine/target_map", "configured_target"]
     , ["src/buildtool/build_engine/target_map", "result_map"]
     , ["src/buildtool/build_engine/analysed_target", "target"]
+    , ["src/buildtool/common", "config"]
     ]
   , "stage": ["src", "buildtool", "main"]
   , "private-deps":
@@ -197,5 +201,22 @@
     , ["src/buildtool/logging", "logging"]
     , "common"
     ]
+  }
+, "build_utils":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["build_utils"]
+  , "hdrs": ["build_utils.hpp"]
+  , "srcs": ["build_utils.cpp"]
+  , "deps":
+    [ ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/build_engine/analysed_target", "target"]
+    , ["src/buildtool/common", "artifact_description"]
+    , ["src/buildtool/common", "common"]
+    , ["src/buildtool/common", "config"]
+    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/storage", "storage"]
+    ]
+  , "stage": ["src", "buildtool", "main"]
+  , "private-deps": [["src/buildtool/logging", "logging"]]
   }
 }
