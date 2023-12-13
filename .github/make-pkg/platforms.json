@@ -276,6 +276,37 @@
   , "gen-pkgconfig":
     [{"Name": "gsl", "Cflags": "-I${gen_includes} -I/usr/include"}]
   }
+, "fedora39":
+  { "type": "rpm"
+  , "image": "fedora:39"
+  , "build-depends":
+    [ "g++"
+    , "python3"
+    , "pandoc"
+    , "patch"
+    , "unzip"
+    , "libgit2-devel"
+    , "protobuf-compiler"
+    , "protobuf-devel"
+    , "protobuf-lite-devel"
+    , "grpc-devel"
+    , "grpc-plugins"
+    , "json-devel"
+    , "openssl-devel"
+    , "fmt-devel"
+    , "cli11-devel"
+    , "libcurl-devel"
+    , "libarchive-devel"
+    , "zlib-devel"
+    , "gsl-lite-devel"
+    , "googleapis-devel"
+    , "pkg-config"
+    ]
+  , "non-local-deps": ["bazel_remote_apis"]
+  , "gen-includes": {"gsl/gsl": "#include <gsl/gsl-lite.hpp>"}
+  , "gen-pkgconfig":
+    [{"Name": "gsl", "Cflags": "-I${gen_includes} -I/usr/include"}]
+  }
 , "bundled-deb":
   { "type": "deb"
   , "image": "ubuntu:20.04"
