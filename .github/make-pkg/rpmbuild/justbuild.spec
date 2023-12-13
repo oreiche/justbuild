@@ -8,7 +8,7 @@ URL:            https://github.com/just-buildsystem/justbuild
 Source0:        justbuild-VERSION.tar.gz
 
 BuildRequires:  make, BUILD_DEPENDS
-Recommends:     python3, bash-completion
+Recommends:     python3, bash-completion, git >= 2.29
 
 %description
 Justbuild is a generic build system supporting multi-repository builds. A

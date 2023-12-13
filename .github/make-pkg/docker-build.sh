@@ -68,7 +68,7 @@ EOL
     # verify rpm package
     docker run ${DOCKER_ARGS} ${IMAGE} /bin/bash -c "\
       set -e; \
-      dnf install -y ./work_${NAME}/source/rpmbuild/RPMS/x86_64/justbuild-*rpm; \
+      dnf install --setopt=install_weak_deps=False -y ./work_${NAME}/source/rpmbuild/RPMS/x86_64/justbuild-*rpm; \
       just version && just-mr mrversion; \
       if [ $? = 0 ]; then touch ./work_${NAME}/success; fi"
   fi
