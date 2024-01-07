@@ -110,7 +110,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     COMPAT_LEVEL=$(dpkg -s debhelper | sed -n 's/^Version:\s\+\([0-9]*\).*/\1/p')
 
     # copy prepared debian files
-    cp ${ROOTDIR}/debian/* ./debian/
+    cp -r ${ROOTDIR}/debian/* ./debian/
 
     # use clang on older platforms
     if echo ${BUILD_DEPENDS} | grep -q clang; then
@@ -150,6 +150,9 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     # remove unused files
     find ./debian/ -type f -iname '*.ex' -delete
     rm -f ./debian/{README.source,justbuild-docs.docs}
+
+    # set reproducible build path (for cache hits during package rebuilds)
+    sed -i 's|BUILDDIR ?= .*|BUILDDIR ?= /tmp/build|g' ./debian/justbuild.makefile
 
     # build source package
     dpkg-buildpackage -S
