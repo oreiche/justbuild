@@ -1,6 +1,6 @@
 PREFIX ?= /usr
-DATADIR ?= ./debian
-BUILDDIR ?= /tmp/build
+DATADIR ?= $(CURDIR)/debian
+BUILDDIR ?= $(DATADIR)/build
 DISTFILES ?= $(DATADIR)/third_party
 
 ifeq ($(shell uname -m),aarch64)

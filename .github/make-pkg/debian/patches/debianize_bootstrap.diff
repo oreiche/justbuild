@@ -1,0 +1,21 @@
+Description: Debianize bootstrap process
+ Enable in-source builds for the bootstrap, as out-of-source builds are
+ forbidden by Debian policy: "Required targets must not attempt to write outside
+ of the unpacked source package tree."
+ https://www.debian.org/doc/debian-policy/ch-source.html#main-building-script-debian-rules
+Author: Oliver Reiche <oliver.reiche@gmail.com>
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+Index: b/bin/bootstrap.py
+===================================================================
+--- a/bin/bootstrap.py
++++ b/bin/bootstrap.py
+@@ -348,7 +348,7 @@ def bootstrap():
+     with open(os.path.join(WRKDIR, "build-conf.json"), 'w') as f:
+         json.dump(CONF, f, indent=2)
+     src_wrkdir = os.path.join(WRKDIR, "src")
+-    shutil.copytree(SRCDIR, src_wrkdir)
++    shutil.copytree(SRCDIR, src_wrkdir, ignore=shutil.ignore_patterns('debian'))
+     if LOCAL_DEPS:
+         config_to_local(
+             repos_file =os.path.join(src_wrkdir, REPOS),
