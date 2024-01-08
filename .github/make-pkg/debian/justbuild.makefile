@@ -34,7 +34,12 @@ export JUST_BUILD_CONF
 export http_proxy = http://8.8.8.8:3128
 export https_proxy = http://8.8.8.8:3128
 
-MDFILES := $(wildcard ./share/man/*.md)
+# copy man sources and rename just.1.md to justbuild.1.md
+$(shell mkdir -p $(BUILDDIR)/man \
+        && cp ./share/man/*.md $(BUILDDIR)/man \
+        && mv $(BUILDDIR)/man/just.1.md $(BUILDDIR)/man/justbuild.1.md)
+
+MDFILES := $(wildcard $(BUILDDIR)/man/*.md)
 MANPAGES := $(addprefix $(BUILDDIR)/, $(patsubst %.md, %, $(MDFILES)))
 
 
@@ -78,10 +83,10 @@ man-pages: $(MANPAGES)
 	  $(shell echo debian/man/$$(basename $(m)) >> $(DATADIR)/justbuild.manpages))
 
 install: justbuild
-	install -D $(BUILDDIR)/out/bin/just $(DESTDIR)/$(PREFIX)/bin/just
+	install -D $(BUILDDIR)/out/bin/just $(DESTDIR)/$(PREFIX)/bin/justbuild
 	install -D $(BUILDDIR)/out/bin/just-mr $(DESTDIR)/$(PREFIX)/bin/just-mr
 	install -D ./bin/just-import-git.py $(DESTDIR)/$(PREFIX)/bin/just-import-git
-	install -D ./share/just_complete.bash $(DESTDIR)/$(PREFIX)/share/bash-completion/completions/just
+	install -D ./share/just_complete.bash $(DESTDIR)/$(PREFIX)/share/bash-completion/completions/justbuild
 
 clean:
 	rm -rf $(BUILDDIR)/*

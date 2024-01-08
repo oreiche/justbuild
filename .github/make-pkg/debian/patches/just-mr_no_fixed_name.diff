@@ -1,0 +1,87 @@
+Description: just-mr: don't make the command line pretend a fixed name
+ Cherry picked from upstream commit e15f11ce0a7813602d9627e95ae9fb125afa891e.
+Author: Oliver Reiche <oliver.reiche@gmail.com>
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+Index: b/share/man/just-mr.1.md
+===================================================================
+--- a/share/man/just-mr.1.md
++++ b/share/man/just-mr.1.md
+@@ -3,8 +3,7 @@
+ NAME
+ ====
+ 
+-just-mr - multi-repository configuration tool and launcher for
+-**`just`**(1)
++just-mr - multi-repository configuration tool and launcher for the build tool
+ 
+ SYNOPSIS
+ ========
+Index: b/src/other_tools/just_mr/cli.hpp
+===================================================================
+--- a/src/other_tools/just_mr/cli.hpp
++++ b/src/other_tools/just_mr/cli.hpp
+@@ -136,7 +136,10 @@ static inline void SetupMultiRepoCommonA
+            "CA certificate bundle to use for SSL verification when fetching "
+            "archives from remote.")
+         ->type_name("CA_BUNDLE");
+-    app->add_option("--just", clargs->just_path, "Path to the just binary.")
++    app->add_option("--just",
++                    clargs->just_path,
++                    fmt::format("The build tool to be launched (default: {}).",
++                                kDefaultJustPath))
+         ->type_name("PATH");
+     app->add_option("--main",
+                     clargs->main,
+@@ -152,7 +155,8 @@ static inline void SetupMultiRepoCommonA
+         ->type_name("RCFILE");
+     app->add_option("--git",
+                     clargs->git_path,
+-                    "Path to the git binary. (Default: \"git\")")
++                    fmt::format("Path to the git binary. (Default: {})",
++                                kDefaultGitPath))
+         ->type_name("PATH");
+     app->add_flag("--norc", clargs->norc, "Do not use any just-mrrc file.");
+     app->add_option("-j, --jobs",
+Index: b/src/other_tools/just_mr/main.cpp
+===================================================================
+--- a/src/other_tools/just_mr/main.cpp
++++ b/src/other_tools/just_mr/main.cpp
+@@ -93,12 +93,13 @@ void SetupSetupCommandArguments(
+ [[nodiscard]] auto ParseCommandLineArguments(int argc, char const* const* argv)
+     -> CommandLineArguments {
+     CLI::App app(
+-        "just-mr, a multi-repository configuration tool and launcher for just");
++        "just-mr, a multi-repository configuration tool and launcher for the "
++        "build tool");
+     app.option_defaults()->take_last();
+     auto* cmd_mrversion = app.add_subcommand(
+         "mrversion", "Print version information in JSON format of this tool.");
+-    auto* cmd_setup =
+-        app.add_subcommand("setup", "Setup and generate just configuration");
++    auto* cmd_setup = app.add_subcommand(
++        "setup", "Setup and generate configuration for the build tool");
+     auto* cmd_setup_env = app.add_subcommand(
+         "setup-env", "Setup without workspace root for the main repository.");
+     auto* cmd_fetch =
+@@ -107,15 +108,16 @@ void SetupSetupCommandArguments(
+         "update",
+         "Advance Git commit IDs and print updated just-mr configuration.");
+     auto* cmd_do = app.add_subcommand(
+-        "do", "Canonical way of specifying just subcommands.");
++        "do", "Canonical way of specifying subcommands to be launched.");
+     cmd_do->set_help_flag();  // disable help flag
+     // define just subcommands
+     std::vector<CLI::App*> cmd_just_subcmds{};
+     cmd_just_subcmds.reserve(kKnownJustSubcommands.size());
+     for (auto const& known_subcmd : kKnownJustSubcommands) {
+-        auto* subcmd = app.add_subcommand(
+-            known_subcmd.first,
+-            "Run setup and call \"just " + known_subcmd.first + "\".");
++        auto* subcmd =
++            app.add_subcommand(known_subcmd.first,
++                               "Run setup and launch the \"" +
++                                   known_subcmd.first + "\" subcommand.");
+         subcmd->set_help_flag();  // disable help flag
+         cmd_just_subcmds.emplace_back(subcmd);
+     }

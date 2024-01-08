@@ -62,14 +62,14 @@ EOL
       export DEBIAN_FRONTEND=noninteractive; \
       apt update; \
       apt install --no-install-recommends -y ./work_${NAME}/source/justbuild_*.deb; \
-      just version && just-mr mrversion; \
+      just-mr version && just-mr mrversion; \
       if [ $? = 0 ]; then touch ./work_${NAME}/success; fi"
   elif [ "${PKG}" = "rpm" ] && [ -f ./work_${NAME}/source/rpmbuild/RPMS/x86_64/justbuild-*.rpm ]; then
     # verify rpm package
     docker run ${DOCKER_ARGS} ${IMAGE} /bin/bash -c "\
       set -e; \
       dnf install --setopt=install_weak_deps=False -y ./work_${NAME}/source/rpmbuild/RPMS/x86_64/justbuild-*rpm; \
-      just version && just-mr mrversion; \
+      just-mr version && just-mr mrversion; \
       if [ $? = 0 ]; then touch ./work_${NAME}/success; fi"
   fi
 }
