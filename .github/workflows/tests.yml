@@ -3,6 +3,7 @@ name: Tests
 on:
   push:
     branches:
+      - testing*
       - github-ci*
 
 jobs:
@@ -11,49 +12,48 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-22.04
     steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Restore local cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/just
           key: tests-${{ runner.os }}-debug
 
-      - name: Checkout sources
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Run and prepare docker image
         run: |
-          docker run -it -d --name ubuntu \
+          docker run -it -d --name voidlinux \
             -v $GITHUB_WORKSPACE:/workspace \
             -v ~/.cache/just:/root/.cache/just \
-            -w /workspace ubuntu:20.04
-          docker exec ubuntu bash -c "\
+            -w /workspace ghcr.io/void-linux/void-musl:latest
+          docker exec voidlinux sh -c "\
             set -e; \
-            apt update; \
-            apt install --yes git jq curl wget clang libstdc++-10-dev patch; \
+            xbps-install -Syu xbps; \
+            xbps-install -Syu bash gcc justbuild patch python3; \
+            xbps-install -Syu git jq curl wget patch diffutils which tar python3-yaml; \
             git config --global --add safe.directory /workspace; \
-            git config --global --add safe.directory /root/.cache/just/git; \
-            export PREFIX=/usr/local; \
-            ./.github/install-just.sh"
+            git config --global --add safe.directory /root/.cache/just/git"
 
       - name: Run all tests in native mode
         run: |
-          docker exec ubuntu bash -c "\
+          docker exec voidlinux bash -c "\
             set -e; \
-            echo '{\"DEBUG\":true,\"TEST_ENV\":{},\"DROP_LARGE_TESTS\":true}' > debug-native.conf; \
+            echo '{\"TOOLCHAIN_CONFIG\":{\"FAMILY\":\"gnu\"},\"CC\":\"gcc\",\"CXX\":\"g++\",\"AR\":\"ar\",\"DEBUG\":true,\"TEST_ENV\":{\"PATH\":\"/bin:/usr/bin\"},\"DROP_LARGE_TESTS\":true}' > debug-native.conf; \
             just-mr --main 'just tests' build -c debug-native.conf ALL"
 
       - name: Run all tests in compatible mode
         run: |
-          docker exec ubuntu bash -c "\
+          docker exec voidlinux bash -c "\
             set -e; \
-            echo '{\"DEBUG\":true,\"TEST_ENV\":{\"COMPATIBLE\":\"YES\"},\"DROP_LARGE_TESTS\":true}' > debug-compat.conf; \
+            echo '{\"TOOLCHAIN_CONFIG\":{\"FAMILY\":\"gnu\"},\"CC\":\"gcc\",\"CXX\":\"g++\",\"AR\":\"ar\",\"DEBUG\":true,\"TEST_ENV\":{\"PATH\":\"/bin:/usr/bin\",\"COMPATIBLE\":\"YES\"},\"DROP_LARGE_TESTS\":true}' > debug-compat.conf; \
             just-mr --main 'just tests' build -c debug-compat.conf ALL"
 
       - name: Run garbage collector and clean cache
         run: |
-          docker exec ubuntu bash -c "set -e; just gc"
+          docker exec voidlinux bash -c "set -e; just gc"
           gh extension install actions/gh-actions-cache
           if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'tests-${{ runner.os }}-debug')" ]; then
             gh actions-cache delete "tests-${{ runner.os }}-debug" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
@@ -73,49 +73,48 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-22.04
     steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Restore local cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/just
           key: tests-${{ runner.os }}-release
 
-      - name: Checkout sources
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Run and prepare docker image
         run: |
-          docker run -it -d --name ubuntu \
+          docker run -it -d --name voidlinux \
             -v $GITHUB_WORKSPACE:/workspace \
             -v ~/.cache/just:/root/.cache/just \
-            -w /workspace ubuntu:20.04
-          docker exec ubuntu bash -c "\
+            -w /workspace ghcr.io/void-linux/void-musl:latest
+          docker exec voidlinux sh -c "\
             set -e; \
-            apt update; \
-            apt install --yes git jq curl wget clang libstdc++-10-dev patch; \
+            xbps-install -Syu xbps; \
+            xbps-install -Syu bash gcc justbuild patch python3; \
+            xbps-install -Syu git jq curl wget patch diffutils which tar python3-yaml; \
             git config --global --add safe.directory /workspace; \
-            git config --global --add safe.directory /root/.cache/just/git; \
-            export PREFIX=/usr/local; \
-            ./.github/install-just.sh"
+            git config --global --add safe.directory /root/.cache/just/git"
 
       - name: Run all tests in native mode
         run: |
-          docker exec ubuntu bash -c "\
+          docker exec voidlinux bash -c "\
             set -e; \
-            echo '{\"DEBUG\":false,\"TEST_ENV\":{},\"DROP_LARGE_TESTS\":true}' > release-native.conf; \
+            echo '{\"TOOLCHAIN_CONFIG\":{\"FAMILY\":\"gnu\"},\"CC\":\"gcc\",\"CXX\":\"g++\",\"AR\":\"ar\",\"DEBUG\":false,\"TEST_ENV\":{\"PATH\":\"/bin:/usr/bin\"},\"DROP_LARGE_TESTS\":true}' > release-native.conf; \
             just-mr --main 'just tests' build -c release-native.conf ALL"
 
       - name: Run all tests in compatible mode
         run: |
-          docker exec ubuntu bash -c "\
+          docker exec voidlinux bash -c "\
             set -e; \
-            echo '{\"DEBUG\":false,\"TEST_ENV\":{\"COMPATIBLE\":\"YES\"},\"DROP_LARGE_TESTS\":true}' > release-compat.conf; \
+            echo '{\"TOOLCHAIN_CONFIG\":{\"FAMILY\":\"gnu\"},\"CC\":\"gcc\",\"CXX\":\"g++\",\"AR\":\"ar\",\"DEBUG\":false,\"TEST_ENV\":{\"PATH\":\"/bin:/usr/bin\",\"COMPATIBLE\":\"YES\"},\"DROP_LARGE_TESTS\":true}' > release-compat.conf; \
             just-mr --main 'just tests' build -c release-compat.conf ALL"
 
       - name: Run garbage collector and clean cache
         run: |
-          docker exec ubuntu bash -c "set -e; just gc"
+          docker exec voidlinux bash -c "set -e; just gc"
           gh extension install actions/gh-actions-cache
           if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'tests-${{ runner.os }}-release')" ]; then
             gh actions-cache delete "tests-${{ runner.os }}-release" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
