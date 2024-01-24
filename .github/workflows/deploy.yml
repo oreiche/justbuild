@@ -1,4 +1,4 @@
-name: Bootstrap and Deploy
+name: Build and Deploy
 
 on:
   push:
@@ -12,64 +12,43 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-22.04
     steps:
-      - name: Restore local cache
-        uses: actions/cache/restore@v3
-        with:
-          path: ~/.cache/just
-          key: deploy-${{ runner.os }}-x86_64
-
       - name: Checkout sources
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Read commit info
+      - name: Compute base commit
         run: |
           git fetch https://github.com/just-buildsystem/justbuild master
           BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
-          COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
-          echo "COMMIT_TIME=${COMMIT_TIME}" >> $GITHUB_ENV
+          echo "BASE_COMMIT=${BASE_COMMIT}" >> $GITHUB_ENV
 
-      - name: Run and prepare docker image
+      - name: Restore local cache
+        uses: actions/cache/restore@v3
+        with:
+          path: ./work_static-x86_64/build/.just
+          key: deploy-${{ runner.os }}-x86_64
+
+      - name: Build TAR package
         run: |
-          docker run -it -d --name ubuntu \
-            -v $GITHUB_WORKSPACE:/workspace \
-            -v ~/.cache/just:/tmp/justbuild_x86_64/.just \
-            -w /workspace ubuntu:20.04
-          docker exec ubuntu bash -c "\
-            set -e; \
-            apt update; \
-            apt install --yes git wget python3 clang libstdc++-10-dev unzip patch; \
-            git config --global --add safe.directory /workspace; \
-            git config --global --add safe.directory /tmp/justbuild_x86_64/.just/git"
+          .github/make-pkg/docker-build.sh ${BASE_COMMIT} static-x86_64
+          cp ./work_static-x86_64/source/justbuild-*.tar.gz .
 
-      - name: Bootstrap just for x86_64
+      - name: Build DEB package
         run: |
-          docker exec ubuntu bash -c "\
-            set -e; \
-            export JUST_BUILD_CONF='{\"TOOLCHAIN_CONFIG\":{\"FAMILY\":\"clang\"},\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}'; \
-            ./bin/bootstrap.py . /tmp/justbuild_x86_64"
+          .github/make-pkg/docker-build.sh ${BASE_COMMIT} bundled-deb
+          cp ./work_bundled-deb/source/justbuild_*.deb .
 
-      - name: Build just-mr for x86_64
+      - name: Build RPM package
         run: |
-          docker exec ubuntu bash -c "\
-            set -e; \
-            export PATH=/tmp/justbuild_x86_64/out/bin:\$PATH; \
-            ./bin/just-mr.py \
-              --local-build-root /tmp/justbuild_x86_64/.just \
-              install \
-              -c /tmp/justbuild_x86_64/build-conf.json \
-              -o /tmp/justbuild_x86_64/out/ 'installed just-mr'"
+          .github/make-pkg/docker-build.sh ${BASE_COMMIT} bundled-rpm
+          cp ./work_bundled-rpm/source/rpmbuild/RPMS/x86_64/justbuild-*.rpm .
 
-      - name: Collect x86_64 Linux binaries
+      - name: Collect packages
         run: |
-          docker exec ubuntu bash -c "\
-            set -e; \
-            mkdir -p justbuild-x86_64-linux/bin; \
-            cp /tmp/justbuild_x86_64/out/bin/{just,just-mr} justbuild-x86_64-linux/bin/"
-          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-x86_64-linux.tar.gz justbuild-x86_64-linux
+          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-x86_64-linux.tar.gz *.tar.gz *.deb *.rpm
 
-      - name: Upload x86_64 Linux binaries
+      - name: Upload packages
         uses: actions/upload-artifact@v3
         with:
           name: justbuild-x86_64-linux
@@ -79,10 +58,9 @@ jobs:
       - name: Run garbage collector and clean cache
         if: ${{ success() }}
         run: |
-          docker exec ubuntu bash -c "\
-            set -e; \
-            export PATH=/tmp/justbuild_x86_64/out/bin:\$PATH; \
-            just gc --local-build-root /tmp/justbuild_x86_64/.just"
+          docker run --rm -v $GITHUB_WORKSPACE:/workspace -w /workspace \
+            just-make-tar:static-x86_64 sh -c "\
+              just gc --local-build-root \$(pwd)/work_static-x86_64/build/.just"
           gh extension install actions/gh-actions-cache
           if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-x86_64')" ]; then
             gh actions-cache delete "deploy-${{ runner.os }}-x86_64" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
@@ -94,96 +72,56 @@ jobs:
         uses: actions/cache/save@v3
         if: ${{ success() }}
         with:
-          path: ~/.cache/just
+          path: ./work_static-x86_64/build/.just
           key: deploy-${{ runner.os }}-x86_64
 
-  linux-arm64:
-    name: Linux arm64
+  linux-aarch64:
+    name: Linux aarch64
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-22.04
-    needs: linux-x86_64
     steps:
-      - name: Restore local cache
-        uses: actions/cache/restore@v3
-        with:
-          path: ~/.cache/just
-          key: deploy-${{ runner.os }}-arm64
-
       - name: Checkout sources
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Retrieve x86_64 Linux binaries
-        uses: actions/download-artifact@v3
-        with:
-          name: justbuild-x86_64-linux
-
-      - name: Unpack x86_64 Linux binaries
-        run: |
-          tar -xzvf justbuild-x86_64-linux.tar.gz
-
-      - name: Read commit info
+      - name: Compute base commit
         run: |
           git fetch https://github.com/just-buildsystem/justbuild master
           BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
-          COMMIT_TIME="$(git log -n1 ${BASE_COMMIT} --format=%ct)"
-          echo "COMMIT_TIME=${COMMIT_TIME}" >> $GITHUB_ENV
+          echo "BASE_COMMIT=${BASE_COMMIT}" >> $GITHUB_ENV
 
-      - name: Run and prepare docker image
+      - name: Restore local cache
+        uses: actions/cache/restore@v3
+        with:
+          path: ./work_static-aarch64/build/.just
+          key: deploy-${{ runner.os }}-aarch64
+
+      - name: Build TAR package
         run: |
-          docker run -it -d --name ubuntu \
-            -v $GITHUB_WORKSPACE:/workspace \
-            -v ~/.cache/just:/root/.cache/just \
-            -w /workspace ubuntu:20.04
-          docker exec ubuntu bash -c "\
-            set -e; \
-            apt update; \
-            apt install --yes git g++-10 g++-10-aarch64-linux-gnu patch; \
-            update-alternatives --install /usr/bin/x86_64-linux-gnu-gcc x86_64-linux-gnu-gcc /usr/bin/x86_64-linux-gnu-gcc-10 30; \
-            update-alternatives --install /usr/bin/x86_64-linux-gnu-g++ x86_64-linux-gnu-g++ /usr/bin/x86_64-linux-gnu-g++-10 30; \
-            update-alternatives --install /usr/bin/aarch64-linux-gnu-gcc aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-10 30; \
-            update-alternatives --install /usr/bin/aarch64-linux-gnu-g++ aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-10 30; \
-            git config --global --add safe.directory /workspace; \
-            git config --global --add safe.directory /root/.cache/just/git"
+          .github/make-pkg/docker-build.sh ${BASE_COMMIT} static-aarch64
+          cp ./work_static-aarch64/source/justbuild-*.tar.gz .
 
-      - name: Build just for arm64
+      - name: Collect packages
         run: |
-          docker exec ubuntu bash -c "\
-            set -e; \
-            echo '{\"TOOLCHAIN_CONFIG\":{\"FAMILY\":\"gnu\"},\"ARCH\":\"x86_64\",\"TARGET_ARCH\":\"arm64\",\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > gcc-arm64.conf; \
-            export PATH=\$(pwd)/justbuild-x86_64-linux/bin:\$PATH; \
-            just-mr install -c gcc-arm64.conf -o justbuild-arm64-linux 'installed just'"
+          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-aarch64-linux.tar.gz *.tar.gz
 
-      - name: Build just-mr for arm64
-        run: |
-          docker exec ubuntu bash -c "\
-            set -e; \
-            echo '{\"TOOLCHAIN_CONFIG\":{\"FAMILY\":\"gnu\"},\"ARCH\":\"x86_64\",\"TARGET_ARCH\":\"arm64\",\"SOURCE_DATE_EPOCH\":'${COMMIT_TIME}'}' > gcc-arm64.conf; \
-            export PATH=\$(pwd)/justbuild-x86_64-linux/bin:\$PATH; \
-            just-mr install -c gcc-arm64.conf -o justbuild-arm64-linux 'installed just-mr'"
-
-      - name: Collect arm64 Linux binaries
-        run: |
-          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-arm64-linux.tar.gz justbuild-arm64-linux
-
-      - name: Upload arm64 Linux binaries
+      - name: Upload packages
         uses: actions/upload-artifact@v3
         with:
-          name: justbuild-arm64-linux
-          path: justbuild-arm64-linux.tar.gz
+          name: justbuild-aarch64-linux
+          path: justbuild-aarch64-linux.tar.gz
           retention-days: 1
 
       - name: Run garbage collector and clean cache
         if: ${{ success() }}
         run: |
-          docker exec ubuntu bash -c "\
-            set -e; \
-            export PATH=\$(pwd)/justbuild-x86_64-linux/bin:\$PATH; \
-            just gc"
+          docker run --rm -v $GITHUB_WORKSPACE:/workspace -w /workspace \
+            just-make-tar:static-aarch64 sh -c "\
+              just gc --local-build-root \$(pwd)/work_static-x86_64/build/.just"
           gh extension install actions/gh-actions-cache
-          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-arm64')" ]; then
-            gh actions-cache delete "deploy-${{ runner.os }}-arm64" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
+          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-aarch64')" ]; then
+            gh actions-cache delete "deploy-${{ runner.os }}-aarch64" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -192,214 +130,45 @@ jobs:
         uses: actions/cache/save@v3
         if: ${{ success() }}
         with:
-          path: ~/.cache/just
-          key: deploy-${{ runner.os }}-arm64
-
-  linux-noarch:
-    name: Linux noarch
-    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      - name: Run and prepare docker image
-        run: |
-          docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
-          docker exec ubuntu bash -c "\
-            set -e; \
-            apt update; \
-            apt install --yes pandoc"
-
-      - name: Build man pages
-        run: |
-          mkdir -p justbuild-noarch-linux/share/man/man{1,5}
-          docker exec ubuntu bash -c "\
-            set -e; \
-            pandoc -s -t man ./share/man/just.1.md -o justbuild-noarch-linux/share/man/man1/just.1; \
-            pandoc -s -t man ./share/man/just-mr.1.md -o justbuild-noarch-linux/share/man/man1/just-mr.1; \
-            pandoc -s -t man ./share/man/just-import-git.1.md -o justbuild-noarch-linux/share/man/man1/just-import-git.1; \
-            pandoc -s -t man ./share/man/just-deduplicate-repos.1.md -o justbuild-noarch-linux/share/man/man1/just-deduplicate-repos.1; \
-            pandoc -s -t man ./share/man/just-mrrc.5.md -o justbuild-noarch-linux/share/man/man5/just-mrrc.5; \
-            pandoc -s -t man ./share/man/just-graph-file.5.md -o justbuild-noarch-linux/share/man/man5/just-graph-file.5; \
-            pandoc -s -t man ./share/man/just-repository-config.5.md -o justbuild-noarch-linux/share/man/man5/just-repository-config.5; \
-            pandoc -s -t man ./share/man/just-mr-repository-config.5.md -o justbuild-noarch-linux/share/man/man5/just-mr-repository-config.5"
-
-      - name: Collect noarch Linux files
-        run: |
-          mkdir -p justbuild-noarch-linux/{bin,share/bash-completion/completions}
-          cp ./bin/just-import-git.py justbuild-noarch-linux/bin/just-import-git
-          cp ./bin/just-deduplicate-repos.py justbuild-noarch-linux/bin/just-deduplicate-repos
-          cp ./share/just_complete.bash justbuild-noarch-linux/share/bash-completion/completions/just
-          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-noarch-linux.tar.gz justbuild-noarch-linux
-
-      - name: Upload noarch Linux files
-        uses: actions/upload-artifact@v3
-        with:
-          name: justbuild-noarch-linux
-          path: justbuild-noarch-linux.tar.gz
-          retention-days: 1
-
-  deb-package:
-    name: Debian Package
-    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Restore local cache
-        uses: actions/cache/restore@v3
-        with:
-          path: ./work_bundled-deb/build/.just
-          key: deploy-${{ runner.os }}-deb-pkg
-
-      - name: Checkout sources
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      - name: Build Debian package
-        run: |
-          git fetch https://github.com/just-buildsystem/justbuild master
-          BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
-          .github/make-pkg/docker-build.sh ${BASE_COMMIT} bundled-deb
-          cp ./work_bundled-deb/source/justbuild_*.deb .
-
-      - name: Upload Debian package
-        uses: actions/upload-artifact@v3
-        with:
-          name: justbuild-deb-package
-          path: justbuild_*.deb
-          retention-days: 1
-
-      - name: Run garbage collector and clean cache
-        if: ${{ success() }}
-        run: |
-          ./work_bundled-deb/build/out/bin/just gc --local-build-root $(pwd)/work_bundled-deb/build/.just
-          gh extension install actions/gh-actions-cache
-          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-deb-pkg')" ]; then
-            gh actions-cache delete "deploy-${{ runner.os }}-deb-pkg" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Store local cache
-        uses: actions/cache/save@v3
-        if: ${{ success() }}
-        with:
-          path: ./work_bundled-deb/build/.just
-          key: deploy-${{ runner.os }}-deb-pkg
-
-  rpm-package:
-    name: RPM Package
-    if: "!contains(github.event.head_commit.message, '[skip-ci]')"
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Restore local cache
-        uses: actions/cache/restore@v3
-        with:
-          path: ./work_bundled-rpm/build/.just
-          key: deploy-${{ runner.os }}-rpm-pkg
-
-      - name: Checkout sources
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      - name: Build RPM package
-        run: |
-          git fetch https://github.com/just-buildsystem/justbuild master
-          BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
-          .github/make-pkg/docker-build.sh ${BASE_COMMIT} bundled-rpm
-          cp ./work_bundled-rpm/source/rpmbuild/RPMS/x86_64/justbuild-*.rpm .
-
-      - name: Upload RPM package
-        uses: actions/upload-artifact@v3
-        with:
-          name: justbuild-rpm-package
-          path: justbuild-*.rpm
-          retention-days: 1
-
-      - name: Run garbage collector and clean cache
-        if: ${{ success() }}
-        run: |
-          ./work_bundled-rpm/build/out/bin/just gc --local-build-root $(pwd)/work_bundled-rpm/build/.just
-          gh extension install actions/gh-actions-cache
-          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-rpm-pkg')" ]; then
-            gh actions-cache delete "deploy-${{ runner.os }}-rpm-pkg" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Store local cache
-        uses: actions/cache/save@v3
-        if: ${{ success() }}
-        with:
-          path: ./work_bundled-rpm/build/.just
-          key: deploy-${{ runner.os }}-rpm-pkg
+          path: ./work_static-aarch64/build/.just
+          key: deploy-${{ runner.os }}-aarch64
 
   deploy-packages:
     name: Deploy Packages
     if: "!contains(github.event.head_commit.message, '[skip-ci]')"
     runs-on: ubuntu-22.04
-    needs: [linux-x86_64, linux-arm64, linux-noarch, deb-package, rpm-package]
+    needs: [linux-x86_64, linux-aarch64]
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Retrieve x86_64 Linux binaries
+      - name: Retrieve x86_64 Linux packages
         uses: actions/download-artifact@v3
         with:
           name: justbuild-x86_64-linux
 
-      - name: Retrieve arm64 Linux binaries
+      - name: Retrieve aarch64 Linux packages
         uses: actions/download-artifact@v3
         with:
-          name: justbuild-arm64-linux
-
-      - name: Retrieve noarch Linux files
-        uses: actions/download-artifact@v3
-        with:
-          name: justbuild-noarch-linux
-
-      - name: Retrieve Debian package
-        uses: actions/download-artifact@v3
-        with:
-          name: justbuild-deb-package
-
-      - name: Retrieve RPM package
-        uses: actions/download-artifact@v3
-        with:
-          name: justbuild-rpm-package
+          name: justbuild-aarch64-linux
 
       - name: Unpack retrieved archives
         run: |
           tar -xzvf justbuild-x86_64-linux.tar.gz
-          tar -xzvf justbuild-arm64-linux.tar.gz
-          tar -xzvf justbuild-noarch-linux.tar.gz
-          rm -f *.tar.gz
+          rm justbuild-x86_64-linux.tar.gz
+          tar -xzvf justbuild-aarch64-linux.tar.gz
+          rm justbuild-aarch64-linux.tar.gz
 
-      - name: Determine package name
+      - name: Determine release info and create checksums
         run: |
-          git fetch https://github.com/just-buildsystem/justbuild master
-          BASE_COMMIT="$(git merge-base ${GITHUB_REF_NAME} FETCH_HEAD)"
-          VERSION="$(.github/just-version.sh ${BASE_COMMIT})"
+          VERSION="$(ls *.tar.gz | sed -n 's/.*justbuild-\(.*\)-x86_64-linux.tar.gz/\1/p')"
           UNTAGGED=$([[ "$VERSION" = *+* ]] && echo true || echo false)
           TAG_NAME="v$(echo $VERSION | tr '~+' '-')"
           echo "UNTAGGED=${UNTAGGED}" >> $GITHUB_ENV
           echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_ENV
-          echo "PKG_NAME=justbuild-${VERSION}" >> $GITHUB_ENV
-
-      - name: Create packages and checksums
-        run: |
-          mkdir -p $PKG_NAME-{x86_64,aarch64}-linux
-          cp -r justbuild-{x86_64,noarch}-linux/* $PKG_NAME-x86_64-linux/.
-          cp -r justbuild-{arm64,noarch}-linux/* $PKG_NAME-aarch64-linux/.
-          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME-x86_64-linux.tar.gz $PKG_NAME-x86_64-linux
-          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf $PKG_NAME-aarch64-linux.tar.gz $PKG_NAME-aarch64-linux
-          sha256sum $PKG_NAME-*.tar.gz *.deb *.rpm | tee SHA256SUMS
+          sha256sum *.tar.gz *.deb *.rpm | tee SHA256SUMS
 
       - name: Upload package checksums
         uses: actions/upload-artifact@v3
