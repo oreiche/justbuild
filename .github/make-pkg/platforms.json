@@ -317,54 +317,7 @@
     ]
   }
 , "bundled-deb":
-  { "type": "deb"
-  , "image": "ubuntu:20.04"
-  , "build-depends":
-    ["clang", "libstdc++-10-dev", "python3", "pandoc", "patch", "unzip"]
-  , "non-local-deps":
-    [ "fmt"
-    , "ssl"
-    , "json"
-    , "cli11"
-    , "protobuf"
-    , "com_github_grpc_grpc"
-    , "com_google_absl"
-    , "zlib"
-    , "bzip2"
-    , "lzma"
-    , "re2"
-    , "com_github_cares_cares"
-    , "com_github_libgit2_libgit2"
-    , "com_github_microsoft_gsl"
-    , "com_github_curl_curl"
-    , "com_github_libarchive_libarchive"
-    , "google_apis"
-    , "bazel_remote_apis"
-    ]
-  }
+  {"type": "deb", "prebuilt": "static-x86_64", "image": "ubuntu:20.04"}
 , "bundled-rpm":
-  { "type": "rpm"
-  , "image": "fedora:33"
-  , "build-depends": ["g++", "python3", "pandoc", "patch", "unzip"]
-  , "non-local-deps":
-    [ "fmt"
-    , "ssl"
-    , "json"
-    , "cli11"
-    , "protobuf"
-    , "com_github_grpc_grpc"
-    , "com_google_absl"
-    , "zlib"
-    , "bzip2"
-    , "lzma"
-    , "re2"
-    , "com_github_cares_cares"
-    , "com_github_libgit2_libgit2"
-    , "com_github_microsoft_gsl"
-    , "com_github_curl_curl"
-    , "com_github_libarchive_libarchive"
-    , "google_apis"
-    , "bazel_remote_apis"
-    ]
-  }
+  {"type": "rpm", "prebuilt": "static-x86_64", "image": "fedora:33"}
 }
