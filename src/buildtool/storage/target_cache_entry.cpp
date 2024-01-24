@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <exception>
 #include <iterator>
+#include <string>
+#include <vector>
 
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -29,10 +31,18 @@ auto TargetCacheEntry::FromTarget(
     auto result = TargetResult{.artifact_stage = target->Artifacts(),
                                .provides = target->Provides(),
                                .runfiles = target->RunFiles()};
-    if (auto desc = result.ReplaceNonKnownAndToJson(replacements)) {
-        return TargetCacheEntry{*desc};
+    auto desc = result.ReplaceNonKnownAndToJson(replacements);
+    if (not desc) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    std::vector<std::string> implied{};
+    for (auto const& x : target->ImpliedExport()) {
+        implied.emplace_back(x);
+    }
+    if (not implied.empty()) {
+        (*desc)["implied export targets"] = implied;
+    }
+    return TargetCacheEntry{*desc};
 }
 
 auto TargetCacheEntry::FromJson(nlohmann::json desc) noexcept
@@ -43,6 +53,22 @@ auto TargetCacheEntry::FromJson(nlohmann::json desc) noexcept
 auto TargetCacheEntry::ToResult() const noexcept
     -> std::optional<TargetResult> {
     return TargetResult::FromJson(desc_);
+}
+
+auto TargetCacheEntry::ToImplied() const noexcept -> std::set<std::string> {
+    std::set<std::string> result{};
+    if (desc_.contains("implied export targets")) {
+        try {
+            for (auto const& x : desc_["implied export targets"]) {
+                result.emplace(x);
+            }
+        } catch (std::exception const& ex) {
+            Logger::Log(LogLevel::Warning,
+                        "Exception reading implied export targets: {}",
+                        ex.what());
+        }
+    }
+    return result;
 }
 
 [[nodiscard]] auto ToObjectInfo(nlohmann::json const& json)

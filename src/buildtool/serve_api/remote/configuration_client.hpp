@@ -31,16 +31,14 @@
 class ConfigurationClient {
   public:
     ConfigurationClient(std::string const& server, Port port) noexcept
-        :
-
-          stub_{justbuild::just_serve::Configuration::NewStub(
+        : stub_{justbuild::just_serve::Configuration::NewStub(
               CreateChannelWithCredentials(server, port))} {}
 
     auto CheckServeRemoteExecution() -> bool;
 
   private:
     std::unique_ptr<justbuild::just_serve::Configuration::Stub> stub_;
-    Logger logger_{"RemoteTargetClient"};
+    Logger logger_{"RemoteConfigurationClient"};
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_SERVE_API_CONFIGURATION_CLIENT_HPP

@@ -16,7 +16,9 @@
 
 #include <algorithm>
 
+#include "fmt/core.h"
 #include "src/buildtool/file_system/file_root.hpp"
+#include "src/buildtool/multithreading/task_system.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/fs_utils.hpp"
 #include "src/other_tools/git_operations/git_repo_remote.hpp"
@@ -411,6 +413,13 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                         remotes_buffer.append(
                             fmt::format("\n> {}", *preferred_url));
                     }
+                    else {
+                        // report failed hostname
+                        remotes_buffer.append(
+                            fmt::format("\n> {} (failed hostname replace: {})",
+                                        fetch_repo,
+                                        hostname));
+                    }
                 }
             }
             if (not fetched) {
@@ -423,12 +432,15 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                             fetch_repo,
                             msg);
                     });
-                if (not git_repo->FetchViaTmpRepo(tmp_dir->GetPath(),
-                                                  fetch_repo,
-                                                  repo_info.branch,
-                                                  git_bin,
-                                                  launcher,
-                                                  wrapped_logger)) {
+                if (git_repo->FetchViaTmpRepo(tmp_dir->GetPath(),
+                                              fetch_repo,
+                                              repo_info.branch,
+                                              git_bin,
+                                              launcher,
+                                              wrapped_logger)) {
+                    fetched = true;
+                }
+                else {
                     // add main fetch URL to buffer
                     remotes_buffer.append(fmt::format("\n> {}", fetch_repo));
                     // now try to fetch from mirrors, in order, if given
@@ -465,6 +477,13 @@ void EnsureCommit(GitRepoInfo const& repo_info,
                                     // add preferred mirror to buffer
                                     remotes_buffer.append(fmt::format(
                                         "\n> {}", *preferred_mirror));
+                                }
+                                else {
+                                    // report failed hostname
+                                    remotes_buffer.append(fmt::format(
+                                        "\n> {} (failed hostname replace: {})",
+                                        mirror,
+                                        hostname));
                                 }
                             }
                         }

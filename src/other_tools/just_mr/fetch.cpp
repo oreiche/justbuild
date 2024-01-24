@@ -16,6 +16,7 @@
 
 #include <filesystem>
 
+#include "fmt/core.h"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/local/local_api.hpp"
@@ -234,6 +235,32 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                         auto repo_desc_sha512 =
                             (*resolved_repo_desc)
                                 ->Get("sha512", Expression::none_t{});
+                        auto repo_desc_mirrors =
+                            (*resolved_repo_desc)
+                                ->Get("mirrors", Expression::list_t{});
+                        std::vector<std::string> mirrors{};
+                        if (repo_desc_mirrors->IsList()) {
+                            mirrors.reserve(repo_desc_mirrors->List().size());
+                            for (auto const& elem : repo_desc_mirrors->List()) {
+                                if (not elem->IsString()) {
+                                    Logger::Log(
+                                        LogLevel::Error,
+                                        "Config: Unsupported list entry {} in "
+                                        "optional field \"mirrors\"",
+                                        elem->ToString());
+                                    return kExitFetchError;
+                                }
+                                mirrors.emplace_back(elem->String());
+                            }
+                        }
+                        else {
+                            Logger::Log(LogLevel::Error,
+                                        "Config: Optional field \"mirrors\" "
+                                        "should be a list of strings, but "
+                                        "found: {}",
+                                        repo_desc_mirrors->ToString());
+                            return kExitFetchError;
+                        }
 
                         ArchiveRepoInfo archive_info = {
                             .archive =
@@ -244,6 +271,7 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                                                repo_desc_distfile->String())
                                          : std::nullopt,
                                  .fetch_url = repo_desc_fetch->get()->String(),
+                                 .mirrors = std::move(mirrors),
                                  .sha256 = repo_desc_sha256->IsString()
                                                ? std::make_optional(
                                                      repo_desc_sha256->String())
@@ -414,10 +442,13 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
         common_args.remote_serve_address, auth_args);
 
     // create async maps
+    auto crit_git_op_ptr = std::make_shared<CriticalGitOpGuard>();
+    auto critical_git_op_map = CreateCriticalGitOpMap(crit_git_op_ptr);
     auto content_cas_map =
         CreateContentCASMap(common_args.just_mr_paths,
                             common_args.alternative_mirrors,
                             common_args.ca_info,
+                            &critical_git_op_map,
                             serve_api_exists,
                             local_api ? &(*local_api) : nullptr,
                             remote_api ? &(*remote_api) : nullptr,
@@ -428,8 +459,6 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
         (fetch_args.backup_to_remote and local_api) ? &(*local_api) : nullptr,
         (fetch_args.backup_to_remote and remote_api) ? &(*remote_api) : nullptr,
         common_args.jobs);
-    auto crit_git_op_ptr = std::make_shared<CriticalGitOpGuard>();
-    auto critical_git_op_map = CreateCriticalGitOpMap(crit_git_op_ptr);
     auto import_to_git_map =
         CreateImportToGitMap(&critical_git_op_map,
                              common_args.git_path->string(),

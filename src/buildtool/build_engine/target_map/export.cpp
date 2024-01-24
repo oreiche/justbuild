@@ -20,6 +20,10 @@
 #include "src/buildtool/build_engine/expression/configuration.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/storage/storage.hpp"
+#ifndef BOOTSTRAP_BUILD_TOOL
+#include "src/buildtool/serve_api/remote/config.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
+#endif  // BOOTSTRAP_BUILD_TOOL
 
 namespace {
 auto const kExpectedFields = std::unordered_set<std::string>{"config_doc",
@@ -61,6 +65,13 @@ void FinalizeExport(
 
     std::unordered_set<std::string> vars_set{};
     vars_set.insert(vars.begin(), vars.end());
+    std::set<std::string> implied{};
+    if (target_cache_key) {
+        implied.insert((*value)->ImpliedExport().begin(),
+                       (*value)->ImpliedExport().end());
+        implied.insert(target_cache_key->Id().digest.hash());
+    }
+
     auto analysis_result = std::make_shared<AnalysedTarget const>(
         TargetResult{.artifact_stage = (*value)->Artifacts(),
                      .provides = provides,
@@ -70,6 +81,7 @@ void FinalizeExport(
         std::vector<Tree::Ptr>{},
         std::move(vars_set),
         std::set<std::string>{},
+        std::move(implied),
         std::move(deps_info));
     analysis_result = result_map->Add(target,
                                       effective_config,
@@ -77,17 +89,6 @@ void FinalizeExport(
                                       target_cache_key,
                                       true);
     (*setter)(std::move(analysis_result));
-}
-
-[[nodiscard]] auto ComputeTargetCacheKey(
-    BuildMaps::Base::EntityName const& export_target,
-    gsl::not_null<RepositoryConfig*> const& repo_config,
-    Configuration const& target_config) -> std::optional<TargetCacheKey> {
-    auto const& target_name = export_target.GetNamedTarget();
-    if (auto repo_key = repo_config->RepositoryKey(target_name.repository)) {
-        return TargetCacheKey::Create(*repo_key, target_name, target_config);
-    }
-    return std::nullopt;
 }
 
 }  // namespace
@@ -107,12 +108,39 @@ void ExportRule(
         return;
     }
     auto effective_config = key.config.Prune(*flexible_vars);
+    auto const& target_name = key.target.GetNamedTarget();
+    auto repo_key = repo_config->RepositoryKey(target_name.repository);
     auto target_cache_key =
-        ComputeTargetCacheKey(key.target, repo_config, effective_config);
+        repo_key
+            ? TargetCacheKey::Create(*repo_key, target_name, effective_config)
+            : std::nullopt;
 
     if (target_cache_key) {
-        if (auto target_cache_value =
-                Storage::Instance().TargetCache().Read(*target_cache_key)) {
+        // first try to get value from local target cache
+        auto target_cache_value =
+            Storage::Instance().TargetCache().Read(*target_cache_key);
+        bool from_just_serve{false};
+
+#ifndef BOOTSTRAP_BUILD_TOOL
+        // if not found locally, try the serve endpoint
+        if (not target_cache_value and RemoteServeConfig::RemoteAddress()) {
+            Logger::Log(LogLevel::Debug,
+                        "Querying just serve for export target {}",
+                        key.target.ToString());
+            target_cache_value =
+                ServeApi::ServeTarget(*target_cache_key, *repo_key);
+            from_just_serve = true;
+        }
+#endif  // BOOTSTRAP_BUILD_TOOL
+
+        if (not target_cache_value) {
+            Statistics::Instance().IncrementExportsUncachedCounter();
+            Logger::Log(LogLevel::Performance,
+                        "Export target {} registered for caching: {}",
+                        key.target.ToString(),
+                        target_cache_key->Id().ToString());
+        }
+        else {
             auto const& [entry, info] = *target_cache_value;
             if (auto result = entry.ToResult()) {
                 auto deps_info = TargetGraphInformation{
@@ -131,6 +159,7 @@ void ExportRule(
                     std::unordered_set<std::string>{flexible_vars->begin(),
                                                     flexible_vars->end()},
                     std::set<std::string>{},
+                    entry.ToImplied(),
                     deps_info);
 
                 analysis_result = result_map->Add(key.target,
@@ -140,8 +169,9 @@ void ExportRule(
                                                   true);
 
                 Logger::Log(LogLevel::Performance,
-                            "Export target {} served from cache: {} -> {}",
+                            "Export target {} served from {}: {} -> {}",
                             key.target.ToString(),
+                            (from_just_serve ? "just-serve" : "cache"),
                             target_cache_key->Id().ToString(),
                             info.ToString());
 
@@ -152,13 +182,6 @@ void ExportRule(
             (*logger)(fmt::format("Reading target entry for key {} failed",
                                   target_cache_key->Id().ToString()),
                       false);
-        }
-        else {
-            Statistics::Instance().IncrementExportsUncachedCounter();
-            Logger::Log(LogLevel::Performance,
-                        "Export target {} registered for caching: {}",
-                        key.target.ToString(),
-                        target_cache_key->Id().ToString());
         }
     }
     else {

@@ -22,9 +22,11 @@
 #include <map>
 #include <optional>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "gsl/gsl"
+#include "src/buildtool/common/remote/remote_common.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/common/tree.hpp"
@@ -49,6 +51,8 @@ class ExecutorImpl {
         gsl::not_null<DependencyGraph::ActionNode const*> const& action,
         gsl::not_null<IExecutionApi*> const& api,
         std::map<std::string, std::string> const& properties,
+        std::vector<std::pair<std::map<std::string, std::string>,
+                              ServerAddress>> const& dispatch_list,
         std::chrono::milliseconds const& timeout,
         IExecutionAction::CacheFlag cache_flag)
         -> std::optional<IExecutionResponse::Ptr> {
@@ -94,7 +98,8 @@ class ExecutorImpl {
             Statistics::Instance().IncrementActionsQueuedCounter();
         }
 
-        auto alternative_api = GetAlternativeEndpoint(properties);
+        auto alternative_api =
+            GetAlternativeEndpoint(properties, dispatch_list);
         if (alternative_api) {
             if (not api->RetrieveToCas(
                     std::vector<Artifact::ObjectInfo>{Artifact::ObjectInfo{
@@ -325,9 +330,15 @@ class ExecutorImpl {
             // if known tree is not available, recursively upload its content
             auto tree = ReadGitTree(repo, repo_config, hash);
             if (not tree) {
+                Logger::Log(
+                    LogLevel::Error, "failed to read git tree {}", hash);
                 return false;
             }
             if (not VerifyOrUploadTree(api, *tree)) {
+                Logger::Log(LogLevel::Error,
+                            "failed to verifyorupload git tree {} [{}]",
+                            tree->Hash(),
+                            hash);
                 return false;
             }
             content = tree->RawData();
@@ -337,6 +348,7 @@ class ExecutorImpl {
             content = ReadGitBlob(repo, repo_config, hash);
         }
         if (not content) {
+            Logger::Log(LogLevel::Error, "failed to get content");
             return false;
         }
 
@@ -609,10 +621,11 @@ class ExecutorImpl {
 
   private:
     [[nodiscard]] static inline auto GetAlternativeEndpoint(
-        const std::map<std::string, std::string>& properties)
+        const std::map<std::string, std::string>& properties,
+        const std::vector<std::pair<std::map<std::string, std::string>,
+                                    ServerAddress>>& dispatch_list)
         -> std::unique_ptr<BazelApi> {
-        for (auto const& [pred, endpoint] :
-             RemoteExecutionConfig::DispatchList()) {
+        for (auto const& [pred, endpoint] : dispatch_list) {
             bool match = true;
             for (auto const& [k, v] : pred) {
                 auto v_it = properties.find(k);
@@ -644,15 +657,18 @@ class Executor {
 
   public:
     explicit Executor(
-        gsl::not_null<RepositoryConfig*> repo_config,
-        IExecutionApi* local_api,
-        IExecutionApi* remote_api,
+        gsl::not_null<RepositoryConfig*> const& repo_config,
+        gsl::not_null<IExecutionApi*> const& local_api,
+        gsl::not_null<IExecutionApi*> const& remote_api,
         std::map<std::string, std::string> properties,
+        std::vector<std::pair<std::map<std::string, std::string>,
+                              ServerAddress>> dispatch_list,
         std::chrono::milliseconds timeout = IExecutionAction::kDefaultTimeout)
         : repo_config_{repo_config},
           local_api_{local_api},
           remote_api_{remote_api},
           properties_{std::move(properties)},
+          dispatch_list_{std::move(dispatch_list)},
           timeout_{timeout} {}
 
     /// \brief Run an action in a blocking manner
@@ -669,6 +685,7 @@ class Executor {
             action,
             remote_api_,
             Impl::MergeProperties(properties_, action->ExecutionProperties()),
+            dispatch_list_,
             Impl::ScaleTime(timeout_, action->TimeoutScale()),
             action->NoCache() ? CF::DoNotCacheOutput : CF::CacheOutput);
 
@@ -693,6 +710,8 @@ class Executor {
     gsl::not_null<IExecutionApi*> local_api_;
     gsl::not_null<IExecutionApi*> remote_api_;
     std::map<std::string, std::string> properties_;
+    std::vector<std::pair<std::map<std::string, std::string>, ServerAddress>>
+        dispatch_list_;
     std::chrono::milliseconds timeout_;
 };
 
@@ -708,17 +727,20 @@ class Rebuilder {
     /// \param properties   Platform properties for execution.
     /// \param timeout      Timeout for action execution.
     Rebuilder(
-        gsl::not_null<RepositoryConfig*> repo_config,
-        IExecutionApi* local_api,
-        IExecutionApi* remote_api,
-        IExecutionApi* api_cached,
+        gsl::not_null<RepositoryConfig*> const& repo_config,
+        gsl::not_null<IExecutionApi*> const& local_api,
+        gsl::not_null<IExecutionApi*> const& remote_api,
+        gsl::not_null<IExecutionApi*> const& api_cached,
         std::map<std::string, std::string> properties,
+        std::vector<std::pair<std::map<std::string, std::string>,
+                              ServerAddress>> dispatch_list,
         std::chrono::milliseconds timeout = IExecutionAction::kDefaultTimeout)
         : repo_config_{repo_config},
           local_api_{local_api},
           remote_api_{remote_api},
           api_cached_{api_cached},
           properties_{std::move(properties)},
+          dispatch_list_{std::move(dispatch_list)},
           timeout_{timeout} {}
 
     [[nodiscard]] auto Process(
@@ -731,6 +753,7 @@ class Rebuilder {
             action,
             remote_api_,
             Impl::MergeProperties(properties_, action->ExecutionProperties()),
+            dispatch_list_,
             Impl::ScaleTime(timeout_, action->TimeoutScale()),
             CF::PretendCached);
 
@@ -744,6 +767,7 @@ class Rebuilder {
             action,
             api_cached_,
             Impl::MergeProperties(properties_, action->ExecutionProperties()),
+            dispatch_list_,
             Impl::ScaleTime(timeout_, action->TimeoutScale()),
             CF::FromCacheOnly);
 
@@ -784,6 +808,8 @@ class Rebuilder {
     gsl::not_null<IExecutionApi*> remote_api_;
     gsl::not_null<IExecutionApi*> api_cached_;
     std::map<std::string, std::string> properties_;
+    std::vector<std::pair<std::map<std::string, std::string>, ServerAddress>>
+        dispatch_list_;
     std::chrono::milliseconds timeout_;
     mutable std::mutex m_;
     mutable std::vector<std::string> cache_misses_{};

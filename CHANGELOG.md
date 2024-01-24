@@ -4,11 +4,8 @@ A feature release on top of `1.2.0`, backwards compatible.
 
 ### Major new features
 
-- New subcommand `just serve` to start server answering queries
-  about the tree of a given commit, if known. The functionality
-  of this subcommand will be extended over time to eventually
-  provide a target-level caching service as described in the
-  corresponding design document.
+- New subcommand `just serve` to start a target-level caching service,
+  as described in the corresponding design document. 
 - `just-mr` is able to back up and retrieve distribution files
   from a remote execution endpoint. This simplifies usage in an
   environment with restricted internet access.
@@ -30,6 +27,9 @@ A feature release on top of `1.2.0`, backwards compatible.
 - When `just-mr` executes the action to generate the desired tree of a
   `"git tree"` repository, it can be specified that certain variables
   of the environment can be inherited.
+- Support for fetching archives from FTP and TFTP was added to `just-mr`
+  if it was built with bundled curl. For package builds, libcurl has
+  enabled whatever the distro considers suitable.
 
 ### Fixes
 
@@ -48,6 +48,12 @@ A feature release on top of `1.2.0`, backwards compatible.
   on upgrading or downgrading. However, old target-level cache
   entries will not be used leading potentially to rebuilding of
   some targets.
+- Garbage collection now honors the dependencies of target-level
+  caches entries on one another. When upgrading in place, this only
+  applies for target-level cache entries written initially after
+  the upgrade.
+- The taintedness of `"configure"` targets is now propagated
+  correctly in analysis.
 - Improved portability and update of the bundled dependencies.
 - Various minor improvements and typo fixes in the documentation.
 - Fixed a race condition in an internal cache of `just execute`
@@ -58,6 +64,12 @@ A feature release on top of `1.2.0`, backwards compatible.
   directories if they are part of the action's input.
 - Fixed overwrite of existing symlinks in the output directory
   when using subcommands `install` and `install-cas`.
+- The format for target-cache shards was changed to a canonical form.
+  The new and old formats do not overlap, therefore the correctness
+  of the builds is not affected. In particular, no special care has
+  to be taken on upgrading or downgrading. However, some target-level
+  cache entries will not be used leading potentially to rebuilding of
+  some targets.
 
 ## Release `1.2.0` (2023-08-25)
 

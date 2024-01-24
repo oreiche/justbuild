@@ -21,9 +21,15 @@
 #include <vector>
 
 #include "fmt/core.h"
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/compatibility/native_support.hpp"
 #include "src/buildtool/execution_api/execution_service/file_chunker.hpp"
+#include "src/buildtool/file_system/git_repo.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
+#include "src/utils/cpp/hex_string.hpp"
 #include "src/utils/cpp/verify_hash.hpp"
 
 static constexpr std::size_t kJustHashLength = 42;
@@ -74,14 +80,62 @@ auto CASServiceImpl::FindMissingBlobs(
     return ::grpc::Status::OK;
 }
 
-auto CASServiceImpl::CheckDigestConsistency(
-    std::string const& ref,
-    std::string const& computed) const noexcept -> std::optional<std::string> {
-    if (ref != computed) {
+auto CASServiceImpl::CheckDigestConsistency(bazel_re::Digest const& ref,
+                                            bazel_re::Digest const& computed)
+    const noexcept -> std::optional<std::string> {
+    if (ref.hash() != computed.hash() or
+        ((Compatibility::IsCompatible() or ref.size_bytes() > 0LL) and
+         ref.size_bytes() != computed.size_bytes())) {
         auto const& str = fmt::format(
-            "Blob {} is corrupted: digest and data do not correspond", ref);
+            "Blob {} is corrupted: provided digest {}:{} and digest computed "
+            "from data {}:{} do not correspond.",
+            ref.hash(),
+            ref.hash(),
+            ref.size_bytes(),
+            computed.size_bytes(),
+            computed.size_bytes());
         logger_.Emit(LogLevel::Error, str);
         return str;
+    }
+    return std::nullopt;
+}
+
+auto CASServiceImpl::EnsureTreeInvariant(std::string const& data,
+                                         std::string const& hash) const noexcept
+    -> std::optional<std::string> {
+    auto entries = GitRepo::ReadTreeData(
+        data,
+        NativeSupport::Unprefix(hash),
+        [](auto const& /*unused*/) { return true; },
+        /*is_hex_id=*/true);
+    if (not entries) {
+        auto str = fmt::format("Could not read tree data {}", hash);
+        logger_.Emit(LogLevel::Error, str);
+        return str;
+    }
+    for (auto const& entry : *entries) {
+        for (auto const& item : entry.second) {
+            auto digest = static_cast<bazel_re::Digest>(
+                ArtifactDigest{ToHexString(entry.first),
+                               /*size is unknown*/ 0,
+                               IsTreeObject(item.type)});
+            if (not(IsTreeObject(item.type)
+                        ? storage_->CAS().TreePath(digest)
+                        : storage_->CAS().BlobPath(digest, false))) {
+                auto str = fmt::format(
+                    "Tree invariant violated {}: missing element {}",
+                    hash,
+                    digest.hash());
+                logger_.Emit(LogLevel::Error, str);
+                return str;
+            }
+            // The GitRepo::tree_entries_t data structure maps the object id to
+            // a list of entries of that object in possibly multiple trees. It
+            // is sufficient to check the existence of only one of these entries
+            // to be sure that the object is in CAS since they all have the same
+            // content.
+            break;
+        }
     }
     return std::nullopt;
 }
@@ -110,6 +164,12 @@ auto CASServiceImpl::BatchUpdateBlobs(
         auto* r = response->add_responses();
         r->mutable_digest()->CopyFrom(x.digest());
         if (NativeSupport::IsTree(hash)) {
+            // In native mode: for trees, check whether the tree invariant holds
+            // before storing the actual tree object.
+            if (auto err = EnsureTreeInvariant(x.data(), hash)) {
+                return ::grpc::Status{grpc::StatusCode::FAILED_PRECONDITION,
+                                      *err};
+            }
             auto const& dgst = storage_->CAS().StoreTree(x.data());
             if (!dgst) {
                 auto const& str = fmt::format(
@@ -117,7 +177,7 @@ auto CASServiceImpl::BatchUpdateBlobs(
                 logger_.Emit(LogLevel::Error, str);
                 return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
             }
-            if (auto err = CheckDigestConsistency(hash, dgst->hash())) {
+            if (auto err = CheckDigestConsistency(x.digest(), *dgst)) {
                 return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, *err};
             }
         }
@@ -129,7 +189,7 @@ auto CASServiceImpl::BatchUpdateBlobs(
                 logger_.Emit(LogLevel::Error, str);
                 return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
             }
-            if (auto err = CheckDigestConsistency(hash, dgst->hash())) {
+            if (auto err = CheckDigestConsistency(x.digest(), *dgst)) {
                 return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, *err};
             }
         }
@@ -194,6 +254,14 @@ auto CASServiceImpl::SplitBlob(::grpc::ServerContext* /*context*/,
         return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, str};
     }
 
+    auto const& blob_digest = request->blob_digest();
+    if (not IsValidHash(blob_digest.hash())) {
+        auto str =
+            fmt::format("SplitBlob: unsupported digest {}", blob_digest.hash());
+        logger_.Emit(LogLevel::Error, str);
+        return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, str};
+    }
+
     // Acquire garbage collection lock.
     auto lock = GarbageCollector::SharedLock();
     if (not lock) {
@@ -203,7 +271,6 @@ auto CASServiceImpl::SplitBlob(::grpc::ServerContext* /*context*/,
         return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
     }
 
-    auto const& blob_digest = request->blob_digest();
     logger_.Emit(LogLevel::Info, "SplitBlob({})", blob_digest.hash());
 
     // Check blob existence.

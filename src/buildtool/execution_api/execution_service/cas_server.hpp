@@ -143,9 +143,13 @@ class CASServiceImpl final
         -> ::grpc::Status override;
 
   private:
-    [[nodiscard]] auto CheckDigestConsistency(std::string const& ref,
-                                              std::string const& computed)
+    [[nodiscard]] auto CheckDigestConsistency(bazel_re::Digest const& ref,
+                                              bazel_re::Digest const& computed)
         const noexcept -> std::optional<std::string>;
+
+    [[nodiscard]] auto EnsureTreeInvariant(
+        std::string const& data,
+        std::string const& hash) const noexcept -> std::optional<std::string>;
 
     gsl::not_null<Storage const*> storage_ = &Storage::Instance();
     Logger logger_{"execution-service"};

@@ -64,7 +64,7 @@ class BazelCasClient {
         std::string const& instance_name,
         std::vector<BazelBlob>::const_iterator const& begin,
         std::vector<BazelBlob>::const_iterator const& end) noexcept
-        -> std::vector<bazel_re::Digest>;
+        -> std::size_t;
 
     /// \brief Upload multiple blobs in batch transfer
     /// \param[in] instance_name Name of the CAS instance
@@ -74,8 +74,7 @@ class BazelCasClient {
     [[nodiscard]] auto BatchUpdateBlobs(
         std::string const& instance_name,
         BlobContainer::iterator const& begin,
-        BlobContainer::iterator const& end) noexcept
-        -> std::vector<bazel_re::Digest>;
+        BlobContainer::iterator const& end) noexcept -> std::size_t;
 
     /// \brief Upload multiple blobs in batch transfer
     /// \param[in] instance_name Name of the CAS instance
@@ -86,7 +85,7 @@ class BazelCasClient {
         std::string const& instance_name,
         BlobContainer::RelatedBlobList::iterator const& begin,
         BlobContainer::RelatedBlobList::iterator const& end) noexcept
-        -> std::vector<bazel_re::Digest>;
+        -> std::size_t;
 
     /// \brief Read multiple blobs in batch transfer
     /// \param[in] instance_name Name of the CAS instance
@@ -152,20 +151,17 @@ class BazelCasClient {
     [[nodiscard]] auto DoBatchUpdateBlobs(std::string const& instance_name,
                                           T_OutputIter const& start,
                                           T_OutputIter const& end) noexcept
-        -> std::vector<bazel_re::Digest>;
+        -> std::size_t;
 
-    template <class T_Request, class T_Content, class T_OutputIter>
-    [[nodiscard]] auto CreateRequest(std::string const& instance_name,
-                                     T_OutputIter const& start,
-                                     T_OutputIter const& end) const noexcept
-        -> T_Request;
-
-    template <class T_OutputIter>
-    [[nodiscard]] auto CreateUpdateBlobsRequest(
+    template <typename T_Request, typename T_ForwardIter>
+    [[nodiscard]] auto CreateBatchRequestsMaxSize(
         std::string const& instance_name,
-        T_OutputIter const& start,
-        T_OutputIter const& end) const noexcept
-        -> bazel_re::BatchUpdateBlobsRequest;
+        T_ForwardIter const& first,
+        T_ForwardIter const& last,
+        std::string const& heading,
+        std::function<void(T_Request*,
+                           typename T_ForwardIter::value_type const&)> const&
+            request_builder) const noexcept -> std::vector<T_Request>;
 
     [[nodiscard]] static auto CreateUpdateBlobsSingleRequest(
         BazelBlob const& b) noexcept
@@ -177,11 +173,42 @@ class BazelCasClient {
         int page_size,
         std::string const& page_token) noexcept -> bazel_re::GetTreeRequest;
 
+    /// \brief Utility class for supporting the Retry strategy while parsing a
+    /// BatchResponse
+    template <typename T_Content>
+    struct RetryProcessBatchResponse {
+        bool ok{false};
+        std::vector<T_Content> result{};
+        bool exit_retry_loop{false};
+        std::optional<std::string> error_msg{};
+    };
+
+    // If this function is defined in the .cpp file, clang raises an error
+    // while linking
     template <class T_Content, class T_Inner, class T_Response>
-    auto ProcessBatchResponse(
+    [[nodiscard]] auto ProcessBatchResponse(
         T_Response const& response,
         std::function<void(std::vector<T_Content>*, T_Inner const&)> const&
-            inserter) const noexcept -> std::vector<T_Content>;
+            inserter) const noexcept -> RetryProcessBatchResponse<T_Content> {
+        std::vector<T_Content> output;
+        for (auto const& res : response.responses()) {
+            auto const& res_status = res.status();
+            if (res_status.code() == static_cast<int>(grpc::StatusCode::OK)) {
+                inserter(&output, res);
+            }
+            else {
+                auto exit_retry_loop =
+                    (res_status.code() !=
+                     static_cast<int>(grpc::StatusCode::UNAVAILABLE));
+                return {.ok = false,
+                        .exit_retry_loop = exit_retry_loop,
+                        .error_msg =
+                            fmt::format("While processing batch response: {}",
+                                        res_status.ShortDebugString())};
+            }
+        }
+        return {.ok = true, .result = std::move(output)};
+    }
 
     template <class T_Content, class T_Response>
     auto ProcessResponseContents(T_Response const& response) const noexcept

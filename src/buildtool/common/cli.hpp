@@ -78,12 +78,20 @@ struct DiagnosticArguments {
     std::optional<std::string> dump_actions{std::nullopt};
     std::optional<std::string> dump_blobs{std::nullopt};
     std::optional<std::string> dump_trees{std::nullopt};
+    std::optional<std::string> dump_provides{std::nullopt};
     std::optional<std::string> dump_vars{std::nullopt};
     std::optional<std::string> dump_targets{std::nullopt};
     std::optional<std::string> dump_export_targets{std::nullopt};
     std::optional<std::string> dump_targets_graph{std::nullopt};
     std::optional<std::string> dump_anonymous{std::nullopt};
     std::optional<std::string> dump_nodes{std::nullopt};
+};
+
+/// \brief Arguments required for tuning the retry strategy.
+struct RetryArguments {
+    std::optional<unsigned int> max_attempts{};
+    std::optional<unsigned int> initial_backoff_seconds{};
+    std::optional<unsigned int> max_backoff_seconds{};
 };
 
 /// \brief Arguments required for specifying build endpoint.
@@ -316,7 +324,9 @@ static inline auto SetupAnalysisArguments(
 static inline auto SetupDescribeArguments(
     gsl::not_null<CLI::App*> const& app,
     gsl::not_null<DescribeArguments*> const& clargs) {
-    app->add_flag("--json", clargs->print_json, "Print description as JSON.");
+    app->add_flag("--json",
+                  clargs->print_json,
+                  "Omit pretty-printing and describe rule in JSON format.");
     app->add_flag("--rule",
                   clargs->describe_rule,
                   "Positional arguments refer to rule instead of target.");
@@ -336,6 +346,10 @@ static inline auto SetupDiagnosticArguments(
     app->add_option("--dump-blobs",
                     clargs->dump_blobs,
                     "Dump blobs to file (use - for stdout).")
+        ->type_name("PATH");
+    app->add_option("--dump-provides",
+                    clargs->dump_provides,
+                    "Dump provides map to file (use - for stdout).")
         ->type_name("PATH");
     app->add_option("--dump-vars",
                     clargs->dump_vars,
@@ -686,6 +700,27 @@ static inline auto SetupServeArguments(
                     serve_args->config,
                     "Configuration file for the subcommand.")
         ->required();
+}
+
+static inline void SetupRetryArguments(
+    gsl::not_null<CLI::App*> const& app,
+    gsl::not_null<RetryArguments*> const& args) {
+    app->add_option(
+        "--max-attempts",
+        args->max_attempts,
+        "Total number of attempts in case of a remote resource becomes "
+        "unavailable. Must be greater than 0. (Default: 1)");
+    app->add_option(
+        "--initial-backoff-seconds",
+        args->initial_backoff_seconds,
+        "Initial amount of time, in seconds, to wait before retrying a rpc "
+        "call. The waiting time is doubled at each attempt. Must be greater "
+        "than 0. (Default: 1)");
+    app->add_option("--max-backoff-seconds",
+                    args->max_backoff_seconds,
+                    "The backoff time cannot be bigger than this parameter. "
+                    "Note that some jitter is still added to avoid to overload "
+                    "the resources that survived the outage. (Default: 60)");
 }
 
 #endif  // INCLUDED_SRC_BUILDTOOL_COMMON_CLI_HPP

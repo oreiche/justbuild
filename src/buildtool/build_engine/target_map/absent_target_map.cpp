@@ -14,6 +14,8 @@
 #include "src/buildtool/build_engine/target_map/absent_target_map.hpp"
 
 #ifndef BOOTSTRAP_BUILD_TOOL
+#include "src/buildtool/serve_api/progress_reporting/progress.hpp"
+#include "src/buildtool/serve_api/progress_reporting/statistics.hpp"
 #include "src/buildtool/serve_api/remote/serve_api.hpp"
 #include "src/buildtool/storage/target_cache_key.hpp"
 #endif
@@ -38,7 +40,7 @@ auto BuildMaps::Target::CreateAbsentTargetMap(
             (*logger)(fmt::format("Failed to get the target root id for "
                                   "repository \"{}\"",
                                   repo_name),
-                      true);
+                      /*fatal=*/true);
             return;
         }
         auto flexible_vars = ServeApi::ServeTargetVariables(
@@ -49,7 +51,7 @@ auto BuildMaps::Target::CreateAbsentTargetMap(
             (*logger)(fmt::format("Failed to obtain flexible config variables "
                                   "for target \"{}\"",
                                   key.target.ToString()),
-                      true);
+                      /*fatal=*/true);
             return;
         }
         // TODO(asartori): avoid code duplication in export.cpp
@@ -60,11 +62,17 @@ auto BuildMaps::Target::CreateAbsentTargetMap(
             (*logger)(
                 fmt::format("Failed to obtain repository key for repo \"{}\"",
                             target_name.repository),
-                true);
+                /*fatal=*/true);
             return;
         }
         auto target_cache_key =
             TargetCacheKey::Create(*repo_key, target_name, effective_config);
+        if (not target_cache_key) {
+            (*logger)(fmt::format("Could not produce cache key for target {}",
+                                  key.target.ToString()),
+                      /*fatal=*/true);
+            return;
+        }
         std::optional<std::pair<TargetCacheEntry, Artifact::ObjectInfo>>
             target_cache_value{std::nullopt};
         target_cache_value =
@@ -74,15 +82,24 @@ auto BuildMaps::Target::CreateAbsentTargetMap(
             Logger::Log(LogLevel::Debug,
                         "Querying just serve for export target {}",
                         key.target.ToString());
+            ServeServiceProgress::Instance().TaskTracker().Start(
+                target_cache_key->Id().ToString());
+            ServeServiceStatistics::Instance().IncrementDispatchedCounter();
             target_cache_value =
                 ServeApi::ServeTarget(*target_cache_key, *repo_key);
+            ServeServiceStatistics::Instance().IncrementServedCounter();
+            ServeServiceProgress::Instance().TaskTracker().Stop(
+                target_cache_key->Id().ToString());
             from_just_serve = true;
+        }
+        else {
+            ServeServiceStatistics::Instance().IncrementCacheHitsCounter();
         }
 
         if (!target_cache_value) {
             (*logger)(fmt::format("Could not get target cache value for key {}",
                                   target_cache_key->Id().ToString()),
-                      true);
+                      /*fatal=*/true);
             return;
         }
         auto const& [entry, info] = *target_cache_value;
@@ -103,6 +120,7 @@ auto BuildMaps::Target::CreateAbsentTargetMap(
                 std::unordered_set<std::string>{flexible_vars->begin(),
                                                 flexible_vars->end()},
                 std::set<std::string>{},
+                entry.ToImplied(),
                 deps_info);
 
             analysis_result = result_map->Add(key.target,
@@ -124,7 +142,7 @@ auto BuildMaps::Target::CreateAbsentTargetMap(
         }
         (*logger)(fmt::format("Reading target entry for key {} failed",
                               target_cache_key->Id().ToString()),
-                  true);
+                  /*fatal=*/true);
     };
 #else
     auto target_reader = [](auto /*ts*/,

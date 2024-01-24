@@ -25,6 +25,7 @@
     , ["src/buildtool/file_system", "file_root"]
     , ["src/buildtool/serve_api/remote", "config"]
     , ["src/buildtool/serve_api/serve_service", "serve_server_implementation"]
+    , ["src/buildtool/common/remote", "retry_parameters"]
     , "common"
     , "cli"
     , "version"
@@ -65,7 +66,11 @@
     , ["src/buildtool/build_engine/base_maps", "rule_map"]
     , ["src/buildtool/build_engine/base_maps", "targets_file_map"]
     , ["src/buildtool/build_engine/target_map", "target_map"]
+    , ["src/buildtool/execution_api/remote", "config"]
+    , ["src/buildtool/execution_api/common", "create_execution_api"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/serve_api/remote", "config"]
+    , ["src/buildtool/serve_api/remote", "serve_api"]
     , "common"
     ]
   }
@@ -125,6 +130,7 @@
     , ["src/buildtool/build_engine/base_maps", "source_map"]
     , ["src/buildtool/build_engine/base_maps", "targets_file_map"]
     , ["src/buildtool/build_engine/target_map", "target_map"]
+    , ["src/buildtool/serve_api/progress_reporting", "progress_reporter"]
     ]
   }
 , "diagnose":
@@ -200,6 +206,7 @@
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , "common"
+    , ["src/buildtool/common/remote", "retry_parameters"]
     ]
   }
 , "build_utils":

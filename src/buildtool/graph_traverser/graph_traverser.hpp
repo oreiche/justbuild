@@ -26,6 +26,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "fmt/core.h"
 #include "gsl/gsl"
@@ -69,23 +70,37 @@ class GraphTraverser {
         bool failed_artifacts;
     };
 
-    explicit GraphTraverser(CommandLineArguments clargs,
-                            gsl::not_null<RepositoryConfig*> const& repo_config)
+    explicit GraphTraverser(
+        CommandLineArguments clargs,
+        gsl::not_null<RepositoryConfig*> const& repo_config,
+        std::map<std::string, std::string> platform_properties,
+        std::vector<std::pair<std::map<std::string, std::string>,
+                              ServerAddress>> dispatch_list)
         : clargs_{std::move(clargs)},
           repo_config_{repo_config},
-          local_api_{CreateExecutionApi(std::nullopt, repo_config)},
+          platform_properties_{std::move(platform_properties)},
+          dispatch_list_{std::move(dispatch_list)},
+          local_api_{CreateExecutionApi(std::nullopt,
+                                        std::make_optional(repo_config))},
           remote_api_{CreateExecutionApi(RemoteExecutionConfig::RemoteAddress(),
-                                         repo_config)},
+                                         std::make_optional(repo_config))},
           reporter_{[](auto done, auto cv) {}} {}
 
-    explicit GraphTraverser(CommandLineArguments clargs,
-                            gsl::not_null<RepositoryConfig*> const& repo_config,
-                            progress_reporter_t reporter)
+    explicit GraphTraverser(
+        CommandLineArguments clargs,
+        gsl::not_null<RepositoryConfig*> const& repo_config,
+        std::map<std::string, std::string> platform_properties,
+        std::vector<std::pair<std::map<std::string, std::string>,
+                              ServerAddress>> dispatch_list,
+        progress_reporter_t reporter)
         : clargs_{std::move(clargs)},
           repo_config_{repo_config},
-          local_api_{CreateExecutionApi(std::nullopt, repo_config)},
+          platform_properties_{std::move(platform_properties)},
+          dispatch_list_{std::move(dispatch_list)},
+          local_api_{CreateExecutionApi(std::nullopt,
+                                        std::make_optional(repo_config))},
           remote_api_{CreateExecutionApi(RemoteExecutionConfig::RemoteAddress(),
-                                         repo_config)},
+                                         std::make_optional(repo_config))},
           reporter_{std::move(reporter)} {}
 
     /// \brief Parses actions and blobs into graph, traverses it and retrieves
@@ -228,6 +243,9 @@ class GraphTraverser {
   private:
     CommandLineArguments const clargs_;
     gsl::not_null<RepositoryConfig*> repo_config_;
+    std::map<std::string, std::string> platform_properties_;
+    std::vector<std::pair<std::map<std::string, std::string>, ServerAddress>>
+        dispatch_list_;
     gsl::not_null<IExecutionApi::Ptr> const local_api_;
     gsl::not_null<IExecutionApi::Ptr> const remote_api_;
     progress_reporter_t reporter_;
@@ -348,7 +366,8 @@ class GraphTraverser {
         Executor executor{repo_config_,
                           &(*local_api_),
                           &(*remote_api_),
-                          RemoteExecutionConfig::PlatformProperties(),
+                          platform_properties_,
+                          dispatch_list_,
                           clargs_.build.timeout};
         bool traversing{};
         std::atomic<bool> done = false;
@@ -371,13 +390,15 @@ class GraphTraverser {
         DependencyGraph const& g,
         std::vector<ArtifactIdentifier> const& artifact_ids) const -> bool {
         // setup rebuilder with api for cache endpoint
-        auto api_cached = CreateExecutionApi(
-            RemoteExecutionConfig::CacheAddress(), repo_config_);
+        auto api_cached =
+            CreateExecutionApi(RemoteExecutionConfig::CacheAddress(),
+                               std::make_optional(repo_config_));
         Rebuilder executor{repo_config_,
                            &(*local_api_),
                            &(*remote_api_),
                            &(*api_cached),
-                           RemoteExecutionConfig::PlatformProperties(),
+                           platform_properties_,
+                           dispatch_list_,
                            clargs_.build.timeout};
         bool traversing{false};
         std::atomic<bool> done = false;

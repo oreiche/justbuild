@@ -42,6 +42,7 @@
 #include "src/buildtool/storage/target_cache.hpp"
 #ifndef BOOTSTRAP_BUILD_TOOL
 #include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/common/remote/retry_parameters.hpp"
 #include "src/buildtool/execution_api/execution_service/operation_cache.hpp"
 #include "src/buildtool/execution_api/execution_service/server_implementation.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
@@ -117,9 +118,10 @@ void SetupExecutionConfig(EndpointArguments const& eargs,
     if (eargs.remote_execution_dispatch_file) {
         if (not RemoteConfig::SetRemoteExecutionDispatch(
                 *eargs.remote_execution_dispatch_file)) {
-            Logger::Log(LogLevel::Error,
-                        "Setting remote execution dispatch based on file '{}'",
-                        eargs.remote_execution_dispatch_file->string());
+            Logger::Log(
+                LogLevel::Error,
+                "Setting remote execution dispatch based on file '{}' failed.",
+                eargs.remote_execution_dispatch_file->string());
             std::exit(kExitFailure);
         }
     }
@@ -145,21 +147,6 @@ void SetupServeConfig(ServeArguments const& srvargs,
                         "Setting serve service address '{}' failed.",
                         *srvargs.remote_serve_address);
             std::exit(kExitFailure);
-        }
-        // if the user has not provided the --remote-execution-address, we fall
-        // back to the --remote-serve-address
-        if (auto client_remote_address = RemoteExecutionConfig::RemoteAddress();
-            !client_remote_address) {
-            if (!RemoteExecutionConfig::SetRemoteAddress(
-                    *srvargs.remote_serve_address)) {
-                Logger::Log(LogLevel::Error,
-                            "Setting remote execution address '{}' failed.",
-                            *srvargs.remote_serve_address);
-                std::exit(kExitFailure);
-            }
-            Logger::Log(LogLevel::Info,
-                        "Using '{}' as the remote execution endpoint.",
-                        *srvargs.remote_serve_address);
         }
     }
     if (not srvargs.repositories.empty() and
@@ -322,6 +309,29 @@ void SetupHashFunction() {
     HashFunction::SetHashType(Compatibility::IsCompatible()
                                   ? HashFunction::JustHash::Compatible
                                   : HashFunction::JustHash::Native);
+}
+
+void SetupRetryConfig(RetryArguments const& args) {
+    if (args.max_attempts) {
+        if (!Retry::SetMaxAttempts(*args.max_attempts)) {
+            Logger::Log(LogLevel::Error, "Invalid value for max-attempts.");
+            std::exit(kExitFailure);
+        }
+    }
+    if (args.initial_backoff_seconds) {
+        if (!Retry::SetInitialBackoffSeconds(*args.initial_backoff_seconds)) {
+            Logger::Log(LogLevel::Error,
+                        "Invalid value for initial-backoff-seconds.");
+            std::exit(kExitFailure);
+        }
+    }
+    if (args.max_backoff_seconds) {
+        if (!Retry::SetMaxBackoffSeconds(*args.max_backoff_seconds)) {
+            Logger::Log(LogLevel::Error,
+                        "Invalid value for max-backoff-seconds.");
+            std::exit(kExitFailure);
+        }
+    }
 }
 
 #endif  // BOOTSTRAP_BUILD_TOOL
@@ -863,6 +873,22 @@ auto main(int argc, char* argv[]) -> int {
             }
             return kExitSuccess;
         }
+
+        // If no execution endpoint was given, the client should default to the
+        // serve endpoint, if given
+        if (not RemoteExecutionConfig::RemoteAddress() and
+            arguments.serve.remote_serve_address) {
+            if (!RemoteExecutionConfig::SetRemoteAddress(
+                    *arguments.serve.remote_serve_address)) {
+                Logger::Log(LogLevel::Error,
+                            "Setting remote execution address '{}' failed.",
+                            *arguments.serve.remote_serve_address);
+                std::exit(kExitFailure);
+            }
+            Logger::Log(LogLevel::Info,
+                        "Using '{}' as the remote execution endpoint.",
+                        *arguments.serve.remote_serve_address);
+        }
 #endif  // BOOTSTRAP_BUILD_TOOL
 
         auto jobs = arguments.build.build_jobs > 0 ? arguments.build.build_jobs
@@ -880,12 +906,16 @@ auto main(int argc, char* argv[]) -> int {
                 : std::nullopt;
 
 #ifndef BOOTSTRAP_BUILD_TOOL
-        GraphTraverser const traverser{{jobs,
-                                        std::move(arguments.build),
-                                        std::move(stage_args),
-                                        std::move(rebuild_args)},
-                                       &repo_config,
-                                       ProgressReporter::Reporter()};
+        SetupRetryConfig(arguments.retry);
+        GraphTraverser const traverser{
+            {jobs,
+             std::move(arguments.build),
+             std::move(stage_args),
+             std::move(rebuild_args)},
+            &repo_config,
+            RemoteExecutionConfig::PlatformProperties(),
+            RemoteExecutionConfig::DispatchList(),
+            ProgressReporter::Reporter()};
 
         if (arguments.cmd == SubCommand::kInstallCas) {
             if (not repo_config.SetGitCAS(StorageConfig::GitRoot())) {

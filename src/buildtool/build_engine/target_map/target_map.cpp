@@ -297,6 +297,13 @@ void withDependencies(
         }
     }
 
+    // Compute implied export targets
+    std::set<std::string> implied_export{};
+    for (auto const& dep : dependency_values) {
+        implied_export.insert((*dep)->ImpliedExport().begin(),
+                              (*dep)->ImpliedExport().end());
+    }
+
     // Evaluate string parameters
     auto string_fields_fcts =
         FunctionMap::MakePtr(FunctionMap::underlying_map_t{
@@ -849,6 +856,7 @@ void withDependencies(
                                                std::move(trees),
                                                std::move(effective_vars),
                                                std::move(tainted),
+                                               std::move(implied_export),
                                                deps_info);
     analysis_result =
         result_map->Add(key.target, effective_conf, std::move(analysis_result));
@@ -1371,6 +1379,7 @@ void withTargetNode(
                            {},
                            {},
                            {},
+                           {},
                            TargetGraphInformation::kSource}));
     }
     else {
@@ -1472,6 +1481,7 @@ void TreeTarget(
                     std::vector<Tree::Ptr>{},
                     std::unordered_set<std::string>{},
                     std::set<std::string>{},
+                    std::set<std::string>{},
                     TargetGraphInformation::kSource);
                 analysis_result =
                     result_map->Add(key.target, {}, std::move(analysis_result));
@@ -1557,6 +1567,7 @@ void TreeTarget(
                             std::vector<Tree::Ptr>{tree},
                             std::unordered_set<std::string>{},
                             std::set<std::string>{},
+                            std::set<std::string>{},
                             TargetGraphInformation::kSource);
                     analysis_result = result_map->Add(
                         key.target, {}, std::move(analysis_result));
@@ -1589,6 +1600,7 @@ void GlobResult(const std::vector<AnalysedTargetPtr const*>& values,
         std::vector<std::string>{},
         std::vector<Tree::Ptr>{},
         std::unordered_set<std::string>{},
+        std::set<std::string>{},
         std::set<std::string>{},
         TargetGraphInformation::kSource);
     (*setter)(std::move(target));
@@ -1632,21 +1644,6 @@ void GlobTargetWithDirEntry(
                 fatal);
         });
 }
-
-#ifndef BOOTSTRAP_BUILD_TOOL
-// The remote execution endpoint specified on the command line must be the same
-// used by the provided just serve instance.
-[[nodiscard]] auto CheckServeAndExecutionEndpoints() -> bool {
-    auto sadd = RemoteServeConfig::RemoteAddress();
-    if (!sadd) {
-        Logger::Log(LogLevel::Error,
-                    "Absent root detected. Please provide "
-                    "--remote-serve-address and retry.");
-        return false;
-    }
-    return ServeApi::CheckServeRemoteExecution();
-}
-#endif  // BOOTSTRAP_BUILD_TOOL
 
 }  // namespace
 
@@ -1769,13 +1766,20 @@ auto CreateTargetMap(
 #ifndef BOOTSTRAP_BUILD_TOOL
         else if (repo_config->TargetRoot(key.target.ToModule().repository)
                      ->IsAbsent()) {
-            static auto consistent_serve_and_remote_execution =
-                CheckServeAndExecutionEndpoints();
-            if (!consistent_serve_and_remote_execution) {
+            if (not RemoteServeConfig::RemoteAddress()) {
+                (*logger)(
+                    fmt::format("Root for target {} is absent, but no serve "
+                                "endpoint was configured. Please provide "
+                                "--remote-serve=address and retry.",
+                                key.target.ToJson().dump()),
+                    /*is_fatal=*/true);
+                return;
+            }
+            if (not ServeApi::CheckServeRemoteExecution()) {
                 (*logger)(
                     "Inconsistent remote execution endpoint and just serve "
                     "configuration detected.",
-                    true);
+                    /*is_fatal=*/true);
                 return;
             }
             absent_target_map->ConsumeAfterKeysReady(

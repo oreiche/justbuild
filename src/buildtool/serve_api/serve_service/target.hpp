@@ -16,14 +16,21 @@
 #define INCLUDED_SRC_BUILD_SERVE_API_SERVE_SERVICE_TARGET_HPP
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
 #include "gsl/gsl"
 #include "justbuild/just_serve/just_serve.grpc.pb.h"
+#include "nlohmann/json.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/remote/remote_common.hpp"
-#include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/execution_api/common/create_execution_api.hpp"
+#include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
@@ -66,8 +73,37 @@ class TargetService final : public justbuild::just_serve::Target::Service {
         ::justbuild::just_serve::ServeTargetVariablesResponse* response)
         -> ::grpc::Status override;
 
+    // Given the target-level root tree and the name of an export target,
+    // returns the digest of the blob containing the flexible variables field,
+    // as well as the documentation fields pertaining tho the target and
+    // its configuration variables, as taken from the target's description.
+    // This information should be enough for a client to produce locally a
+    // full description of said target.
+    //
+    // The server MUST make the returned blob available in the remote CAS.
+    //
+    // If the status has a code different from `OK`, the response MUST not be
+    // used.
+    //
+    // Errors:
+    // * `FAILED_PRECONDITION`: An error occurred in retrieving the
+    //   configuration of the requested target, such as missing entries
+    //   (target-root, target file, target name), unparsable target file, or
+    //   requested target not being of "type" : "export".
+    // * `UNAVAILABLE`: Could not communicate with the remote CAS.
+    // * `INTERNAL`: Internally, something is very broken.
+    auto ServeTargetDescription(
+        ::grpc::ServerContext* /*context*/,
+        const ::justbuild::just_serve::ServeTargetDescriptionRequest* request,
+        ::justbuild::just_serve::ServeTargetDescriptionResponse* response)
+        -> ::grpc::Status override;
+
   private:
     std::shared_ptr<Logger> logger_{std::make_shared<Logger>("target-service")};
+
+    // type of dispatch list; reduces verbosity
+    using dispatch_t = std::vector<
+        std::pair<std::map<std::string, std::string>, ServerAddress>>;
 
     // remote execution endpoint used for remote building
     gsl::not_null<IExecutionApi::Ptr> const remote_api_{
@@ -78,36 +114,12 @@ class TargetService final : public justbuild::just_serve::Target::Service {
     gsl::not_null<IExecutionApi::Ptr> const local_api_{
         CreateExecutionApi(std::nullopt)};
 
-    /// \brief Check if tree exists in the given repository.
-    [[nodiscard]] static auto IsTreeInRepo(
-        std::string const& tree_id,
-        std::filesystem::path const& repo_path,
-        std::shared_ptr<Logger> const& logger) -> bool;
-
-    /// \brief For a given tree id, find the known repository that can serve it.
-    [[nodiscard]] static auto GetServingRepository(
-        std::string const& tree_id,
-        std::shared_ptr<Logger> const& logger)
-        -> std::optional<std::filesystem::path>;
-
-    /// \brief Parse the stored repository configuration blob and populate the
-    /// RepositoryConfig instance.
-    /// \returns nullopt on success, error message as a string otherwise.
-    [[nodiscard]] static auto DetermineRoots(
-        std::string const& main_repo,
-        std::filesystem::path const& repo_config_path,
-        gsl::not_null<RepositoryConfig*> const& repository_config,
-        std::shared_ptr<Logger> const& logger) -> std::optional<std::string>;
-
-    /// \brief Get the blob content at given path inside a Git tree.
-    /// \returns If tree found, pair of "no-internal-errors" flag and content of
-    /// blob at the path specified if blob exists, nullopt otherwise.
-    [[nodiscard]] static auto GetBlobContent(
-        std::filesystem::path const& repo_path,
-        std::string const& tree_id,
-        std::string const& rel_path,
-        std::shared_ptr<Logger> const& logger)
-        -> std::optional<std::pair<bool, std::optional<std::string>>>;
+    /// \brief Get from remote and parse the endpoint configuration. The method
+    /// also ensures the content has the expected format.
+    /// \returns An error + data union, with a pair of grpc status at index 0
+    /// and the dispatch list stored as a JSON object at index 1.
+    auto GetDispatchList(ArtifactDigest const& dispatch_digest)
+        -> std::variant<::grpc::Status, dispatch_t>;
 };
 
 #endif  // INCLUDED_SRC_BUILD_SERVE_API_SERVE_SERVICE_TARGET_HPP

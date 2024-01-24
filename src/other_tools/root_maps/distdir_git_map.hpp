@@ -15,9 +15,14 @@
 #ifndef INCLUDED_SRC_OTHER_TOOLS_ROOT_MAPS_DISTDIR_GIT_MAP_HPP
 #define INCLUDED_SRC_OTHER_TOOLS_ROOT_MAPS_DISTDIR_GIT_MAP_HPP
 
+#include <memory>
+#include <string>
+#include <unordered_map>
 #include <utility>
 
+#include "gsl/gsl"
 #include "nlohmann/json.hpp"
+#include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
 #include "src/other_tools/ops_maps/import_to_git_map.hpp"
 
@@ -46,6 +51,9 @@ using DistdirGitMap =
     gsl::not_null<ContentCASMap*> const& content_cas_map,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
+    bool serve_api_exists,
+    IExecutionApi* local_api,
+    IExecutionApi* remote_api,
     std::size_t jobs) -> DistdirGitMap;
 
 namespace std {

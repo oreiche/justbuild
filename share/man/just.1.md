@@ -541,6 +541,23 @@ as specified by **`-r`**, or local execution if no endpoint is
 specified).  
 Supported by: analyse|build|install|rebuild|traverse.
 
+**`--max-attempts`** *`NUM`*  
+If a remote procedure call (rpc) returns `grpc::StatusCode::UNAVAILABLE`, that
+rpc is retried at most *`NUM`* times. (Default: 1, i.e., no retry).  
+Supported by: analyse|build|install|rebuild|traverse.
+
+**`--initial-backoff-seconds`** *`NUM`*  
+Before retrying the second time, the client will wait the given amount of
+seconds plus a jitter, to better distribute the workload. (Default: 1).  
+Supported by: analyse|build|install|rebuild|traverse.
+
+**`--max-backoff-seconds`** *`NUM`*  
+From the third attempt (included) on, the backoff time is doubled at
+each attempt, until it exceeds the `max-backoff-seconds`
+parameter. From that point, the waiting time is computed as
+`max-backoff-seconds` plus a jitter. (Default: 60)  
+Supported by: analyse|build|install|rebuild|traverse.
+
 Remote serve options
 --------------------
 
@@ -649,6 +666,14 @@ Dump trees and all subtrees of the given target to file. *`-`* is
 treated as stdout. Output is a JSON map between tree ids and the
 corresponding artifact map, which maps the path to the artifact
 description.
+
+**`--dump-provides`** *`PATH`*  
+Dump the provides map of the given target to file. *`-`* is treated
+as stdout. The output is a JSON object mapping the providers to their
+values, serialized as JSON; in particular, artifacts are replaced
+by a JSON object with their intensional description. Therefore, the
+dumped JSON is not uniquely readable, but requires an out-of-band
+understanding where artifacts are to be expected.
 
 **`rebuild`** specific options
 ------------------------------

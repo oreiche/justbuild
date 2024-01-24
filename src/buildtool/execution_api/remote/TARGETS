@@ -46,6 +46,8 @@
     , ["src/buildtool/compatibility", "compatibility"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["@", "grpc", "", "grpc++"]
+    , ["src/buildtool/common/remote", "retry"]
+    , ["src/buildtool/execution_api/common", "message_limits"]
     ]
   }
 , "bazel":
@@ -80,5 +82,10 @@
   , "srcs": ["config.cpp"]
   , "deps": [["src/buildtool/common/remote", "remote_common"]]
   , "stage": ["src", "buildtool", "execution_api", "remote"]
+  , "private-deps":
+    [ ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
+    ]
   }
 }
