@@ -43,6 +43,14 @@ ENV HOME=/tmp/nobody
 RUN dnf install -y jq git wget make rpmdevtools
 RUN dnf install -y ${BUILD_DEPS}
 EOL
+  elif [ "${PKG}" = "tar" ]; then
+    cat > ${TEMP}/Dockerfile.${NAME} << EOL
+FROM ${IMAGE}
+ENV HOME=/tmp/nobody
+ENV SSL_NO_VERIFY_PEER=1
+RUN xbps-install -Syu xbps
+RUN xbps-install -Syu bash justbuild ${BUILD_DEPS}
+EOL
   else
     echo "Unsupported pkg type '${PKG}'"
     exit 1
@@ -71,6 +79,22 @@ EOL
       dnf install --setopt=install_weak_deps=False -y ./work_${NAME}/source/rpmbuild/RPMS/x86_64/justbuild-*rpm; \
       just-mr version && just-mr mrversion; \
       if [ $? = 0 ]; then touch ./work_${NAME}/success; fi"
+  elif [ "${PKG}" = "tar" ] && [ -f ./work_${NAME}/source/justbuild-*.tar.gz ]; then
+    if [ -f ./work_${NAME}/source/justbuild-*-x86_64-linux.tar.gz ]; then
+      # verify tarball
+      docker run ${DOCKER_ARGS} ${IMAGE} /bin/sh -c "\
+        set -e; \
+        export SSL_NO_VERIFY_PEER=1; \
+        xbps-install -Syu xbps; \
+        xbps-install -Syu tar gzip; \
+        mkdir -p /tmp/testroot; \
+        tar -xvf ./work_${NAME}/source/justbuild-*.tar.gz --strip-components=1 -C /tmp/testroot; \
+        export PATH=/tmp/testroot/bin:\$PATH; \
+        just-mr version && just-mr mrversion; \
+        if [ $? = 0 ]; then touch ./work_${NAME}/success; fi"
+    else
+      touch ./work_${NAME}/success
+    fi
   fi
 }
 
