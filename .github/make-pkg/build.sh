@@ -59,6 +59,11 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     export HOME="${WORKDIR}"
     export DATADIR="$(pwd)/rpmbuild"
     rpmdev-setuptree
+  elif [ "${PKG}" = "tar" ]; then
+    export VERSION
+    export TARGET_ARCH=$(jq -r '."'${PLF}'"."target-arch" // "x86_64"' ${ROOTDIR}/platforms.json)
+    ${ROOTDIR}/build-tarball.sh
+    exit 0
   else
     echo "Unknown pkg type '${PKG}'"
     exit 1
