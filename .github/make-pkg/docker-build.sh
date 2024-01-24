@@ -13,6 +13,7 @@ function docker_build() {
   local NAME=$1
   local PKG=$(jq -r '."'${NAME}'".type' ${ROOTDIR}/platforms.json)
   local IMAGE=$(jq -r '."'${NAME}'".image' ${ROOTDIR}/platforms.json)
+  local PREBUILT=$(jq -r '."'${NAME}'".prebuilt // ""' ${ROOTDIR}/platforms.json)
   local BUILD_DEPS=$(jq -r '."'${NAME}'"."build-depends" | join(" ")' \
                         ${ROOTDIR}/platforms.json)
   local BUILD_DIR="$(pwd)/work_${NAME}/build"
@@ -26,6 +27,13 @@ function docker_build() {
   mkdir -p "${BUILD_DIR}"
   rm -f ./work_${NAME}/success
 
+  local TARBALL=""
+  if [ -n "${PREBUILT}" ]; then
+    # generate the tarball first by calling ourselfs for the "prebuilt" target
+    $0 $REF ${PREBUILT}
+    TARBALL="/workspace/$(ls work_${PREBUILT}/source/justbuild-*.tar.gz)"
+  fi
+
   # generate docker file
   mkdir -p ${TEMP}
   if [ "${PKG}" = "deb" ]; then
@@ -34,14 +42,14 @@ FROM ${IMAGE}
 ENV HOME=/tmp/nobody
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt update && apt install -y jq git wget dh-make
-RUN apt update && apt install -y ${BUILD_DEPS}
+RUN apt update && apt install -y bash ${BUILD_DEPS}
 EOL
   elif [ "${PKG}" = "rpm" ]; then
     cat > ${TEMP}/Dockerfile.${NAME} << EOL
 FROM ${IMAGE}
 ENV HOME=/tmp/nobody
 RUN dnf install -y jq git wget make rpmdevtools
-RUN dnf install -y ${BUILD_DEPS}
+RUN dnf install -y bash ${BUILD_DEPS}
 EOL
   elif [ "${PKG}" = "tar" ]; then
     cat > ${TEMP}/Dockerfile.${NAME} << EOL
@@ -61,7 +69,7 @@ EOL
 
   # build package
   docker run ${DOCKER_ARGS} -u $(id -u):$(id -g) just-make-${PKG}:${NAME} \
-    .github/make-pkg/build.sh ${REF} ${NAME} ${PKG}
+    .github/make-pkg/build.sh ${REF} ${NAME} ${PKG} ${TARBALL}
 
   if [ "${PKG}" = "deb" ] && [ -f ./work_${NAME}/source/justbuild_*.deb ]; then
     # verify deb package

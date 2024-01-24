@@ -6,12 +6,14 @@ set -euo pipefail
 readonly REF="${1:-HEAD}"
 readonly PLF="${2:-ubuntu22.04}"
 readonly PKG="${3:-deb}"
+readonly TARBALL="${4:-""}" # optional path to binary tarball
 readonly NAME="justbuild"
 readonly GH_ORG="just-buildsystem"
 
 # paths
+readonly CWD=$(pwd)
 readonly ROOTDIR=$(realpath $(dirname $0))
-readonly WORKDIR=$(pwd)/work_${PLF}/source
+readonly WORKDIR=${CWD}/work_${PLF}/source
 
 # clean workdir
 rm -rf ${WORKDIR}
@@ -58,9 +60,10 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
   elif [ "${PKG}" = "rpm" ]; then
     export HOME="${WORKDIR}"
     export DATADIR="$(pwd)/rpmbuild"
+    mkdir -p "${DATADIR}"
     rpmdev-setuptree
   elif [ "${PKG}" = "tar" ]; then
-    export VERSION
+    export VERSION SOURCE_DATE_EPOCH
     export TARGET_ARCH=$(jq -r '."'${PLF}'"."target-arch" // "x86_64"' ${ROOTDIR}/platforms.json)
     ${ROOTDIR}/build-tarball.sh
     exit 0
@@ -78,7 +81,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     if [ -z "${DEP}" ]; then continue; fi
     mkdir -p ${DISTFILES}
     URL="$(jq -r '.repositories."'${DEP}'".repository.fetch' etc/repos.json)"
-    wget -nv -P ${DISTFILES} "${URL}"
+    wget --no-check-certificate -nv -P ${DISTFILES} "${URL}"
     echo "$(basename "${URL}"): ${URL}" >> ${INFOFILE}
   done <<< $(echo ${NON_LOCAL_DEPS} | jq -r '.[]')
 
@@ -115,13 +118,24 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     COMPAT_LEVEL=$(dpkg -s debhelper | sed -n 's/^Version:\s\+\([0-9]*\).*/\1/p')
 
     # copy prepared debian files
-    cp -r ${ROOTDIR}/debian/* ./debian/
+    if [ -z "${TARBALL}" ]; then
+      cp -r ${ROOTDIR}/bootstrapped/debian/* ./debian/
+    else
+      cp -r ${ROOTDIR}/prebuilt/debian/* ./debian/
+      cp ${TARBALL} ./debian/justbuild.tar.gz
+      echo debian/justbuild.tar.gz > ./debian/source/include-binaries
+    fi
 
-    # use clang on older platforms
-    if echo ${BUILD_DEPENDS} | grep -q clang; then
-      # overwrite debhelper compile flags and set FAMILY to "clang"
-      sed -i 's/\([C|CXX]FLAGS\) +=/\1 :=/' ./debian/justbuild.makefile
-      sed -i 's/{"FAMILY": "gnu"}/{"FAMILY": "clang"}/' ./debian/justbuild.makefile
+    if [ -f ./debian/justbuild.makefile ]; then
+      # set reproducible build path (for cache hits during package rebuilds)
+      sed -i 's|BUILDDIR ?= .*|BUILDDIR ?= /tmp/build|g' ./debian/justbuild.makefile
+
+      # use clang on older platforms
+      if echo ${BUILD_DEPENDS} | grep -q clang; then
+        # overwrite debhelper compile flags and set FAMILY to "clang"
+        sed -i 's/\([C|CXX]FLAGS\) +=/\1 :=/' ./debian/justbuild.makefile
+        sed -i 's/{"FAMILY": "gnu"}/{"FAMILY": "clang"}/' ./debian/justbuild.makefile
+      fi
     fi
 
     if [ -d ./debian/third_party ]; then
@@ -156,9 +170,6 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     find ./debian/ -type f -iname '*.ex' -delete
     rm -f ./debian/{README.source,justbuild-docs.docs}
 
-    # set reproducible build path (for cache hits during package rebuilds)
-    sed -i 's|BUILDDIR ?= .*|BUILDDIR ?= /tmp/build|g' ./debian/justbuild.makefile
-
     # build source package
     dpkg-buildpackage -S
 
@@ -166,9 +177,14 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     dpkg-buildpackage -b
   elif [ "${PKG}" = "rpm" ]; then
     # copy prepared rpmbuild files
-    cp ${ROOTDIR}/rpmbuild/justbuild.makefile ./rpmbuild/
-    cp ${ROOTDIR}/rpmbuild/justbuild.spec ${HOME}/rpmbuild/SPECS/
-    echo ${SOURCE_DATE_EPOCH} > ./rpmbuild/source_date_epoch
+    if [ -z "${TARBALL}" ]; then
+      cp ${ROOTDIR}/bootstrapped/rpmbuild/justbuild.makefile ./rpmbuild/
+      cp ${ROOTDIR}/bootstrapped/rpmbuild/justbuild.spec ${HOME}/rpmbuild/SPECS/
+      echo ${SOURCE_DATE_EPOCH} > ./rpmbuild/source_date_epoch
+    else
+      cp ${ROOTDIR}/prebuilt/rpmbuild/justbuild.spec ${HOME}/rpmbuild/SPECS/
+      cp ${TARBALL} ./rpmbuild/justbuild.tar.gz
+    fi
 
     # patch spec file
     sed -i 's/VERSION/'${VERSION}'/' ${HOME}/rpmbuild/SPECS/justbuild.spec
