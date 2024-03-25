@@ -34,6 +34,26 @@ jobs:
           .github/make-pkg/docker-build.sh ${BASE_COMMIT} static-x86_64
           cp ./work_static-x86_64/source/justbuild-*.tar.gz .
 
+      - name: Run garbage collector and clean cache
+        if: ${{ success() }}
+        run: |
+          docker run --rm -v $GITHUB_WORKSPACE:/workspace -w /workspace \
+            just-make-tar:static-x86_64 sh -c "\
+              just gc --local-build-root \$(pwd)/work_static-x86_64/build/.just"
+          gh extension install actions/gh-actions-cache
+          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-x86_64')" ]; then
+            gh actions-cache delete "deploy-${{ runner.os }}-x86_64" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Store local cache
+        uses: actions/cache/save@v4
+        if: ${{ success() }}
+        with:
+          path: ./work_static-x86_64/build/.just
+          key: deploy-${{ runner.os }}-x86_64
+
       - name: Build DEB package
         run: |
           .github/make-pkg/docker-build.sh ${BASE_COMMIT} bundled-deb
@@ -54,26 +74,6 @@ jobs:
           name: justbuild-x86_64-linux
           path: justbuild-x86_64-linux.tar.gz
           retention-days: 1
-
-      - name: Run garbage collector and clean cache
-        if: ${{ success() }}
-        run: |
-          docker run --rm -v $GITHUB_WORKSPACE:/workspace -w /workspace \
-            just-make-tar:static-x86_64 sh -c "\
-              just gc --local-build-root \$(pwd)/work_static-x86_64/build/.just"
-          gh extension install actions/gh-actions-cache
-          if [ -n "$(gh actions-cache list -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --key 'deploy-${{ runner.os }}-x86_64')" ]; then
-            gh actions-cache delete "deploy-${{ runner.os }}-x86_64" -R ${GITHUB_REPOSITORY} -B ${GITHUB_REF} --confirm
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Store local cache
-        uses: actions/cache/save@v4
-        if: ${{ success() }}
-        with:
-          path: ./work_static-x86_64/build/.just
-          key: deploy-${{ runner.os }}-x86_64
 
   linux-aarch64:
     name: Linux aarch64
@@ -102,17 +102,6 @@ jobs:
           .github/make-pkg/docker-build.sh ${BASE_COMMIT} static-aarch64
           cp ./work_static-aarch64/source/justbuild-*.tar.gz .
 
-      - name: Collect packages
-        run: |
-          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-aarch64-linux.tar.gz *.tar.gz
-
-      - name: Upload packages
-        uses: actions/upload-artifact@v4
-        with:
-          name: justbuild-aarch64-linux
-          path: justbuild-aarch64-linux.tar.gz
-          retention-days: 1
-
       - name: Run garbage collector and clean cache
         if: ${{ success() }}
         run: |
@@ -132,6 +121,17 @@ jobs:
         with:
           path: ./work_static-aarch64/build/.just
           key: deploy-${{ runner.os }}-aarch64
+
+      - name: Collect packages
+        run: |
+          tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-aarch64-linux.tar.gz *.tar.gz
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: justbuild-aarch64-linux
+          path: justbuild-aarch64-linux.tar.gz
+          retention-days: 1
 
   deploy-packages:
     name: Deploy Packages
