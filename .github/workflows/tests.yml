@@ -12,13 +12,13 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Restore local cache
-        uses: actions/cache/restore@v3
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/just
           key: tests-${{ runner.os }}-debug
 
       - name: Checkout sources
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -62,7 +62,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Store local cache
-        uses: actions/cache/save@v3
+        uses: actions/cache/save@v4
         if: ${{ !cancelled() }}
         with:
           path: ~/.cache/just
@@ -74,13 +74,13 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Restore local cache
-        uses: actions/cache/restore@v3
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/just
           key: tests-${{ runner.os }}-release
 
       - name: Checkout sources
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -124,7 +124,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Store local cache
-        uses: actions/cache/save@v3
+        uses: actions/cache/save@v4
         if: ${{ !cancelled() }}
         with:
           path: ~/.cache/just

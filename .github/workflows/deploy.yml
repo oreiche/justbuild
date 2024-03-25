@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -24,7 +24,7 @@ jobs:
           echo "BASE_COMMIT=${BASE_COMMIT}" >> $GITHUB_ENV
 
       - name: Restore local cache
-        uses: actions/cache/restore@v3
+        uses: actions/cache/restore@v4
         with:
           path: ./work_static-x86_64/build/.just
           key: deploy-${{ runner.os }}-x86_64
@@ -49,7 +49,7 @@ jobs:
           tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-x86_64-linux.tar.gz *.tar.gz *.deb *.rpm
 
       - name: Upload packages
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: justbuild-x86_64-linux
           path: justbuild-x86_64-linux.tar.gz
@@ -69,7 +69,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Store local cache
-        uses: actions/cache/save@v3
+        uses: actions/cache/save@v4
         if: ${{ success() }}
         with:
           path: ./work_static-x86_64/build/.just
@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -92,7 +92,7 @@ jobs:
           echo "BASE_COMMIT=${BASE_COMMIT}" >> $GITHUB_ENV
 
       - name: Restore local cache
-        uses: actions/cache/restore@v3
+        uses: actions/cache/restore@v4
         with:
           path: ./work_static-aarch64/build/.just
           key: deploy-${{ runner.os }}-aarch64
@@ -107,7 +107,7 @@ jobs:
           tar --sort=name --owner=root:0 --group=root:0 --mtime='UTC 1970-01-01' -czvf justbuild-aarch64-linux.tar.gz *.tar.gz
 
       - name: Upload packages
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: justbuild-aarch64-linux
           path: justbuild-aarch64-linux.tar.gz
@@ -127,7 +127,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Store local cache
-        uses: actions/cache/save@v3
+        uses: actions/cache/save@v4
         if: ${{ success() }}
         with:
           path: ./work_static-aarch64/build/.just
@@ -140,17 +140,17 @@ jobs:
     needs: [linux-x86_64, linux-aarch64]
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Retrieve x86_64 Linux packages
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: justbuild-x86_64-linux
 
       - name: Retrieve aarch64 Linux packages
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: justbuild-aarch64-linux
 
@@ -171,7 +171,7 @@ jobs:
           sha256sum *.tar.gz *.deb *.rpm | tee SHA256SUMS
 
       - name: Upload package checksums
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: SHA256SUMS
           path: SHA256SUMS
