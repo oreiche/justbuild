@@ -12,11 +12,12 @@ if [ "$TARGET_ARCH" = "aarch64" ]; then
 fi
 
 cat > build.conf << EOF
-{ "TOOLCHAIN_CONFIG": {"FAMILY": "gnu"}
+{ "TOOLCHAIN_CONFIG":
+  { "FAMILY": "gnu"
+  , "BUILD_STATIC": true
+  }
 , "TARGET_ARCH": "$TARGET_ARCH"
 , "AR": "ar"
-, "BUILD_STATIC_BINARY": true
-, "FINAL_LDFLAGS": ["-s"]
 , "SOURCE_DATE_EPOCH": $SOURCE_DATE_EPOCH
 }
 EOF
