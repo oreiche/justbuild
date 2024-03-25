@@ -14,7 +14,7 @@ function docker_build() {
   local PKG=$(jq -r '."'${NAME}'".type' ${ROOTDIR}/platforms.json)
   local IMAGE=$(jq -r '."'${NAME}'".image' ${ROOTDIR}/platforms.json)
   local PREBUILT=$(jq -r '."'${NAME}'".prebuilt // ""' ${ROOTDIR}/platforms.json)
-  local BUILD_DEPS=$(jq -r '."'${NAME}'"."build-depends" | join(" ")' \
+  local BUILD_DEPS=$(jq -r '."'${NAME}'"."build-depends" // [] | join(" ")' \
                         ${ROOTDIR}/platforms.json)
   local BUILD_DIR="$(pwd)/work_${NAME}/build"
   local DOCKER_ARGS="-w /workspace -v $(pwd):/workspace -v ${BUILD_DIR}:/tmp/build"
