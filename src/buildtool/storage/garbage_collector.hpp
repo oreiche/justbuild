@@ -60,13 +60,18 @@ class GarbageCollector {
     /// \brief Uplink entry from target cache across all generations to latest.
     /// Note that the entry will be uplinked including all referenced items.
     /// \param key  Target cache key to uplink entry for.
+    /// \param shard Optional explicit shard, if the default is not intended.
     /// \returns true if cache entry was found and successfully uplinked.
     [[nodiscard]] auto static GlobalUplinkTargetCacheEntry(
-        TargetCacheKey const& key) noexcept -> bool;
+        TargetCacheKey const& key,
+        std::optional<std::string> const& shard = std::nullopt) noexcept
+        -> bool;
 
-    /// \brief Trigger deletion of oldest generation.
+    /// \brief Trigger garbage collection; unless no_rotation is given, this
+    /// will include rotation of generations and deleting the oldest generation.
     /// \returns true on success.
-    [[nodiscard]] auto static TriggerGarbageCollection() noexcept -> bool;
+    [[nodiscard]] auto static TriggerGarbageCollection(
+        bool no_rotation = false) noexcept -> bool;
 
     /// \brief Acquire shared lock to prevent garbage collection from running.
     /// \returns The acquired lock file on success or nullopt otherwise.

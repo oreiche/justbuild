@@ -21,6 +21,7 @@
 #include "fmt/core.h"
 #include "src/buildtool/compatibility/native_support.hpp"
 #include "src/buildtool/execution_api/common/bytestream_common.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 #include "src/utils/cpp/verify_hash.hpp"
@@ -129,8 +130,7 @@ auto BytestreamServiceImpl::Write(
         logger_.Emit(LogLevel::Error, str);
         return grpc::Status{grpc::StatusCode::INTERNAL, str};
     }
-    auto tmp_dir = TmpDir::Create(StorageConfig::GenerationCacheRoot(0) /
-                                  "execution-service");
+    auto tmp_dir = StorageConfig::CreateTypedTmpDir("execution-service");
     if (!tmp_dir) {
         return ::grpc::Status{::grpc::StatusCode::INTERNAL,
                               "could not create TmpDir"};

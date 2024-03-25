@@ -68,23 +68,43 @@ EOF
 cat TARGETS
 
 # Build to fill the cache
-"${JUST}" build ${BUILD_ARGS} \
+"${JUST}" build ${BUILD_ARGS} -L '["env", "PATH='"${PATH}"'"]' \
           -D '{"ENV": {"TOOLS": "'${TOOLS_DIR}'"}}' 2>&1
 
 # Demonstrate that from now on, we don't build anything any more
 rm -rf "${TOOLS_DIR}"
 
 # Verify the large file is in cache
-"${JUST}" install ${BUILD_ARGS} -o "${OUT}/out-large" \
+"${JUST}" install ${BUILD_ARGS} -L '["env", "PATH='"${PATH}"'"]' -o "${OUT}/out-large" \
           -D '{"ENV": {"TOOLS": "'${TOOLS_DIR}'"}}' large 2>&1
 wc -c "${OUT}/out-large/out.txt"
 test $(cat "${OUT}/out-large/out.txt" | wc -c) -gt 100000
+
+# Now test non-rotating gc; this does not affect how far the
+# cache. At the end, we also repeat it serveral time to demontstrate
+# that things don't fall out of cache.
+
+LEFT_OVER_REMOVE_DIR="${LBR}/protocol-dependent/remove-me-$$-xxx"
+EPHEMERAL_DIR="${LBR}/protocol-dependent/generation-0/ephemeral"
+
+mkdir -p "${LEFT_OVER_REMOVE_DIR}/xxx"
+mkdir -p "${EPHEMERAL_DIR}/xxx"
+
+"${JUST}" gc --local-build-root "${LBR}" --no-rotate 2>&1
+
+echo "Checking that ${EPHEMERAL_DIR} was removed"
+[ -e "${EPHEMERAL_DIR}" ] && exit 1 || :
+echo "Checking that ${LEFT_OVER_REMOVE_DIR} was removed"
+[ -e "${LEFT_OVER_REMOVE_DIR}" ] && exit 1 || :
+
+"${JUST}" gc --local-build-root "${LBR}" --no-rotate 2>&1
+"${JUST}" gc --local-build-root "${LBR}" --no-rotate 2>&1
 
 # collect garbage
 "${JUST}" gc --local-build-root "${LBR}" 2>&1
 
 # Use the tree
-"${JUST}" build ${BUILD_ARGS} \
+"${JUST}" build ${BUILD_ARGS} -L '["env", "PATH='"${PATH}"'"]' \
           -D '{"ENV": {"TOOLS": "'${TOOLS_DIR}'"}}' tree 2>&1
 
 # collect garbage again
@@ -96,7 +116,7 @@ wc -c "${OUT}/root.tar"
 test $(cat "${OUT}/root.tar" | wc -c) -lt 100000
 
 # Verify that the tree is fully in cache
-"${JUST}" install ${BUILD_ARGS} -o "${OUT}/out-tree" \
+"${JUST}" install ${BUILD_ARGS} -L '["env", "PATH='"${PATH}"'"]' -o "${OUT}/out-tree" \
           -D '{"ENV": {"TOOLS": "'${TOOLS_DIR}'"}}' tree 2>&1
 ls -R "${OUT}/out-tree"
 test -f "${OUT}/out-tree/out/hello/world/tree/hello.txt"

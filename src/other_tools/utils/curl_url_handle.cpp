@@ -17,6 +17,7 @@
 #include <regex>
 #include <sstream>
 
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
 extern "C" {
@@ -167,7 +168,8 @@ auto CurlURLHandle::Create(std::string const& url) noexcept
         auto rc = curl_url_set(handle, CURLUPART_URL, url.c_str(), 0U);
         if (rc != CURLUE_OK) {
             Logger::Log(LogLevel::Debug,
-                        "CurlURLHandle: parsing URL failed with:\n{}",
+                        "CurlURLHandle: parsing URL {} failed with:\n{}",
+                        url,
                         curl_url_strerror(rc));
             curl_url_cleanup(handle);
             return nullptr;
@@ -789,48 +791,49 @@ auto CurlURLHandle::NoproxyStringMatches(std::string const& no_proxy) noexcept
     }
 }
 
-auto CurlURLHandle::ReplaceHostname(std::string const& url,
-                                    std::string const& hostname) noexcept
+auto CurlURLHandle::GetHostname(std::string const& url) noexcept
     -> std::optional<std::string> {
     try {
-        // We should not guess the scheme based on current hostname, as it may
-        // cause the URL with the new hostname to falsely fail; we set
-        // use_default_scheme instead. Additionally, we set use_no_authority to
-        // false as the given URL MUST already have a hostname to be replaced.
+        // Allow parsing spaces in path (we only care about hostname), and do
+        // not log error on failure.
         if (auto parsed_url = CreatePermissive(url,
                                                false /*use_guess_scheme*/,
-                                               true /*use_default_scheme*/,
-                                               true /*use_non_support_scheme*/,
+                                               false /*use_default_scheme*/,
+                                               false /*use_non_support_scheme*/,
                                                false /*use_no_authority*/,
-                                               true /*use_path_as_is*/,
+                                               false /*use_path_as_is*/,
                                                true /*use_allow_space*/,
                                                true /*ignore_fatal*/)) {
             if (*parsed_url == nullptr) {
                 return std::nullopt;
             }
-            auto rc = curl_url_set(parsed_url.value()->handle_.get(),
-                                   CURLUPART_HOST,
-                                   hostname.c_str(),
-                                   0U);
+
+            char* buffer{nullptr};  // NOLINT
+            auto rc = curl_url_get(
+                parsed_url.value()->handle_.get(), CURLUPART_HOST, &buffer, 0U);
+
+            std::string hostname{};
+            if (buffer != nullptr) {
+                hostname = std::string{buffer};
+                curl_free(buffer);
+            }
+
             if (rc != CURLUE_OK) {
                 Logger::Log(LogLevel::Debug,
-                            "CurlURLHandle: setting hostname {} in URL {} "
+                            "CurlURLHandle: getting hostname from URL {} "
                             "failed with:\n{}",
-                            hostname,
                             url,
                             curl_url_strerror(rc));
                 return std::nullopt;
             }
-            return parsed_url.value()->GetURL(false /*use_default_port*/,
-                                              true /*use_default_scheme*/,
-                                              false /*use_no_default_port*/,
-                                              true /*ignore_fatal*/);
+            return hostname;
         }
     } catch (std::exception const& ex) {
-        Logger::Log(LogLevel::Debug,
-                    "CurlURLHandle: Replacing URL hostname failed unexpectedly "
-                    "with:\n{}",
-                    ex.what());
+        Logger::Log(
+            LogLevel::Debug,
+            "CurlURLHandle: Getting hostname from URL failed unexpectedly "
+            "with:\n{}",
+            ex.what());
     }
     return std::nullopt;
 }

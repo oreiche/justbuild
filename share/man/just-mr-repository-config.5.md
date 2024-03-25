@@ -75,6 +75,24 @@ The following fields are supported:
    This entry is optional. If missing, the root directory of the archive
    is used.
 
+### *`"foreign file"`*
+
+Define a root as consisting of single file with given content at
+a specific name with specified executable bit.
+
+The following fields are supported.
+
+- *`"content"`*, *`"fetch"`*, *`"distfile"`*, *`"mirrors"`*, *`"sha256"`*,
+  and *`"sha512"`* specify the file content in the same way as they specify
+  the archive content for an *`"archive"`* repository.
+
+- *`"name"`* specifies the name the content should have in the defined root.
+  It has to be a plain file name without implicitly specified sudirs. This
+  field is mandatory.
+
+- *`"executable"`* is a boolean indicating whether the fetched file should
+  be provided with the executable bit. Defaults to `false`.
+
 ### *`"git"`*
 
 It defines as workspace root a part of a Git repository.
@@ -82,7 +100,8 @@ It defines as workspace root a part of a Git repository.
 The following fields are supported:
 
  - *`"repository"`* provides the URL of the Git repository. This entry
-   is mandatory.
+   is mandatory. Note that only URLs starting with `/`, `./`, or `file://`
+   are considered file URLs.
 
  - *`"commit"`* contains the commit hash. This has to be specified in
    hex encoding. This entry is mandatory.
@@ -97,6 +116,10 @@ The following fields are supported:
  - *`"subdir"`* specifies the subdirectory containing the distribution
    files. This entry is optional. If missing, the root directory of the
    Git repository is used.
+
+ - *`"inherit env"`* provides a list of variables. When `just-mr`
+   shells out to `git`, those variables are inherited from the
+   environment `just-mr` is called within, if set there.
 
 ### *`"git tree"`*
 

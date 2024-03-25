@@ -15,6 +15,7 @@
 #include "src/buildtool/execution_api/execution_service/capabilities_server.hpp"
 
 #include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
 auto CapabilitiesServiceImpl::GetCapabilities(
@@ -37,6 +38,9 @@ auto CapabilitiesServiceImpl::GetCapabilities(
     cache.set_max_batch_total_size_bytes(kMaxBatchTransferSize);
     static_assert(kMaxBatchTransferSize < GRPC_DEFAULT_MAX_RECV_MESSAGE_LENGTH,
                   "Max batch transfer size too large.");
+    cache.add_supported_chunking_algorithms(
+        ::bazel_re::ChunkingAlgorithm_Value::
+            ChunkingAlgorithm_Value_FASTCDC_MT0_8KB);
     *(response->mutable_cache_capabilities()) = cache;
 
     exec.set_digest_function(

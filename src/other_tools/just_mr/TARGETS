@@ -1,6 +1,6 @@
 { "just-mr":
   { "type": ["@", "rules", "CC", "binary"]
-  , "arguments_config": ["BUILD_STATIC_BINARY", "FINAL_LDFLAGS"]
+  , "arguments_config": ["FINAL_LDFLAGS"]
   , "name": ["just-mr"]
   , "srcs": ["main.cpp"]
   , "private-deps":
@@ -28,10 +28,6 @@
     { "type": "++"
     , "$1":
       [ ["-Wl,-z,stack-size=8388608"]
-      , { "type": "if"
-        , "cond": {"type": "var", "name": "BUILD_STATIC_BINARY"}
-        , "then": ["-static"]
-        }
       , {"type": "var", "name": "FINAL_LDFLAGS", "default": []}
       ]
     }
@@ -48,6 +44,10 @@
     , ["src/buildtool/build_engine/expression", "expression"]
     ]
   , "stage": ["src", "other_tools", "just_mr"]
+  , "private-deps":
+    [ ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
+    ]
   }
 , "exit_codes":
   { "type": ["@", "rules", "CC", "library"]
@@ -89,6 +89,7 @@
   , "private-deps":
     [ ["@", "json", "", "json"]
     , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , "exit_codes"
     , ["src/buildtool/auth", "auth"]
@@ -117,6 +118,7 @@
     , ["src/other_tools/ops_maps", "critical_git_op_map"]
     , ["src/other_tools/ops_maps", "git_tree_fetch_map"]
     , ["src/other_tools/ops_maps", "import_to_git_map"]
+    , ["src/other_tools/utils", "parse_archive"]
     , "setup_utils"
     , ["src/buildtool/execution_api/common", "common"]
     , ["src/buildtool/execution_api/local", "local"]
@@ -134,7 +136,7 @@
     , ["@", "json", "", "json"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/multithreading", "task_system"]
-    , ["src/buildtool/storage", "fs_utils"]
+    , ["src/buildtool/storage", "config"]
     , ["src/other_tools/git_operations", "git_repo_remote"]
     , "exit_codes"
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
@@ -198,7 +200,12 @@
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["mirrors"]
   , "hdrs": ["mirrors.hpp"]
-  , "deps": [["@", "json", "", "json"], ["src/buildtool/logging", "logging"]]
+  , "deps":
+    [ ["@", "json", "", "json"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
+    , ["src/other_tools/utils", "curl_url_handle"]
+    ]
   , "stage": ["src", "other_tools", "just_mr"]
   }
 , "rc":
@@ -214,7 +221,16 @@
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/logging", "log_level"]
     , "exit_codes"
+    , "rc_merge"
     ]
   , "stage": ["src", "other_tools", "just_mr"]
+  }
+, "rc_merge":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["rcmerge"]
+  , "hdrs": ["rc_merge.hpp"]
+  , "srcs": ["rc_merge.cpp"]
+  , "stage": ["src", "other_tools", "just_mr"]
+  , "deps": [["src/buildtool/build_engine/expression", "expression"]]
   }
 }

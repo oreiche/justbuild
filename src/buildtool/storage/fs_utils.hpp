@@ -21,7 +21,6 @@
 
 #include "src/buildtool/common/user_structs.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
-#include "src/utils/cpp/tmp_dir.hpp"
 
 /* Utilities related to CAS and paths therein */
 
@@ -33,11 +32,6 @@ namespace StorageUtils {
                               std::string const& repo_url) noexcept
     -> std::filesystem::path;
 
-/// \brief Create a tmp directory with controlled lifetime for specific
-/// operations (archive, zip, file, distdir checkouts; fetch; update).
-[[nodiscard]] auto CreateTypedTmpDir(std::string const& type) noexcept
-    -> TmpDirPtr;
-
 /// \brief Get the path to the file storing the tree id associated with
 /// a given commit.
 [[nodiscard]] auto GetCommitTreeIDFile(std::string const& commit) noexcept
@@ -47,6 +41,13 @@ namespace StorageUtils {
 /// content.
 [[nodiscard]] auto GetArchiveTreeIDFile(std::string const& repo_type,
                                         std::string const& content) noexcept
+    -> std::filesystem::path;
+
+/// \brief Get the path to the file storing the tree id of an archive
+/// content.
+[[nodiscard]] auto GetForeignFileTreeIDFile(std::string const& content,
+                                            std::string const& name,
+                                            bool executable) noexcept
     -> std::filesystem::path;
 
 /// \brief Get the path to the file storing the tree id of a distdir list

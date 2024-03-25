@@ -116,21 +116,48 @@ class CASServiceImpl final
     // * `NOT_FOUND`: The requested tree root is not present in the CAS.
     auto GetTree(::grpc::ServerContext* context,
                  const ::bazel_re::GetTreeRequest* request,
-                 ::grpc::ServerWriter< ::bazel_re::GetTreeResponse>* writer)
+                 ::grpc::ServerWriter<::bazel_re::GetTreeResponse>* writer)
         -> ::grpc::Status override;
     // Split a blob into chunks.
     //
+    // This splitting API aims to reduce download traffic between client and
+    // server, e.g., if a client needs to fetch a large blob that just has been
+    // modified slightly since the last built. In this case, there is no need to
+    // fetch the entire blob data, but just the binary differences between the
+    // two blob versions, which are typically determined by deduplication
+    // techniques such as content-defined chunking.
+    //
     // Clients can use this API before downloading a blob to determine which
     // parts of the blob are already present locally and do not need to be
-    // downloaded again.
+    // downloaded again. The server splits the blob into chunks according to a
+    // specified content-defined chunking algorithm and returns a list of the
+    // chunk digests in the order in which the chunks have to be concatenated to
+    // assemble the requested blob.
     //
-    // The blob is split into chunks which are individually stored in the CAS. A
-    // list of the chunk digests is returned in the order in which the chunks
-    // have to be concatenated to assemble the requested blob.
+    // A client can expect the following guarantees from the server if a split
+    // request is answered successfully:
+    //  1. The blob chunks are stored in CAS.
+    //  2. Concatenating the blob chunks in the order of the digest list
+    //     returned by the server results in the original blob.
     //
-    // Using this API is optional but it allows clients to download only the
-    // missing parts of a blob instead of the entire blob data, which in turn
-    // can considerably reduce network traffic.
+    // The usage of this API is optional for clients but it allows them to
+    // download only the missing parts of a large blob instead of the entire
+    // blob data, which in turn can considerably reduce download network
+    // traffic.
+    //
+    // Since the generated chunks are stored as blobs, they underlie the same
+    // lifetimes as other blobs. However, their lifetime is extended if they are
+    // part of the result of a split blob request.
+    //
+    // For the client, it is recommended to verify whether the digest of the
+    // blob assembled by the fetched chunks results in the requested blob
+    // digest.
+    //
+    // If several clients use blob splitting, it is recommended that they
+    // request the same splitting algorithm to benefit from each others chunking
+    // data. In combination with blob splicing, an agreement about the chunking
+    // algorithm is recommended since both client as well as server side can
+    // benefit from each others chunking data.
     //
     // Errors:
     //
@@ -141,15 +168,52 @@ class CASServiceImpl final
                    const ::bazel_re::SplitBlobRequest* request,
                    ::bazel_re::SplitBlobResponse* response)
         -> ::grpc::Status override;
+    // Splice a blob from chunks.
+    //
+    // This is the complementary operation to the
+    // [ContentAddressableStorage.SplitBlob][build.bazel.remote.execution.v2.ContentAddressableStorage.SplitBlob]
+    // function to handle the splitted upload of large blobs to save upload
+    // traffic.
+    //
+    // If a client needs to upload a large blob and is able to split a blob into
+    // chunks locally according to some content-defined chunking algorithm, it
+    // can first determine which parts of the blob are already available in the
+    // remote CAS and upload the missing chunks, and then use this API to
+    // instruct the server to splice the original blob from the remotely
+    // available blob chunks.
+    //
+    // In order to ensure data consistency of the CAS, the server will verify
+    // the spliced result whether digest calculation results in the provided
+    // digest from the request and will reject a splice request if this check
+    // fails.
+    //
+    // The usage of this API is optional for clients but it allows them to
+    // upload only the missing parts of a large blob instead of the entire blob
+    // data, which in turn can considerably reduce upload network traffic.
+    //
+    // In order to split a blob into chunks, it is recommended for the client to
+    // use one of the servers' advertised chunking algorithms by
+    // [CacheCapabilities.supported_chunking_algorithms][build.bazel.remote.execution.v2.CacheCapabilities.supported_chunking_algorithms]
+    // to benefit from each others chunking data. If several clients use blob
+    // splicing, it is recommended that they use the same splitting algorithm to
+    // split their blobs into chunk.
+    //
+    // Errors:
+    //
+    // * `NOT_FOUND`: At least one of the blob chunks is not present in the CAS.
+    // * `RESOURCE_EXHAUSTED`: There is insufficient disk quota to store the
+    //   spliced blob.
+    // * `INVALID_ARGUMENT`: The digest of the spliced blob is different from
+    //   the provided expected digest.
+    auto SpliceBlob(::grpc::ServerContext* context,
+                    const ::bazel_re::SpliceBlobRequest* request,
+                    ::bazel_re::SpliceBlobResponse* response)
+        -> ::grpc::Status override;
 
   private:
     [[nodiscard]] auto CheckDigestConsistency(bazel_re::Digest const& ref,
                                               bazel_re::Digest const& computed)
         const noexcept -> std::optional<std::string>;
-
-    [[nodiscard]] auto EnsureTreeInvariant(
-        std::string const& data,
-        std::string const& hash) const noexcept -> std::optional<std::string>;
 
     gsl::not_null<Storage const*> storage_ = &Storage::Instance();
     Logger logger_{"execution-service"};

@@ -15,6 +15,7 @@
 #ifndef INCLUDED_SRC_OTHER_TOOLS_ROOT_MAPS_COMMIT_GIT_MAP_HPP
 #define INCLUDED_SRC_OTHER_TOOLS_ROOT_MAPS_COMMIT_GIT_MAP_HPP
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -23,7 +24,6 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/common/user_structs.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
-#include "src/buildtool/serve_api/remote/serve_api.hpp"
 #include "src/other_tools/just_mr/mirrors.hpp"
 #include "src/other_tools/ops_maps/critical_git_op_map.hpp"
 #include "src/other_tools/ops_maps/import_to_git_map.hpp"
@@ -35,6 +35,7 @@ struct GitRepoInfo {
     std::string repo_url{};
     std::string branch{};
     std::string subdir{}; /* key */
+    std::vector<std::string> inherit_env{};
     std::vector<std::string> mirrors{};
     // name of repository for which work is done; used in progress reporting
     std::string origin{};
@@ -68,7 +69,8 @@ struct hash<GitRepoInfo> {
 /// \brief Maps a Git repository commit hash to its tree workspace root,
 /// together with the information whether it was a cache hit.
 using CommitGitMap =
-    AsyncMapConsumer<GitRepoInfo, std::pair<nlohmann::json, bool>>;
+    AsyncMapConsumer<GitRepoInfo,
+                     std::pair<nlohmann::json /*root*/, bool /*is_cache_hit*/>>;
 
 [[nodiscard]] auto CreateCommitGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
@@ -78,8 +80,8 @@ using CommitGitMap =
     std::string const& git_bin,
     std::vector<std::string> const& launcher,
     bool serve_api_exists,
-    IExecutionApi* local_api,
-    IExecutionApi* remote_api,
+    gsl::not_null<IExecutionApi*> const& local_api,
+    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
     bool fetch_absent,
     std::size_t jobs) -> CommitGitMap;
 

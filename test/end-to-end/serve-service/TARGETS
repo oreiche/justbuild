@@ -6,7 +6,26 @@
     [["end-to-end", "tool-under-test"], ["end-to-end", "mr-tool-under-test"]]
   , "repos":
     [ "serve-target-remote-build (repo)"
-    , "serve-target-remote-build (installed data)"
+    , "serve-target-remote-build (rule)"
+    , "serve-target-remote-build (target)"
+    ]
+  }
+, "serve-target-failed-build":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["serve-target-failed-build"]
+  , "test": ["serve_target_failed_build.sh"]
+  , "deps":
+    [ ["end-to-end", "tool-under-test"]
+    , ["end-to-end", "mr-tool-under-test"]
+    , "serve-tree (archive)"
+    , "data/targets/TARGETS"
+    , "data/rules/RULES"
+    , "data/rules/RULES.dummy"
+    ]
+  , "repos":
+    [ "serve-target-remote-build (repo)"
+    , "serve-target-failed-build (rule)"
+    , "serve-target-remote-build (target)"
     ]
   }
 , "serve-target-remote-build (repo)":
@@ -18,15 +37,20 @@
     , "for i in `seq 6 10` ; do echo $i > src/subdir/sub-$i.txt ; done"
     ]
   }
-, "serve-target-remote-build (data)":
+, "serve-target-remote-build (target)":
   { "type": ["@", "rules", "data", "staged"]
-  , "srcs": ["data/targets/TARGETS", "data/rules/RULES"]
+  , "srcs": ["data/targets/TARGETS"]
   , "stage": ["test", "end-to-end", "serve-service"]
   }
-, "serve-target-remote-build (installed data)":
-  { "type": "install"
-  , "tainted": ["test"]
-  , "dirs": [["serve-target-remote-build (data)", "."]]
+, "serve-target-remote-build (rule)":
+  { "type": ["@", "rules", "data", "staged"]
+  , "srcs": ["data/rules/RULES"]
+  , "stage": ["test", "end-to-end", "serve-service"]
+  }
+, "serve-target-failed-build (rule)":
+  { "type": ["@", "rules", "data", "staged"]
+  , "srcs": ["data/rules/RULES.dummy"]
+  , "stage": ["test", "end-to-end", "serve-service"]
   }
 , "serve-target-cache-hit":
   { "type": ["end-to-end", "with serve"]
@@ -56,10 +80,7 @@
     [["end-to-end", "mr-tool-under-test"], ["end-to-end", "tool-under-test"]]
   }
 , "serve-tree (data)":
-  { "type": "install"
-  , "files": {"repo/TARGETS": "data/targets/TARGETS.tree"}
-  , "dirs": [["serve-target-remote-build (repo)", "repo"]]
-  }
+  {"type": "install", "dirs": [["serve-target-remote-build (repo)", "repo"]]}
 , "serve-tree (archive)":
   { "type": "generic"
   , "outs": ["src.tar"]
@@ -74,6 +95,7 @@
     [ ["end-to-end", "mr-tool-under-test"]
     , ["end-to-end", "tool-under-test"]
     , "serve-tree (archive)"
+    , "data/targets/TARGETS.tree"
     ]
   , "repos": ["serve-tree (archive)"]
   }
@@ -97,7 +119,45 @@
   , "deps":
     [["end-to-end", "mr-tool-under-test"], ["end-to-end", "tool-under-test"]]
   }
-, "TESTS":
+, "describe (data)":
+  { "type": "install"
+  , "files": {"ROOT": "data/ROOT", "TARGETS": "data/targets/TARGETS.describe"}
+  }
+, "describe (locally installed)":
+  {"type": "install", "dirs": [["describe (data)", "repo"]]}
+, "describe":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["describe"]
+  , "test": ["describe.sh"]
+  , "deps":
+    [ ["end-to-end", "mr-tool-under-test"]
+    , ["end-to-end", "tool-under-test"]
+    , "describe (locally installed)"
+    ]
+  , "repos": ["describe (data)"]
+  , "keep": ["out/describe.orig", "out/describe"]
+  }
+, "serve-many-targets (data)":
+  { "type": "install"
+  , "files": {"ROOT": "data/ROOT", "TARGETS": "data/targets/TARGETS.transform"}
+  }
+, "serve-many-targets":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["serve-many-targets"]
+  , "test": ["serve_many_targets.sh"]
+  , "deps":
+    [["end-to-end", "tool-under-test"], ["end-to-end", "mr-tool-under-test"]]
+  , "repos": ["serve-many-targets (data)"]
+  }
+, "deduplication-of-serve-requests":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["deduplication-of-serve-requests"]
+  , "test": ["deduplication_of_serve_requests.sh"]
+  , "deps":
+    [["end-to-end", "tool-under-test"], ["end-to-end", "mr-tool-under-test"]]
+  , "repos": ["serve-many-targets (data)"]
+  }
+, "TESTS (unconfigured)":
   { "type": "install"
   , "tainted": ["test"]
   , "arguments_config": ["TEST_COMPATIBLE_REMOTE"]
@@ -106,11 +166,15 @@
     , "$1":
       [ [ "serve-target-remote-build"
         , "serve-target-remote-build-dispatch"
+        , "serve-target-failed-build"
+        , "serve-many-targets"
         , "serve-target-cache-hit"
         , "serve-start-execute"
         , "serve-start-execute-sharding"
         , "serve-export-deps"
         , "serve-query-target-cache-value"
+        , "describe"
+        , "deduplication-of-serve-requests"
         ]
       , { "type": "if"
         , "cond": {"type": "var", "name": "TEST_COMPATIBLE_REMOTE"}
@@ -119,5 +183,34 @@
         }
       ]
     }
+  , "dirs":
+    [ [["./", "serve-archive-root", "TESTS"], "serve-archive-root"]
+    , [["./", "serve-git-root", "TESTS"], "serve-git-root"]
+    , [["./", "serve-file-root", "TESTS"], "serve-file-root"]
+    , [["./", "serve-git-tree-root", "TESTS"], "serve-git-tree-root"]
+    , [["./", "serve-distdir-root", "TESTS"], "serve-distdir-root"]
+    ]
+  }
+, "TESTS (separate remote)":
+  { "type": "configure"
+  , "tainted": ["test"]
+  , "target": "TESTS (unconfigured)"
+  , "config":
+    {"type": "singleton_map", "key": "TEST_STANDALONE_SERVE", "value": false}
+  }
+, "TESTS (standalone serve)":
+  { "type": "configure"
+  , "tainted": ["test"]
+  , "target": "TESTS (unconfigured)"
+  , "config":
+    {"type": "singleton_map", "key": "TEST_STANDALONE_SERVE", "value": true}
+  }
+, "TESTS":
+  { "type": "install"
+  , "tainted": ["test"]
+  , "dirs":
+    [ ["TESTS (separate remote)", "separate-remote"]
+    , ["TESTS (standalone serve)", "standalone-serve"]
+    ]
   }
 }

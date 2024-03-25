@@ -17,6 +17,7 @@
 #include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/execution_api/common/message_limits.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_response.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
 namespace {
@@ -30,7 +31,7 @@ namespace {
         return BazelMsgFactory::MessageFromString<bazel_re::Directory>(
             blobs.at(0).data);
     }
-    Logger::Log(LogLevel::Error,
+    Logger::Log(LogLevel::Debug,
                 "Directory {} not found in CAS",
                 NativeSupport::Unprefix(digest.hash()));
     return std::nullopt;
@@ -71,7 +72,7 @@ namespace {
             check_symlinks,
             /*is_hex_id=*/false);
     }
-    Logger::Log(LogLevel::Error,
+    Logger::Log(LogLevel::Debug,
                 "Tree {} not found in CAS",
                 NativeSupport::Unprefix(digest.hash()));
     return std::nullopt;
@@ -85,7 +86,7 @@ namespace {
     if (raw_tree) {
         auto blobs = network->ReadBlobs({tree_digest}).Next();
         if (blobs.size() != 1) {
-            Logger::Log(LogLevel::Error,
+            Logger::Log(LogLevel::Debug,
                         "Object {} not found in CAS",
                         NativeSupport::Unprefix(tree_digest.hash()));
             return false;
@@ -154,9 +155,24 @@ auto BazelNetwork::IsAvailable(std::vector<bazel_re::Digest> const& digests)
     return cas_->FindMissingBlobs(instance_name_, digests);
 }
 
-auto BazelNetwork::SplitBlob(bazel_re::Digest const& digest) const noexcept
+auto BazelNetwork::SplitBlob(bazel_re::Digest const& blob_digest) const noexcept
     -> std::optional<std::vector<bazel_re::Digest>> {
-    return cas_->SplitBlob(instance_name_, digest);
+    return cas_->SplitBlob(instance_name_, blob_digest);
+}
+
+auto BazelNetwork::SpliceBlob(
+    bazel_re::Digest const& blob_digest,
+    std::vector<bazel_re::Digest> const& chunk_digests) const noexcept
+    -> std::optional<bazel_re::Digest> {
+    return cas_->SpliceBlob(instance_name_, blob_digest, chunk_digests);
+}
+
+auto BazelNetwork::BlobSplitSupport() const noexcept -> bool {
+    return cas_->BlobSplitSupport(instance_name_);
+}
+
+auto BazelNetwork::BlobSpliceSupport() const noexcept -> bool {
+    return cas_->BlobSpliceSupport(instance_name_);
 }
 
 template <class T_Iter>
@@ -182,7 +198,7 @@ auto BazelNetwork::DoUploadBlobs(T_Iter const& first,
                    return cas_->UpdateSingleBlob(instance_name_, x);
                });
     } catch (...) {
-        Logger::Log(LogLevel::Error, "Unknown exception");
+        Logger::Log(LogLevel::Warning, "Unknown exception");
         return false;
     }
 }
@@ -214,7 +230,7 @@ auto BazelNetwork::ExecuteBazelActionSync(
     if (response.state !=
             BazelExecutionClient::ExecutionResponse::State::Finished or
         not response.output) {
-        Logger::Log(LogLevel::Error,
+        Logger::Log(LogLevel::Warning,
                     "Failed to execute action with execution id {}.",
                     action.hash());
         return std::nullopt;
@@ -256,7 +272,8 @@ auto BazelNetwork::BlobReader::Next() noexcept -> std::vector<BazelBlob> {
             begin_ = current_;
         }
     } catch (std::exception const& e) {
-        Logger::Log(LogLevel::Error, "Reading blobs failed with: {}", e.what());
+        Logger::Log(
+            LogLevel::Warning, "Reading blobs failed with: {}", e.what());
         Ensures(false);
     }
 

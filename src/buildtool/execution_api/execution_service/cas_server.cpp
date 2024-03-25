@@ -21,18 +21,14 @@
 #include <vector>
 
 #include "fmt/core.h"
-#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/compatibility/native_support.hpp"
-#include "src/buildtool/execution_api/execution_service/file_chunker.hpp"
-#include "src/buildtool/file_system/git_repo.hpp"
-#include "src/buildtool/file_system/object_type.hpp"
+#include "src/buildtool/execution_api/execution_service/cas_utils.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
-#include "src/utils/cpp/hex_string.hpp"
 #include "src/utils/cpp/verify_hash.hpp"
 
-static constexpr std::size_t kJustHashLength = 42;
+static constexpr std::size_t kGitSHA1Length = 42;
 static constexpr std::size_t kSHA256Length = 64;
 
 static auto IsValidHash(std::string const& x) -> bool {
@@ -40,7 +36,24 @@ static auto IsValidHash(std::string const& x) -> bool {
     auto const& length = x.size();
     return !error_msg and
            ((Compatibility::IsCompatible() and length == kSHA256Length) or
-            length == kJustHashLength);
+            length == kGitSHA1Length);
+}
+
+static auto ChunkingAlgorithmToString(::bazel_re::ChunkingAlgorithm_Value type)
+    -> std::string {
+    switch (type) {
+        case ::bazel_re::ChunkingAlgorithm_Value::
+            ChunkingAlgorithm_Value_IDENTITY:
+            return "IDENTITY";
+        case ::bazel_re::ChunkingAlgorithm_Value::
+            ChunkingAlgorithm_Value_RABINCDC_8KB:
+            return "RABINCDC_8KB";
+        case ::bazel_re::ChunkingAlgorithm_Value::
+            ChunkingAlgorithm_Value_FASTCDC_MT0_8KB:
+            return "FASTCDC_MT0_8KB";
+        default:
+            return "[Unknown Chunking Algorithm Type]";
+    }
 }
 
 auto CASServiceImpl::FindMissingBlobs(
@@ -100,46 +113,6 @@ auto CASServiceImpl::CheckDigestConsistency(bazel_re::Digest const& ref,
     return std::nullopt;
 }
 
-auto CASServiceImpl::EnsureTreeInvariant(std::string const& data,
-                                         std::string const& hash) const noexcept
-    -> std::optional<std::string> {
-    auto entries = GitRepo::ReadTreeData(
-        data,
-        NativeSupport::Unprefix(hash),
-        [](auto const& /*unused*/) { return true; },
-        /*is_hex_id=*/true);
-    if (not entries) {
-        auto str = fmt::format("Could not read tree data {}", hash);
-        logger_.Emit(LogLevel::Error, str);
-        return str;
-    }
-    for (auto const& entry : *entries) {
-        for (auto const& item : entry.second) {
-            auto digest = static_cast<bazel_re::Digest>(
-                ArtifactDigest{ToHexString(entry.first),
-                               /*size is unknown*/ 0,
-                               IsTreeObject(item.type)});
-            if (not(IsTreeObject(item.type)
-                        ? storage_->CAS().TreePath(digest)
-                        : storage_->CAS().BlobPath(digest, false))) {
-                auto str = fmt::format(
-                    "Tree invariant violated {}: missing element {}",
-                    hash,
-                    digest.hash());
-                logger_.Emit(LogLevel::Error, str);
-                return str;
-            }
-            // The GitRepo::tree_entries_t data structure maps the object id to
-            // a list of entries of that object in possibly multiple trees. It
-            // is sufficient to check the existence of only one of these entries
-            // to be sure that the object is in CAS since they all have the same
-            // content.
-            break;
-        }
-    }
-    return std::nullopt;
-}
-
 auto CASServiceImpl::BatchUpdateBlobs(
     ::grpc::ServerContext* /*context*/,
     const ::bazel_re::BatchUpdateBlobsRequest* request,
@@ -166,9 +139,12 @@ auto CASServiceImpl::BatchUpdateBlobs(
         if (NativeSupport::IsTree(hash)) {
             // In native mode: for trees, check whether the tree invariant holds
             // before storing the actual tree object.
-            if (auto err = EnsureTreeInvariant(x.data(), hash)) {
+            if (auto err =
+                    CASUtils::EnsureTreeInvariant(x.data(), hash, *storage_)) {
+                auto str = fmt::format("BatchUpdateBlobs: {}", *err);
+                logger_.Emit(LogLevel::Error, str);
                 return ::grpc::Status{grpc::StatusCode::FAILED_PRECONDITION,
-                                      *err};
+                                      str};
             }
             auto const& dgst = storage_->CAS().StoreTree(x.data());
             if (!dgst) {
@@ -178,7 +154,9 @@ auto CASServiceImpl::BatchUpdateBlobs(
                 return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
             }
             if (auto err = CheckDigestConsistency(x.digest(), *dgst)) {
-                return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, *err};
+                auto str = fmt::format("BatchUpdateBlobs: {}", *err);
+                logger_.Emit(LogLevel::Error, str);
+                return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, str};
             }
         }
         else {
@@ -190,7 +168,9 @@ auto CASServiceImpl::BatchUpdateBlobs(
                 return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
             }
             if (auto err = CheckDigestConsistency(x.digest(), *dgst)) {
-                return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, *err};
+                auto str = fmt::format("BatchUpdateBlobs: {}", *err);
+                logger_.Emit(LogLevel::Error, str);
+                return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, str};
             }
         }
     }
@@ -237,7 +217,7 @@ auto CASServiceImpl::BatchReadBlobs(
 auto CASServiceImpl::GetTree(
     ::grpc::ServerContext* /*context*/,
     const ::bazel_re::GetTreeRequest* /*request*/,
-    ::grpc::ServerWriter< ::bazel_re::GetTreeResponse>* /*writer*/)
+    ::grpc::ServerWriter<::bazel_re::GetTreeResponse>* /*writer*/)
     -> ::grpc::Status {
     auto const* str = "GetTree not implemented";
     logger_.Emit(LogLevel::Error, str);
@@ -262,6 +242,28 @@ auto CASServiceImpl::SplitBlob(::grpc::ServerContext* /*context*/,
         return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, str};
     }
 
+    auto chunking_algorithm = request->chunking_algorithm();
+    logger_.Emit(LogLevel::Debug,
+                 "SplitBlob({}, {})",
+                 blob_digest.hash(),
+                 ChunkingAlgorithmToString(chunking_algorithm));
+
+    // Print warning if unsupported chunking algorithm was requested.
+    if (chunking_algorithm != ::bazel_re::ChunkingAlgorithm_Value::
+                                  ChunkingAlgorithm_Value_IDENTITY and
+        chunking_algorithm != ::bazel_re::ChunkingAlgorithm_Value::
+                                  ChunkingAlgorithm_Value_FASTCDC_MT0_8KB) {
+        logger_.Emit(
+            LogLevel::Warning,
+            fmt::format(
+                "SplitBlob: unsupported chunking algorithm {}, will use "
+                "default implementation {}",
+                ChunkingAlgorithmToString(chunking_algorithm),
+                ChunkingAlgorithmToString(
+                    ::bazel_re::ChunkingAlgorithm_Value::
+                        ChunkingAlgorithm_Value_FASTCDC_MT0_8KB)));
+    }
+
     // Acquire garbage collection lock.
     auto lock = GarbageCollector::SharedLock();
     if (not lock) {
@@ -271,57 +273,26 @@ auto CASServiceImpl::SplitBlob(::grpc::ServerContext* /*context*/,
         return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
     }
 
-    logger_.Emit(LogLevel::Info, "SplitBlob({})", blob_digest.hash());
+    // Split blob into chunks.
+    auto split_result =
+        chunking_algorithm == ::bazel_re::ChunkingAlgorithm_Value::
+                                  ChunkingAlgorithm_Value_IDENTITY
+            ? CASUtils::SplitBlobIdentity(blob_digest, *storage_)
+            : CASUtils::SplitBlobFastCDC(blob_digest, *storage_);
 
-    // Check blob existence.
-    auto path = std::optional<std::filesystem::path>{};
-    if (NativeSupport::IsTree(blob_digest.hash())) {
-        path = storage_->CAS().TreePath(blob_digest);
-    }
-    else {
-        path = storage_->CAS().BlobPath(blob_digest, true);
-        if (not path) {
-            path = storage_->CAS().BlobPath(blob_digest, false);
-        }
-    }
-    if (not path) {
-        auto str =
-            fmt::format("SplitBlob: blob not found {}", blob_digest.hash());
+    if (std::holds_alternative<grpc::Status>(split_result)) {
+        auto status = std::get<grpc::Status>(split_result);
+        auto str = fmt::format("SplitBlob: {}", status.error_message());
         logger_.Emit(LogLevel::Error, str);
-        return ::grpc::Status{grpc::StatusCode::NOT_FOUND, str};
+        return ::grpc::Status{status.error_code(), str};
     }
 
-    // Split blob into chunks, store each chunk in CAS, and collect chunk
-    // digests.
-    auto chunker = FileChunker{*path};
-    if (not chunker.IsOpen()) {
-        auto str = fmt::format("SplitBlob: could not open blob for reading");
-        logger_.Emit(LogLevel::Error, str);
-        return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
-    }
-
-    auto chunk_digests = std::vector<bazel_re::Digest>{};
-    while (auto chunk = chunker.NextChunk()) {
-        auto chunk_digest = storage_->CAS().StoreBlob(*chunk, false);
-        if (not chunk_digest) {
-            auto str =
-                fmt::format("SplitBlob: could not store chunk of blob {}",
-                            blob_digest.hash());
-            logger_.Emit(LogLevel::Error, str);
-            return ::grpc::Status{grpc::StatusCode::RESOURCE_EXHAUSTED, str};
-        }
-        chunk_digests.emplace_back(*chunk_digest);
-    }
-    if (not chunker.Finished()) {
-        auto str =
-            fmt::format("SplitBlob: could split blob {}", blob_digest.hash());
-        logger_.Emit(LogLevel::Error, str);
-        return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
-    }
+    auto chunk_digests = std::get<std::vector<bazel_re::Digest>>(split_result);
     logger_.Emit(LogLevel::Debug, [&blob_digest, &chunk_digests]() {
         std::stringstream ss{};
         ss << "Split blob " << blob_digest.hash() << ":"
-           << blob_digest.size_bytes() << " into [ ";
+           << blob_digest.size_bytes() << " into " << chunk_digests.size()
+           << " chunks: [ ";
         for (auto const& chunk_digest : chunk_digests) {
             ss << chunk_digest.hash() << ":" << chunk_digest.size_bytes()
                << " ";
@@ -329,8 +300,66 @@ auto CASServiceImpl::SplitBlob(::grpc::ServerContext* /*context*/,
         ss << "]";
         return ss.str();
     });
+
     std::copy(chunk_digests.cbegin(),
               chunk_digests.cend(),
               pb::back_inserter(response->mutable_chunk_digests()));
+    return ::grpc::Status::OK;
+}
+
+auto CASServiceImpl::SpliceBlob(::grpc::ServerContext* /*context*/,
+                                const ::bazel_re::SpliceBlobRequest* request,
+                                ::bazel_re::SpliceBlobResponse* response)
+    -> ::grpc::Status {
+    if (not request->has_blob_digest()) {
+        auto str = fmt::format("SpliceBlob: no blob digest provided");
+        logger_.Emit(LogLevel::Error, str);
+        return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, str};
+    }
+
+    auto const& blob_digest = request->blob_digest();
+    if (not IsValidHash(blob_digest.hash())) {
+        auto str = fmt::format("SpliceBlob: unsupported digest {}",
+                               blob_digest.hash());
+        logger_.Emit(LogLevel::Error, str);
+        return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, str};
+    }
+
+    logger_.Emit(LogLevel::Debug,
+                 "SpliceBlob({}, {} chunks)",
+                 blob_digest.hash(),
+                 request->chunk_digests().size());
+
+    // Acquire garbage collection lock.
+    auto lock = GarbageCollector::SharedLock();
+    if (not lock) {
+        auto str = fmt::format(
+            "SpliceBlob: could not acquire garbage collection lock");
+        logger_.Emit(LogLevel::Error, str);
+        return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
+    }
+
+    // Splice blob from chunks.
+    auto chunk_digests = std::vector<bazel_re::Digest>{};
+    std::copy(request->chunk_digests().cbegin(),
+              request->chunk_digests().cend(),
+              std::back_inserter(chunk_digests));
+    auto splice_result = CASUtils::SpliceBlob(blob_digest,
+                                              chunk_digests,
+                                              *storage_,
+                                              /* check_tree_invariant= */ true);
+    if (std::holds_alternative<grpc::Status>(splice_result)) {
+        auto status = std::get<grpc::Status>(splice_result);
+        auto str = fmt::format("SpliceBlob: {}", status.error_message());
+        logger_.Emit(LogLevel::Error, str);
+        return ::grpc::Status{status.error_code(), str};
+    }
+    auto digest = std::get<bazel_re::Digest>(splice_result);
+    if (auto err = CheckDigestConsistency(blob_digest, digest)) {
+        auto str = fmt::format("SpliceBlob: {}", *err);
+        logger_.Emit(LogLevel::Error, str);
+        return ::grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, str};
+    }
+    response->mutable_blob_digest()->CopyFrom(digest);
     return ::grpc::Status::OK;
 }

@@ -41,16 +41,57 @@
   , "test": ["dispatch.sh"]
   , "deps": [["end-to-end", "tool-under-test"]]
   }
+, "split-splice (raw)":
+  { "type": ["end-to-end", "with remote"]
+  , "name": ["split-splice"]
+  , "test": ["split-splice.sh"]
+  , "deps": [["end-to-end", "tool-under-test"]]
+  }
+, "split-splice":
+  { "type": "configure"
+  , "tainted": ["test"]
+  , "target": "split-splice (raw)"
+  , "arguments_config": ["TIMEOUT_SCALE"]
+  , "config":
+    { "type": "singleton_map"
+    , "key": "TIMEOUT_SCALE"
+    , "value": {"type": "var", "name": "TIMEOUT_SCALE", "default": 10}
+    }
+  }
+, "add-to-cas":
+  { "type": ["end-to-end", "with remote"]
+  , "name": ["add-to-cas"]
+  , "test": ["add-to-cas.sh"]
+  , "deps":
+    [["end-to-end", "tool-under-test"], ["end-to-end", "mr-tool-under-test"]]
+  }
 , "TESTS":
   { "type": "install"
   , "tainted": ["test"]
+  , "arguments_config": ["TEST_COMPATIBLE_REMOTE", "TEST_BOOTSTRAP_JUST_MR"]
   , "deps":
-    [ "native-protocol"
-    , "large-blobs"
-    , "upload-test"
-    , "install"
-    , "install-cas"
-    , "dispatch"
-    ]
+    { "type": "++"
+    , "$1":
+      [ [ "native-protocol"
+        , "large-blobs"
+        , "upload-test"
+        , "install"
+        , "install-cas"
+        , "dispatch"
+        , "split-splice"
+        ]
+      , { "type": "if"
+        , "cond":
+          { "type": "or"
+          , "$1":
+            [ {"type": "var", "name": "TEST_BOOTSTRAP_JUST_MR"}
+            , {"type": "var", "name": "TEST_COMPATIBLE_REMOTE"}
+            ]
+          }
+        , "then": []
+        , "else": ["add-to-cas"]
+        }
+      ]
+    }
   }
 }

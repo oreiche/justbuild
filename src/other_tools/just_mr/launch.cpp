@@ -15,6 +15,7 @@
 #include "src/other_tools/just_mr/launch.hpp"
 
 #include <filesystem>
+#include <utility>
 
 #include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
@@ -34,7 +35,9 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
               MultiRepoJustSubCmdsArguments const& just_cmd_args,
               MultiRepoLogArguments const& log_args,
               MultiRepoRemoteAuthArguments const& auth_args,
-              bool forward_build_root) -> int {
+              ForwardOnlyArguments const& launch_fwd,
+              bool forward_build_root,
+              std::string multi_repo_tool_name) -> int {
     // check if subcmd_name can be taken from additional args
     auto additional_args_offset = 0U;
     auto subcommand = just_cmd_args.subcmd_name;
@@ -48,9 +51,9 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
     bool use_launcher{false};
     bool supports_defines{false};
     bool supports_remote{false};
+    bool supports_remote_properties{false};
+    bool supports_serve{false};
     bool supports_dispatch{false};
-    bool supports_cacert{false};
-    bool supports_client_auth{false};
     std::optional<std::filesystem::path> mr_config_path{std::nullopt};
 
     std::optional<LockFile> lock{};
@@ -70,10 +73,14 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
                                             setup_args,
                                             just_cmd_args,
                                             auth_args,
-                                            /*interactive=*/false);
+                                            /*interactive=*/false,
+                                            std::move(multi_repo_tool_name));
             if (not mr_config_path) {
                 Logger::Log(LogLevel::Error,
-                            "Failed to setup config while calling \"just {}\"",
+                            "Failed to setup config for calling \"{} {}\"",
+                            common_args.just_path
+                                ? common_args.just_path->string()
+                                : kDefaultJustPath,
                             *subcommand);
                 return kExitSetupError;
             }
@@ -82,10 +89,10 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
         use_launcher = kKnownJustSubcommands.at(*subcommand).launch;
         supports_defines = kKnownJustSubcommands.at(*subcommand).defines;
         supports_remote = kKnownJustSubcommands.at(*subcommand).remote;
+        supports_remote_properties =
+            kKnownJustSubcommands.at(*subcommand).remote_props;
+        supports_serve = kKnownJustSubcommands.at(*subcommand).serve;
         supports_dispatch = kKnownJustSubcommands.at(*subcommand).dispatch;
-        supports_cacert = kKnownJustSubcommands.at(*subcommand).cacert;
-        supports_client_auth =
-            kKnownJustSubcommands.at(*subcommand).client_auth;
     }
     // build just command
     std::vector<std::string> cmd = {common_args.just_path->string()};
@@ -151,28 +158,19 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
             cmd.emplace_back(overlay_config.ToString());
         }
     }
-    // forward remote execution arguments
-    if (supports_remote and (common_args.compatible == true)) {
-        cmd.emplace_back("--compatible");
-    }
-    if (supports_remote and common_args.remote_execution_address) {
-        cmd.emplace_back("-r");
-        cmd.emplace_back(*common_args.remote_execution_address);
-    }
-    if (supports_dispatch and just_cmd_args.endpoint_configuration) {
-        cmd.emplace_back("--endpoint-configuration");
-        cmd.emplace_back(*just_cmd_args.endpoint_configuration);
-    }
-    if (supports_remote and common_args.remote_serve_address) {
-        cmd.emplace_back("--remote-serve-address");
-        cmd.emplace_back(*common_args.remote_serve_address);
-    }
-    // forward mutual TLS arguments
-    if (supports_cacert and auth_args.tls_ca_cert) {
-        cmd.emplace_back("--tls-ca-cert");
-        cmd.emplace_back(auth_args.tls_ca_cert->string());
-    }
-    if (supports_client_auth) {
+    // forward remote execution and mutual TLS arguments
+    if (supports_remote) {
+        if (common_args.compatible == true) {
+            cmd.emplace_back("--compatible");
+        }
+        if (common_args.remote_execution_address) {
+            cmd.emplace_back("-r");
+            cmd.emplace_back(*common_args.remote_execution_address);
+        }
+        if (auth_args.tls_ca_cert) {
+            cmd.emplace_back("--tls-ca-cert");
+            cmd.emplace_back(auth_args.tls_ca_cert->string());
+        }
         if (auth_args.tls_client_cert) {
             cmd.emplace_back("--tls-client-cert");
             cmd.emplace_back(auth_args.tls_client_cert->string());
@@ -180,6 +178,21 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
         if (auth_args.tls_client_key) {
             cmd.emplace_back("--tls-client-key");
             cmd.emplace_back(auth_args.tls_client_key->string());
+        }
+    }
+    if (supports_dispatch and just_cmd_args.endpoint_configuration) {
+        cmd.emplace_back("--endpoint-configuration");
+        cmd.emplace_back(*just_cmd_args.endpoint_configuration);
+    }
+    if (supports_serve and common_args.remote_serve_address) {
+        cmd.emplace_back("-R");
+        cmd.emplace_back(*common_args.remote_serve_address);
+    }
+    // forward-only arguments, still to come before the just-arguments
+    if (supports_remote_properties) {
+        for (auto const& prop : launch_fwd.remote_execution_properties) {
+            cmd.emplace_back("--remote-execution-property");
+            cmd.emplace_back(prop);
         }
     }
     // add args read from just-mrrc

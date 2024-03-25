@@ -23,8 +23,11 @@
 #include "src/buildtool/build_engine/target_map/configured_target.hpp"
 #include "src/buildtool/build_engine/target_map/result_map.hpp"
 #include "src/buildtool/common/artifact.hpp"
+#include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/graph_traverser/graph_traverser.hpp"
+#include "src/buildtool/logging/log_level.hpp"
+#include "src/buildtool/logging/log_sink_file.hpp"
 #include "src/buildtool/main/analyse.hpp"
 #include "src/buildtool/main/build_utils.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
@@ -36,41 +39,82 @@
 #include "src/buildtool/storage/target_cache_key.hpp"
 #include "src/utils/cpp/verify_hash.hpp"
 
-auto TargetService::GetDispatchList(ArtifactDigest const& dispatch_digest)
+auto TargetService::GetDispatchList(
+    ArtifactDigest const& dispatch_digest) noexcept
     -> std::variant<::grpc::Status, dispatch_t> {
-    using result_t = std::variant<::grpc::Status, dispatch_t>;
     // get blob from remote cas
     auto const& dispatch_info = Artifact::ObjectInfo{.digest = dispatch_digest,
                                                      .type = ObjectType::File};
     if (!local_api_->IsAvailable(dispatch_digest) and
         !remote_api_->RetrieveToCas({dispatch_info}, &*local_api_)) {
-        return result_t(
-            std::in_place_index<0>,
-            ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION,
-                           fmt::format("Could not retrieve from "
-                                       "remote-execution end point blob {}",
-                                       dispatch_info.ToString())});
+        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION,
+                              fmt::format("Could not retrieve blob {} from "
+                                          "remote-execution endpoint",
+                                          dispatch_info.ToString())};
     }
     // get blob content
     auto const& dispatch_str = local_api_->RetrieveToMemory(dispatch_info);
     if (not dispatch_str) {
         // this should not fail unless something really broke...
-        return result_t(
-            std::in_place_index<0>,
-            ::grpc::Status{
-                ::grpc::StatusCode::INTERNAL,
-                fmt::format("Unexpected failure in retrieving blob {} from CAS",
-                            dispatch_info.ToString())});
+        return ::grpc::Status{
+            ::grpc::StatusCode::INTERNAL,
+            fmt::format("Unexpected failure in reading blob {} from CAS",
+                        dispatch_info.ToString())};
     }
     // parse content
-    auto parsed = ParseDispatch(*dispatch_str);
-    if (parsed.index() == 0) {
-        // pass the parsing error forward
-        return result_t(std::in_place_index<0>,
-                        ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION,
-                                       std::get<0>(parsed)});
+    try {
+        auto parsed = ParseDispatch(*dispatch_str);
+        if (parsed.index() == 0) {
+            // pass the parsing error forward
+            return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION,
+                                  std::get<0>(parsed)};
+        }
+        return std::get<1>(parsed);
+    } catch (std::exception const& e) {
+        return ::grpc::Status{::grpc::StatusCode::INTERNAL,
+                              fmt::format("Parsing dispatch blob {} "
+                                          "unexpectedly failed with:\n{}",
+                                          dispatch_digest.hash(),
+                                          e.what())};
     }
-    return result_t(std::in_place_index<1>, std::get<1>(parsed));
+}
+
+auto TargetService::HandleFailureLog(
+    std::filesystem::path const& logfile,
+    std::string const& failure_scope,
+    ::justbuild::just_serve::ServeTargetResponse* response) noexcept
+    -> ::grpc::Status {
+    logger_->Emit(LogLevel::Trace, [&logfile] {
+        if (auto s = FileSystemManager::ReadFile(logfile)) {
+            return *s;
+        }
+        return fmt::format("Failed to read failure log file {}",
+                           logfile.string());
+    });
+    // ...but try to give the client the proper log
+    auto const& cas = Storage::Instance().CAS();
+    auto digest = cas.StoreBlob(logfile, /*is_executable=*/false);
+    if (not digest) {
+        auto msg = fmt::format("Failed to store log of failed {} to local CAS",
+                               failure_scope);
+        logger_->Emit(LogLevel::Error, msg);
+        return ::grpc::Status{::grpc::StatusCode::INTERNAL, msg};
+    }
+    // upload log blob to remote
+    if (!local_api_->RetrieveToCas(
+            {Artifact::ObjectInfo{.digest = ArtifactDigest{*digest},
+                                  .type = ObjectType::File}},
+            &*remote_api_)) {
+        auto msg =
+            fmt::format("Failed to upload to remote CAS the failed {} log {}",
+                        failure_scope,
+                        digest->hash());
+        logger_->Emit(LogLevel::Error, msg);
+        return ::grpc::Status{::grpc::StatusCode::UNAVAILABLE, msg};
+    }
+    // set response with log digest
+    response->mutable_log()->CopyFrom(*digest);
+    return ::grpc::Status::OK;
 }
 
 auto TargetService::ServeTarget(
@@ -78,10 +122,9 @@ auto TargetService::ServeTarget(
     const ::justbuild::just_serve::ServeTargetRequest* request,
     ::justbuild::just_serve::ServeTargetResponse* response) -> ::grpc::Status {
     // check target cache key hash for validity
-    if (auto error_msg = IsAHash(request->target_cache_key_id().hash());
-        error_msg) {
-        logger_->Emit(LogLevel::Error, *error_msg);
-        return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, *error_msg};
+    if (auto msg = IsAHash(request->target_cache_key_id().hash()); msg) {
+        logger_->Emit(LogLevel::Error, *msg);
+        return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, *msg};
     }
     auto const& target_cache_key_digest =
         ArtifactDigest{request->target_cache_key_id()};
@@ -89,9 +132,9 @@ auto TargetService::ServeTarget(
     // acquire lock for CAS
     auto lock = GarbageCollector::SharedLock();
     if (!lock) {
-        auto error_msg = fmt::format("Could not acquire gc SharedLock");
-        logger_->Emit(LogLevel::Error, error_msg);
-        return ::grpc::Status{::grpc::StatusCode::INTERNAL, error_msg};
+        auto msg = std::string("Could not acquire gc SharedLock");
+        logger_->Emit(LogLevel::Error, msg);
+        return ::grpc::Status{::grpc::StatusCode::INTERNAL, msg};
     }
 
     // start filling in the backend description
@@ -109,9 +152,9 @@ auto TargetService::ServeTarget(
         {"platform_properties", platform_properties}};
 
     // read in the dispatch list and add it to the description, if not empty
-    if (auto error_msg = IsAHash(request->dispatch_info().hash()); error_msg) {
-        logger_->Emit(LogLevel::Error, *error_msg);
-        return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, *error_msg};
+    if (auto msg = IsAHash(request->dispatch_info().hash()); msg) {
+        logger_->Emit(LogLevel::Error, *msg);
+        return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, *msg};
     }
     auto const& dispatch_info_digest = ArtifactDigest{request->dispatch_info()};
     auto res = GetDispatchList(dispatch_info_digest);
@@ -147,36 +190,36 @@ auto TargetService::ServeTarget(
     // fields with invalid UTF-8 characters to be considered for the serialized
     // JSON description, but using the UTF-8 replacement character to solve any
     // decoding errors.
-    auto const description_str = description.dump(
-        2, ' ', false, nlohmann::json::error_handler_t::replace);
+    std::string description_str;
+    try {
+        description_str = description.dump(
+            2, ' ', false, nlohmann::json::error_handler_t::replace);
+    } catch (std::exception const& ex) {
+        // normally shouldn't happen
+        std::string err{"Failed to dump backend JSON description to string"};
+        logger_->Emit(LogLevel::Error, err);
+        return ::grpc::Status{::grpc::StatusCode::INTERNAL, err};
+    }
     auto execution_backend_dgst =
         Storage::Instance().CAS().StoreBlob(description_str);
     if (not execution_backend_dgst) {
-        logger_->Emit(
-            LogLevel::Error,
-            "Failed to store execution backend description in local CAS");
-        return ::grpc::Status{
-            ::grpc::StatusCode::INTERNAL,
+        std::string err{
             "Failed to store execution backend description in local CAS"};
-    }
-    auto untagged_execution_backend = ArtifactDigest{*execution_backend_dgst};
-    auto const& execution_info = Artifact::ObjectInfo{
-        .digest = untagged_execution_backend, .type = ObjectType::File};
-    if (!local_api_->RetrieveToCas({execution_info}, &*remote_api_)) {
-        auto msg = fmt::format("Failed to upload blob {} to remote CAS",
-                               execution_info.ToString());
-        logger_->Emit(LogLevel::Error, msg);
-        return ::grpc::Status{::grpc::StatusCode::UNAVAILABLE, msg};
+        logger_->Emit(LogLevel::Error, err);
+        return ::grpc::Status{::grpc::StatusCode::INTERNAL, err};
     }
 
     // get a target cache instance with the correct computed shard
-    auto const& tc = Storage::Instance().TargetCache().WithShard(
-        untagged_execution_backend.hash());
+    auto shard =
+        address
+            ? std::make_optional(ArtifactDigest(*execution_backend_dgst).hash())
+            : std::nullopt;
+    auto const& tc = Storage::Instance().TargetCache().WithShard(shard);
     auto const& tc_key =
         TargetCacheKey{{target_cache_key_digest, ObjectType::File}};
 
     // check if target-level cache entry has already been computed
-    if (auto target_entry = tc->Read(tc_key); target_entry) {
+    if (auto target_entry = tc.Read(tc_key); target_entry) {
 
         // make sure all artifacts referenced in the target cache value are in
         // the remote cas
@@ -186,28 +229,19 @@ auto TargetService::ServeTarget(
                 "Failed to extract artifacts from target cache entry {}",
                 target_entry->second.ToString());
             logger_->Emit(LogLevel::Error, msg);
-            return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
+            return ::grpc::Status{::grpc::StatusCode::INTERNAL, msg};
         }
+        artifacts.emplace_back(target_entry->second);  // add the tc value
         if (!local_api_->RetrieveToCas(artifacts, &*remote_api_)) {
             auto msg = fmt::format(
                 "Failed to upload to remote cas the artifacts referenced in "
                 "the target cache entry {}",
                 target_entry->second.ToString());
             logger_->Emit(LogLevel::Error, msg);
-            return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
-        }
-
-        // make sure the target cache value is in the remote cas
-        if (!local_api_->RetrieveToCas({target_entry->second}, &*remote_api_)) {
-            auto msg = fmt::format(
-                "Failed to upload to remote cas the target cache entry {}",
-                target_entry->second.ToString());
-            logger_->Emit(LogLevel::Error, msg);
             return ::grpc::Status{::grpc::StatusCode::UNAVAILABLE, msg};
         }
-
-        *(response->mutable_target_value()) =
-            std::move(target_entry->second.digest);
+        // populate response with the target cache value
+        response->mutable_target_value()->CopyFrom(target_entry->second.digest);
         return ::grpc::Status::OK;
     }
 
@@ -218,7 +252,7 @@ auto TargetService::ServeTarget(
     if (!local_api_->IsAvailable(target_cache_key_digest) and
         !remote_api_->RetrieveToCas({target_cache_key_info}, &*local_api_)) {
         auto msg = fmt::format(
-            "could not retrieve from remote-execution end point blob {}",
+            "Could not retrieve blob {} from remote-execution endpoint",
             target_cache_key_info.ToString());
         logger_->Emit(LogLevel::Error, msg);
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
@@ -228,9 +262,9 @@ auto TargetService::ServeTarget(
         local_api_->RetrieveToMemory(target_cache_key_info);
     if (not target_description_str) {
         // this should not fail unless something really broke...
-        auto msg =
-            fmt::format("Unexpected failure in retrieving blob {} from CAS",
-                        target_cache_key_info.ToString());
+        auto msg = fmt::format(
+            "Unexpected failure in retrieving blob {} from local CAS",
+            target_cache_key_info.ToString());
         logger_->Emit(LogLevel::Error, msg);
         return ::grpc::Status{::grpc::StatusCode::INTERNAL, msg};
     }
@@ -244,7 +278,7 @@ auto TargetService::ServeTarget(
                                target_cache_key_digest.hash(),
                                ex.what());
         logger_->Emit(LogLevel::Error, msg);
-        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
+        return ::grpc::Status{::grpc::StatusCode::INTERNAL, msg};
     }
     if (not target_description_dict.IsNotNull() or
         not target_description_dict->IsMap()) {
@@ -253,7 +287,7 @@ auto TargetService::ServeTarget(
                         target_cache_key_digest.hash(),
                         target_description_dict.ToJson().dump());
         logger_->Emit(LogLevel::Error, msg);
-        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
+        return ::grpc::Status{::grpc::StatusCode::NOT_FOUND, msg};
     }
 
     std::string error_msg{};  // buffer to store various error messages
@@ -276,8 +310,7 @@ auto TargetService::ServeTarget(
 
     if (!check_key("repo_key") or !check_key("target_name") or
         !check_key("effective_config")) {
-        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION,
-                              error_msg};
+        return ::grpc::Status{::grpc::StatusCode::NOT_FOUND, error_msg};
     }
 
     // get repository config blob path
@@ -290,7 +323,7 @@ auto TargetService::ServeTarget(
             target_cache_key_digest.hash(),
             repo_key.ToJson().dump());
         logger_->Emit(LogLevel::Error, msg);
-        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
+        return ::grpc::Status{::grpc::StatusCode::NOT_FOUND, msg};
     }
     ArtifactDigest repo_key_dgst{repo_key->String(), 0, /*is_tree=*/false};
     if (!local_api_->IsAvailable(repo_key_dgst) and
@@ -299,28 +332,29 @@ auto TargetService::ServeTarget(
                                   .type = ObjectType::File}},
             &*local_api_)) {
         auto msg = fmt::format(
-            "Could not retrieve from remote-execution end point blob {}",
+            "Could not retrieve blob {} from remote-execution endpoint",
             repo_key->String());
         logger_->Emit(LogLevel::Error, msg);
-        return ::grpc::Status{::grpc::StatusCode::UNAVAILABLE, msg};
+        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
     }
     auto repo_config_path = Storage::Instance().CAS().BlobPath(
         repo_key_dgst, /*is_executable=*/false);
     if (not repo_config_path) {
-        auto msg = fmt::format("Repository configuration blob {} not in CAS",
-                               repo_key->String());
+        // This should not fail unless something went really bad...
+        auto msg = fmt::format(
+            "Unexpected failure in retrieving blob {} from local CAS",
+            repo_key->String());
         logger_->Emit(LogLevel::Error, msg);
-        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
+        return ::grpc::Status{::grpc::StatusCode::INTERNAL, msg};
     }
 
     // populate the RepositoryConfig instance
     RepositoryConfig repository_config{};
     std::string const main_repo{"0"};  // known predefined main repository name
-    if (auto err_msg = DetermineRoots(
+    if (auto msg = DetermineRoots(
             main_repo, *repo_config_path, &repository_config, logger_)) {
-        logger_->Emit(LogLevel::Error, *err_msg);
-        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION,
-                              *err_msg};
+        logger_->Emit(LogLevel::Error, *msg);
+        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, *msg};
     }
 
     // get the target name
@@ -393,25 +427,46 @@ auto TargetService::ServeTarget(
     auto configured_target = BuildMaps::Target::ConfiguredTarget{
         .target = std::move(*entity), .config = std::move(config)};
 
+    // setup progress reporting; these instances need to be kept alive for
+    // graph traversal, analysis, and build
+    Statistics stats{};
+    Progress progress{};
+
+    // setup logging for analysis and build; write into a temporary file
+    auto tmp_dir = StorageConfig::CreateTypedTmpDir("serve-target");
+    if (!tmp_dir) {
+        auto msg = std::string("Could not create TmpDir");
+        logger_->Emit(LogLevel::Error, msg);
+        return ::grpc::Status{::grpc::StatusCode::INTERNAL, msg};
+    }
+    std::filesystem::path tmp_log{tmp_dir->GetPath() / "log"};
+    Logger logger{"serve-target", {LogSinkFile::CreateFactory(tmp_log)}};
+
     // analyse the configured target
     auto result = AnalyseTarget(configured_target,
                                 &result_map,
                                 &repository_config,
+                                tc,
+                                &stats,
                                 RemoteServeConfig::Jobs(),
-                                std::nullopt /*request_action_input*/);
+                                std::nullopt /*request_action_input*/,
+                                &logger);
 
     if (not result) {
+        // report failure locally, to keep track of it...
         auto msg = fmt::format("Failed to analyse target {}",
                                configured_target.target.ToString());
-        logger_->Emit(LogLevel::Error, msg);
-        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
+        logger_->Emit(LogLevel::Warning, msg);
+        return HandleFailureLog(tmp_log, "analysis", response);
     }
+    logger_->Emit(LogLevel::Info, "Analysed target {}", result->id.ToString());
 
     // get the output artifacts
     auto const [artifacts, runfiles] = ReadOutputArtifacts(result->target);
 
     // get the result map outputs
-    auto const& [actions, blobs, trees] = result_map.ToResult();
+    auto const& [actions, blobs, trees] =
+        result_map.ToResult(&stats, &progress, &logger);
 
     // collect cache targets and artifacts for target-level caching
     auto const cache_targets = result_map.CacheTargets();
@@ -419,7 +474,7 @@ auto TargetService::ServeTarget(
 
     // Clean up result map, now that it is no longer needed
     {
-        TaskSystem ts;
+        TaskSystem ts{RemoteServeConfig::Jobs()};
         result_map.Clear(&ts);
     }
 
@@ -434,21 +489,26 @@ auto TargetService::ServeTarget(
     traverser_args.build.timeout = RemoteServeConfig::ActionTimeout();
     traverser_args.stage = std::nullopt;
     traverser_args.rebuild = std::nullopt;
-    GraphTraverser const traverser{std::move(traverser_args),
-                                   &repository_config,
-                                   std::move(platform_properties),
-                                   std::move(dispatch_list),
-                                   ProgressReporter::Reporter()};
+    GraphTraverser const traverser{
+        std::move(traverser_args),
+        &repository_config,
+        std::move(platform_properties),
+        std::move(dispatch_list),
+        &stats,
+        &progress,
+        ProgressReporter::Reporter(&stats, &progress, &logger),
+        &logger};
 
     // perform build
     auto build_result = traverser.BuildAndStage(
         artifacts, runfiles, actions, blobs, trees, std::move(cache_artifacts));
 
     if (not build_result) {
+        // report failure locally, to keep track of it...
         auto msg = fmt::format("Build for target {} failed",
                                configured_target.target.ToString());
-        logger_->Emit(LogLevel::Error, msg);
-        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
+        logger_->Emit(LogLevel::Warning, msg);
+        return HandleFailureLog(tmp_log, "build", response);
     }
 
     WriteTargetCacheEntries(cache_targets,
@@ -457,28 +517,43 @@ auto TargetService::ServeTarget(
                             traverser.GetLocalApi(),
                             traverser.GetRemoteApi(),
                             RemoteServeConfig::TCStrategy(),
-                            *tc);
+                            tc,
+                            &logger,
+                            true /*strict_logging*/);
 
     if (build_result->failed_artifacts) {
+        // report failure locally, to keep track of it...
         auto msg =
             fmt::format("Build result for target {} contains failed artifacts ",
                         configured_target.target.ToString());
         logger_->Emit(LogLevel::Warning, msg);
-        return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
+        return HandleFailureLog(tmp_log, "artifacts", response);
     }
 
-    // make sure remote CAS has all artifacts
-    if (auto target_entry = tc->Read(tc_key); target_entry) {
-        // make sure the target cache value is in the remote cas
-        if (!local_api_->RetrieveToCas({target_entry->second}, &*remote_api_)) {
+    // now that the target cache key is in, make sure remote CAS has all
+    // required entries
+    if (auto target_entry = tc.Read(tc_key); target_entry) {
+        // make sure all artifacts referenced in the target cache value are in
+        // the remote cas
+        std::vector<Artifact::ObjectInfo> tc_artifacts;
+        if (!target_entry->first.ToArtifacts(&tc_artifacts)) {
             auto msg = fmt::format(
-                "Failed to upload to remote cas the target cache entry {}",
+                "Failed to extract artifacts from target cache entry {}",
+                target_entry->second.ToString());
+            logger_->Emit(LogLevel::Error, msg);
+            return ::grpc::Status{::grpc::StatusCode::INTERNAL, msg};
+        }
+        tc_artifacts.emplace_back(target_entry->second);  // add the tc value
+        if (!local_api_->RetrieveToCas(tc_artifacts, &*remote_api_)) {
+            auto msg = fmt::format(
+                "Failed to upload to remote cas the artifacts referenced in "
+                "the target cache entry {}",
                 target_entry->second.ToString());
             logger_->Emit(LogLevel::Error, msg);
             return ::grpc::Status{::grpc::StatusCode::UNAVAILABLE, msg};
         }
-        *(response->mutable_target_value()) =
-            std::move(target_entry->second.digest);
+        // populate response with the target cache value
+        response->mutable_target_value()->CopyFrom(target_entry->second.digest);
         return ::grpc::Status::OK;
     }
 
@@ -508,7 +583,8 @@ auto TargetService::ServeTargetVariables(
             if (not res->second) {
                 // tree exists, but does not contain target file
                 auto err = fmt::format(
-                    "Target-root {} found, but does not contain target file {}",
+                    "Target-root {} found, but does not contain targets file "
+                    "{}",
                     root_tree,
                     target_file);
                 return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION,
@@ -527,8 +603,8 @@ auto TargetService::ServeTargetVariables(
                     if (not res->second) {
                         // tree exists, but does not contain target file
                         auto err = fmt::format(
-                            "Target-root {} found, but does not contain target "
-                            "file {}",
+                            "Target-root {} found, but does not contain "
+                            "targets file {}",
                             root_tree,
                             target_file);
                         return ::grpc::Status{
@@ -545,7 +621,7 @@ auto TargetService::ServeTargetVariables(
         if (tree_found) {
             // something went wrong trying to read the target file blob
             auto err =
-                fmt::format("Could not read target file {}", target_file);
+                fmt::format("Could not read targets file {}", target_file);
             return ::grpc::Status{::grpc::StatusCode::INTERNAL, err};
         }
         // tree not found
@@ -558,7 +634,7 @@ auto TargetService::ServeTargetVariables(
         map = Expression::FromJson(nlohmann::json::parse(*target_file_content));
     } catch (std::exception const& e) {
         auto err = fmt::format(
-            "Failed to parse target file {} as json with error:\n{}",
+            "Failed to parse targets file {} as json with error:\n{}",
             target_file,
             e.what());
         logger_->Emit(LogLevel::Error, err);
@@ -566,7 +642,7 @@ auto TargetService::ServeTargetVariables(
     }
     if (not map->IsMap()) {
         auto err =
-            fmt::format("Target file {} should contain a map, but found:\n{}",
+            fmt::format("Targets file {} should contain a map, but found:\n{}",
                         target_file,
                         map->ToString());
         logger_->Emit(LogLevel::Error, err);
@@ -576,24 +652,25 @@ auto TargetService::ServeTargetVariables(
     auto target_desc = map->At(target);
     if (not target_desc) {
         // target is not present
-        auto err = fmt::format(
-            "Missing target {} in target file {}", target, target_file);
+        auto err = fmt::format("Missing target {} in targets file {}",
+                               nlohmann::json(target).dump(),
+                               target_file);
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, err};
     }
     auto export_desc = target_desc->get()->At("type");
     if (not export_desc) {
         auto err = fmt::format(
-            "Missing \"type\" field for target {} in target file {}.",
-            target,
+            "Missing \"type\" field for target {} in targets file {}.",
+            nlohmann::json(target).dump(),
             target_file);
         logger_->Emit(LogLevel::Error, err);
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, err};
     }
     if (not export_desc->get()->IsString()) {
         auto err = fmt::format(
-            "Field \"type\" for target {} in target file {} should be a "
+            "Expected field \"type\" for target {} in targets file {} to be a "
             "string, but found:\n{}",
-            target,
+            nlohmann::json(target).dump(),
             target_file,
             export_desc->get()->ToString());
         logger_->Emit(LogLevel::Error, err);
@@ -601,8 +678,8 @@ auto TargetService::ServeTargetVariables(
     }
     if (export_desc->get()->String() != "export") {
         // target is not of "type" : "export"
-        auto err =
-            fmt::format(R"(target {} is not of "type" : "export")", target);
+        auto err = fmt::format(R"(target {} is not of "type" : "export")",
+                               nlohmann::json(target).dump());
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, err};
     }
     auto flexible_config = target_desc->get()->At("flexible_config");
@@ -612,9 +689,9 @@ auto TargetService::ServeTargetVariables(
     }
     if (not flexible_config->get()->IsList()) {
         auto err = fmt::format(
-            "Field \"flexible_config\" for target {} in target file {} should "
+            "Field \"flexible_config\" for target {} in targets file {} should "
             "be a list, but found {}",
-            target,
+            nlohmann::json(target).dump(),
             target_file,
             flexible_config->get()->ToString());
         logger_->Emit(LogLevel::Error, err);
@@ -622,13 +699,12 @@ auto TargetService::ServeTargetVariables(
     }
     // populate response with flexible_config list
     auto flexible_config_list = flexible_config->get()->List();
-    std::vector<std::string> fclist{};
     for (auto const& elem : flexible_config_list) {
         if (not elem->IsString()) {
             auto err = fmt::format(
-                "Field \"flexible_config\" for target {} in target file {} has "
-                "non-string entry {}",
-                target,
+                "Field \"flexible_config\" for target {} in targets file {} "
+                "has non-string entry {}",
+                nlohmann::json(target).dump(),
                 target_file,
                 elem->ToString());
             logger_->Emit(LogLevel::Error, err);
@@ -660,7 +736,8 @@ auto TargetService::ServeTargetDescription(
             if (not res->second) {
                 // tree exists, but does not contain target file
                 auto err = fmt::format(
-                    "Target-root {} found, but does not contain target file {}",
+                    "Target-root {} found, but does not contain targets file "
+                    "{}",
                     root_tree,
                     target_file);
                 return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION,
@@ -679,8 +756,8 @@ auto TargetService::ServeTargetDescription(
                     if (not res->second) {
                         // tree exists, but does not contain target file
                         auto err = fmt::format(
-                            "Target-root {} found, but does not contain target "
-                            "file {}",
+                            "Target-root {} found, but does not contain "
+                            "targets file {}",
                             root_tree,
                             target_file);
                         return ::grpc::Status{
@@ -697,7 +774,7 @@ auto TargetService::ServeTargetDescription(
         if (tree_found) {
             // something went wrong trying to read the target file blob
             auto err =
-                fmt::format("Could not read target file {}", target_file);
+                fmt::format("Could not read targets file {}", target_file);
             return ::grpc::Status{::grpc::StatusCode::INTERNAL, err};
         }
         // tree not found
@@ -710,7 +787,7 @@ auto TargetService::ServeTargetDescription(
         map = Expression::FromJson(nlohmann::json::parse(*target_file_content));
     } catch (std::exception const& e) {
         auto err = fmt::format(
-            "Failed to parse target file {} as json with error:\n{}",
+            "Failed to parse targets file {} as json with error:\n{}",
             target_file,
             e.what());
         logger_->Emit(LogLevel::Error, err);
@@ -718,7 +795,7 @@ auto TargetService::ServeTargetDescription(
     }
     if (not map->IsMap()) {
         auto err =
-            fmt::format("Target file {} should contain a map, but found:\n{}",
+            fmt::format("Targets file {} should contain a map, but found:\n{}",
                         target_file,
                         map->ToString());
         logger_->Emit(LogLevel::Error, err);
@@ -728,24 +805,25 @@ auto TargetService::ServeTargetDescription(
     auto target_desc = map->At(target);
     if (not target_desc) {
         // target is not present
-        auto err = fmt::format(
-            "Missing target {} in target file {}", target, target_file);
+        auto err = fmt::format("Missing target {} in targets file {}",
+                               nlohmann::json(target).dump(),
+                               target_file);
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, err};
     }
     auto export_desc = target_desc->get()->At("type");
     if (not export_desc) {
         auto err = fmt::format(
-            "Missing \"type\" field for target {} in target file {}.",
-            target,
+            "Missing \"type\" field for target {} in targets file {}.",
+            nlohmann::json(target).dump(),
             target_file);
         logger_->Emit(LogLevel::Error, err);
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, err};
     }
     if (not export_desc->get()->IsString()) {
         auto err = fmt::format(
-            "Field \"type\" for target {} in target file {} should be a "
+            "Expected field \"type\" for target {} in targets file {} to be a "
             "string, but found:\n{}",
-            target,
+            nlohmann::json(target).dump(),
             target_file,
             export_desc->get()->ToString());
         logger_->Emit(LogLevel::Error, err);
@@ -753,12 +831,12 @@ auto TargetService::ServeTargetDescription(
     }
     if (export_desc->get()->String() != "export") {
         // target is not of "type" : "export"
-        auto err =
-            fmt::format(R"(target {} is not of "type" : "export")", target);
+        auto err = fmt::format(R"(target {} is not of "type" : "export")",
+                               nlohmann::json(target).dump());
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, err};
     }
     // populate response description object with fields as-is
-    nlohmann::json desc{};
+    auto desc = nlohmann::json::object();
     if (auto doc = target_desc->get()->Get("doc", Expression::none_t{});
         doc.IsNotNull()) {
         desc["doc"] = doc->ToJson();
@@ -786,9 +864,19 @@ auto TargetService::ServeTargetDescription(
     // we keep the documentation strings as close to actual as possible, so we
     // do not fail if they contain invalid UTF-8 characters, instead we use the
     // UTF-8 replacement character to solve any decoding errors.
-    if (auto dgst = Storage::Instance().CAS().StoreBlob(
-            desc.dump(2, ' ', false, nlohmann::json::error_handler_t::replace),
-            /*is_executable=*/false)) {
+    std::string description_str;
+    try {
+        description_str =
+            desc.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
+    } catch (std::exception const& ex) {
+        // normally shouldn't happen
+        std::string err{"Failed to dump backend JSON description to string"};
+        logger_->Emit(LogLevel::Error, err);
+        return ::grpc::Status{::grpc::StatusCode::INTERNAL, err};
+    }
+    if (auto dgst =
+            Storage::Instance().CAS().StoreBlob(description_str,
+                                                /*is_executable=*/false)) {
         auto const& artifact_dgst = ArtifactDigest{*dgst};
         if (not local_api_->RetrieveToCas(
                 {Artifact::ObjectInfo{.digest = artifact_dgst,
@@ -802,7 +890,7 @@ auto TargetService::ServeTargetDescription(
         }
 
         // populate response
-        *(response->mutable_description_id()) = *dgst;
+        response->mutable_description_id()->CopyFrom(*dgst);
         return ::grpc::Status::OK;
     }
     // failed to store blob

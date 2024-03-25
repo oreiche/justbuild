@@ -17,7 +17,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <fstream>
+#include <iterator>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -36,6 +37,7 @@
 #include "src/buildtool/execution_api/remote/bazel/bazel_response.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
 #include "src/buildtool/storage/fs_utils.hpp"
@@ -75,7 +77,8 @@ namespace {
     BlobContainer container{};
     while (not blobs.empty()) {
         if (count + blobs.size() > size) {
-            Logger::Log(LogLevel::Error, "received more blobs than requested.");
+            Logger::Log(LogLevel::Warning,
+                        "received more blobs than requested.");
             return false;
         }
         for (auto const& blob : blobs) {
@@ -87,7 +90,7 @@ namespace {
                 container.Emplace(BazelBlob{blob.digest, blob.data, exec});
             } catch (std::exception const& ex) {
                 Logger::Log(
-                    LogLevel::Error, "failed to emplace blob: ", ex.what());
+                    LogLevel::Warning, "failed to emplace blob: ", ex.what());
                 return false;
             }
         }
@@ -96,7 +99,7 @@ namespace {
     }
 
     if (count != size) {
-        Logger::Log(LogLevel::Error, "could not retrieve all requested blobs.");
+        Logger::Log(LogLevel::Debug, "could not retrieve all requested blobs.");
         return false;
     }
 
@@ -120,7 +123,7 @@ namespace {
 
     // Fetch unknown chunks.
     auto digest_set = std::unordered_set<bazel_re::Digest>{
-        (*chunk_digests).begin(), (*chunk_digests).end()};
+        chunk_digests->begin(), chunk_digests->end()};
     auto unique_digests =
         std::vector<bazel_re::Digest>{digest_set.begin(), digest_set.end()};
     auto missing_digests = ::IsAvailable(unique_digests, api);
@@ -129,30 +132,24 @@ namespace {
     }
 
     // Assemble blob from chunks.
-    auto tmp_dir = StorageUtils::CreateTypedTmpDir("splice");
-    auto tmp_file = tmp_dir->GetPath() / "blob";
-    std::size_t total_size{};
-    {
-        std::ofstream tmp(tmp_file, std::ios::binary);
-        for (auto const& chunk_digest : *chunk_digests) {
-            auto info =
-                Artifact::ObjectInfo{.digest = ArtifactDigest{chunk_digest},
-                                     .type = ObjectType::File};
-            auto chunk_data = api->RetrieveToMemory(info);
-            if (not chunk_data) {
-                Logger::Log(LogLevel::Error,
-                            "could not load blob chunk in memory: ",
-                            chunk_digest.hash());
-                return false;
-            }
-            tmp << *chunk_data;
-            total_size += chunk_data->size();
-        }
+    auto artifact_digests = std::vector<ArtifactDigest>{};
+    artifact_digests.reserve(chunk_digests->size());
+    std::transform(chunk_digests->cbegin(),
+                   chunk_digests->cend(),
+                   std::back_inserter(artifact_digests),
+                   [](auto const& digest) { return ArtifactDigest{digest}; });
+    auto digest = api->SpliceBlob(artifact_info.digest, artifact_digests);
+    if (not digest) {
+        // If blob splicing failed, fall back to regular fetching.
+        return ::RetrieveToCas({artifact_info.digest}, api, network, info_map);
     }
 
     Logger::Log(
         LogLevel::Debug,
-        [&artifact_info, &unique_digests, &missing_digests, &total_size]() {
+        [&artifact_info,
+         &unique_digests,
+         &missing_digests,
+         total_size = digest->size()]() {
             auto missing_digest_set = std::unordered_set<bazel_re::Digest>{
                 missing_digests.begin(), missing_digests.end()};
             std::uint64_t transmitted_bytes{0};
@@ -172,7 +169,7 @@ namespace {
                 artifact_info.ToString());
         });
 
-    return api->UploadFile(tmp_file, artifact_info.type);
+    return true;
 }
 
 }  // namespace
@@ -215,7 +212,7 @@ auto BazelApi::CreateAction(
     std::optional<gsl::not_null<IExecutionApi*>> const& alternative) noexcept
     -> bool {
     if (artifacts_info.size() != output_paths.size()) {
-        Logger::Log(LogLevel::Error,
+        Logger::Log(LogLevel::Warning,
                     "different number of digests and output paths.");
         return false;
     }
@@ -255,7 +252,8 @@ auto BazelApi::CreateAction(
     std::size_t count{};
     while (not blobs.empty()) {
         if (count + blobs.size() > size) {
-            Logger::Log(LogLevel::Error, "received more blobs than requested.");
+            Logger::Log(LogLevel::Warning,
+                        "received more blobs than requested.");
             return false;
         }
         for (std::size_t pos = 0; pos < blobs.size(); ++pos) {
@@ -264,7 +262,7 @@ auto BazelApi::CreateAction(
             if (not FileSystemManager::WriteFileAs</*kSetEpochTime=*/true,
                                                    /*kSetWritable=*/true>(
                     blobs[pos].data, output_paths[gpos], type)) {
-                Logger::Log(LogLevel::Error,
+                Logger::Log(LogLevel::Warning,
                             "staging to output path {} failed.",
                             output_paths[gpos].string());
                 return false;
@@ -275,7 +273,8 @@ auto BazelApi::CreateAction(
     }
 
     if (count != size) {
-        Logger::Log(LogLevel::Error, "could not retrieve all requested blobs.");
+        Logger::Log(LogLevel::Warning,
+                    "could not retrieve all requested blobs.");
         return false;
     }
 
@@ -287,7 +286,7 @@ auto BazelApi::CreateAction(
     std::vector<int> const& fds,
     bool raw_tree) noexcept -> bool {
     if (artifacts_info.size() != fds.size()) {
-        Logger::Log(LogLevel::Error,
+        Logger::Log(LogLevel::Warning,
                     "different number of digests and file descriptors.");
         return false;
     }
@@ -300,7 +299,7 @@ auto BazelApi::CreateAction(
             auto const success = network_->DumpToStream(info, out, raw_tree);
             std::fclose(out);
             if (not success) {
-                Logger::Log(LogLevel::Error,
+                Logger::Log(LogLevel::Warning,
                             "dumping {} {} to file descriptor {} failed.",
                             IsTreeObject(info.type) ? "tree" : "blob",
                             info.ToString(),
@@ -310,7 +309,7 @@ auto BazelApi::CreateAction(
         }
         else {
             Logger::Log(
-                LogLevel::Error, "opening file descriptor {} failed.", fd);
+                LogLevel::Warning, "opening file descriptor {} failed.", fd);
             return false;
         }
     }
@@ -409,7 +408,8 @@ auto BazelApi::CreateAction(
             // no need to regenerate the digest.
             ts.QueueTask(
                 [this, &info, &api, &failure, &info_map, use_blob_splitting]() {
-                    if (use_blob_splitting
+                    if (use_blob_splitting and network_->BlobSplitSupport() and
+                                api->BlobSpliceSupport()
                             ? ::RetrieveToCasSplitted(
                                   info, api, network_, info_map)
                             : ::RetrieveToCas(
@@ -420,8 +420,9 @@ auto BazelApi::CreateAction(
                 });
         }
     } catch (std::exception const& ex) {
-        Logger::Log(
-            LogLevel::Error, "Artifact synchronization failed: {}", ex.what());
+        Logger::Log(LogLevel::Warning,
+                    "Artifact synchronization failed: {}",
+                    ex.what());
         return false;
     }
 
@@ -583,4 +584,48 @@ auto BazelApi::CreateAction(
         result.push_back(digest_map[bazel_digest]);
     }
     return result;
+}
+
+[[nodiscard]] auto BazelApi::SplitBlob(ArtifactDigest const& blob_digest)
+    const noexcept -> std::optional<std::vector<ArtifactDigest>> {
+    auto chunk_digests =
+        network_->SplitBlob(static_cast<bazel_re::Digest>(blob_digest));
+    if (not chunk_digests) {
+        return std::nullopt;
+    }
+    auto artifact_digests = std::vector<ArtifactDigest>{};
+    artifact_digests.reserve(chunk_digests->size());
+    std::transform(chunk_digests->cbegin(),
+                   chunk_digests->cend(),
+                   std::back_inserter(artifact_digests),
+                   [](auto const& digest) { return ArtifactDigest{digest}; });
+    return artifact_digests;
+}
+
+[[nodiscard]] auto BazelApi::BlobSplitSupport() const noexcept -> bool {
+    return network_->BlobSplitSupport();
+}
+
+[[nodiscard]] auto BazelApi::SpliceBlob(
+    ArtifactDigest const& blob_digest,
+    std::vector<ArtifactDigest> const& chunk_digests) const noexcept
+    -> std::optional<ArtifactDigest> {
+    auto digests = std::vector<bazel_re::Digest>{};
+    digests.reserve(chunk_digests.size());
+    std::transform(chunk_digests.cbegin(),
+                   chunk_digests.cend(),
+                   std::back_inserter(digests),
+                   [](auto const& artifact_digest) {
+                       return static_cast<bazel_re::Digest>(artifact_digest);
+                   });
+    auto digest = network_->SpliceBlob(
+        static_cast<bazel_re::Digest>(blob_digest), digests);
+    if (not digest) {
+        return std::nullopt;
+    }
+    return ArtifactDigest{*digest};
+}
+
+[[nodiscard]] auto BazelApi::BlobSpliceSupport() const noexcept -> bool {
+    return network_->BlobSpliceSupport();
 }

@@ -13,7 +13,7 @@ SYNOPSIS
 **`just-mr`** \[*`OPTION`*\]... **`fetch`** \[**`--all`**\] \[**`--backup-to-remote`**] \[**`-o`** *`fetch-dir`*\] \[*`main-repo`*\]  
 **`just-mr`** \[*`OPTION`*\]... **`update`** \[*`repo`*\]...  
 **`just-mr`** \[*`OPTION`*\]... **`do`** \[*`JUST_ARG`*\]...  
-**`just-mr`** \[*`OPTION`*\]... {**`version`**|**`describe`**|**`analyse`**|**`build`**|**`install`**|**`install-cas`**|**`rebuild`**|**`gc`**} \[*`JUST_ARG`*\]...  
+**`just-mr`** \[*`OPTION`*\]... {**`version`**|**`describe`**|**`analyse`**|**`build`**|**`install`**|**`install-cas`**|**`add-to-cas`**|**`rebuild`**|**`gc`**} \[*`JUST_ARG`*\]...  
 
 DESCRIPTION
 ===========
@@ -86,7 +86,7 @@ This file contains a JSON object with several known keys:
    URLs to a list of local (non-public) mirrors. These mirrors are always
    tried first (in the given order) before any other URL is contacted.
  - the key *`"preferred hostnames"`*, if given, is a list of strings
-   specifying known hostnames. When fetching from a non-local URL, URLs
+   specifying known hostnames. When fetching from a non-local mirror, URLs
    with hostnames in the given list are preferred (in the order given)
    over URLs with other hostnames.
 
@@ -157,6 +157,12 @@ Default: *`"just"`*.
 Path to the just-mrrc file to use. See **`just-mrrc`**(5) for more
 details.  
 Default: file path *`".just-mrrc"`* in the user's home directory.
+
+**`--dump-rc`** *`PATH`*  
+Dump the effective rc, i.e., the rc after overlaying all applicable auxiliary
+files specified in the `"rc files"` field, to the specified file. In this
+way, an rc can be made self-contained in preparation for committing it to
+a repository.
 
 **`--git`** *`PATH`*  
 Path to the git binary in *`PATH`* or path to the git binary. Used in
@@ -271,7 +277,7 @@ This subcommand is used as the canonical way of specifying just
 arguments and calling **`just`** via **`execvp`**(2). Any subsequent argument
 is unconditionally forwarded to **`just`**. For *known* subcommands
 (**`version`**, **`describe`**, **`analyse`**, **`build`**, **`install`**, 
-**`install-cas`**, **`rebuild`**, **`gc`**), the
+**`install-cas`**, **`add-to-cas`**, **`rebuild`**, **`gc`**), the
 **`just-mr setup`** step is performed first for those commands accepting a
 configuration and the produced configuration is prefixed to the provided
 arguments. The main repository for the **`setup`** step can be provided in
@@ -291,14 +297,14 @@ rebuild).
 The **`--remote-execution-address`**, **`--compatible`**, and 
 **`--remote-serve-address`** arguments are passed to **`just`** as early
 arguments for those *known* subcommands that accept them
-(analyse, build, install-cas, install, rebuild, traverse).
+(analyse, build, install-cas, add-to-cas, install, rebuild, traverse).
 
 The *authentication options* given to **`just-mr`** are passed to **`just`** as
 early arguments for those *known* subcommands that accept them, according to
 **`just`**(1).
 
-**`version`**|**`describe`**|**`analyse`**|**`build`**|**`install`**|**`install-cas`**|**`rebuild`**|**`gc`**
--------------------------------------------------------------------------------------------------------------
+**`version`**|**`describe`**|**`analyse`**|**`build`**|**`install`**|**`install-cas`**|**`add-to-cas`**|**`rebuild`**|**`gc`**
+------------------------------------------------------------------------------------------------------------------------------
 
 This subcommand is the explicit way of specifying *known* just
 subcommands and calling **`just`** via **`execvp`**(2). The same description

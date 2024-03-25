@@ -17,11 +17,14 @@
 #include "fmt/core.h"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
+#include "src/buildtool/logging/log_level.hpp"
+#include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
 #include "src/other_tools/ops_maps/git_tree_fetch_map.hpp"
+#include "src/other_tools/utils/parse_archive.hpp"
 
 namespace {
 
@@ -121,9 +124,10 @@ void GitCheckout(ExpressionPtr const& repo_desc,
     }
     // check "special" pragma
     auto repo_desc_pragma = repo_desc->At("pragma");
-    auto pragma_special = repo_desc_pragma
-                              ? repo_desc_pragma->get()->At("special")
-                              : std::nullopt;
+    bool const& pragma_is_map =
+        repo_desc_pragma and repo_desc_pragma->get()->IsMap();
+    auto pragma_special =
+        pragma_is_map ? repo_desc_pragma->get()->At("special") : std::nullopt;
     auto pragma_special_value =
         pragma_special and pragma_special->get()->IsString() and
                 kPragmaSpecialMap.contains(pragma_special->get()->String())
@@ -132,16 +136,39 @@ void GitCheckout(ExpressionPtr const& repo_desc,
             : std::nullopt;
     // check "absent" pragma
     auto pragma_absent =
-        repo_desc_pragma ? repo_desc_pragma->get()->At("absent") : std::nullopt;
+        pragma_is_map ? repo_desc_pragma->get()->At("absent") : std::nullopt;
     auto pragma_absent_value = pragma_absent and
                                pragma_absent->get()->IsBool() and
                                pragma_absent->get()->Bool();
+    std::vector<std::string> inherit_env{};
+    auto repo_desc_inherit_env =
+        repo_desc->Get("inherit env", Expression::kEmptyList);
+    if (not repo_desc_inherit_env->IsList()) {
+        (*logger)(fmt::format("GitCheckout: optional field \"inherit env\" "
+                              "should be a list of strings, but found {}",
+                              repo_desc_inherit_env->ToString()),
+                  true);
+        return;
+    }
+    for (auto const& var : repo_desc_inherit_env->List()) {
+        if (not var->IsString()) {
+            (*logger)(
+                fmt::format("GitCheckout: optional field \"inherit env\" "
+                            "should be a list of strings, but found entry {}",
+                            var->ToString()),
+                true);
+            return;
+        }
+        inherit_env.emplace_back(var->String());
+    }
+
     // populate struct
     GitRepoInfo git_repo_info = {
         .hash = repo_desc_commit->get()->String(),
         .repo_url = repo_desc_repository->get()->String(),
         .branch = repo_desc_branch->get()->String(),
         .subdir = subdir.empty() ? "." : subdir.string(),
+        .inherit_env = inherit_env,
         .mirrors = std::move(mirrors),
         .origin = repo_name,
         .ignore_special = pragma_special_value == PragmaSpecial::Ignore,
@@ -182,106 +209,15 @@ void ArchiveCheckout(ExpressionPtr const& repo_desc,
                      gsl::not_null<TaskSystem*> const& ts,
                      ReposToSetupMap::SetterPtr const& setter,
                      ReposToSetupMap::LoggerPtr const& logger) {
-    // enforce mandatory fields
-    auto repo_desc_content = repo_desc->At("content");
-    if (not repo_desc_content) {
-        (*logger)("ArchiveCheckout: Mandatory field \"content\" is missing",
-                  /*fatal=*/true);
+    auto archive_repo_info =
+        ParseArchiveDescription(repo_desc, repo_type, repo_name, logger);
+    if (not archive_repo_info) {
         return;
     }
-    if (not repo_desc_content->get()->IsString()) {
-        (*logger)(fmt::format("ArchiveCheckout: Unsupported value {} for "
-                              "mandatory field \"content\"",
-                              repo_desc_content->get()->ToString()),
-                  /*fatal=*/true);
-        return;
-    }
-    auto repo_desc_fetch = repo_desc->At("fetch");
-    if (not repo_desc_fetch) {
-        (*logger)("ArchiveCheckout: Mandatory field \"fetch\" is missing",
-                  /*fatal=*/true);
-        return;
-    }
-    if (not repo_desc_fetch->get()->IsString()) {
-        (*logger)(fmt::format("ArchiveCheckout: Unsupported value {} for "
-                              "mandatory field \"fetch\"",
-                              repo_desc_fetch->get()->ToString()),
-                  /*fatal=*/true);
-        return;
-    }
-    auto repo_desc_subdir = repo_desc->Get("subdir", Expression::none_t{});
-    auto subdir = std::filesystem::path(repo_desc_subdir->IsString()
-                                            ? repo_desc_subdir->String()
-                                            : "")
-                      .lexically_normal();
-    auto repo_desc_distfile = repo_desc->Get("distfile", Expression::none_t{});
-    auto repo_desc_sha256 = repo_desc->Get("sha256", Expression::none_t{});
-    auto repo_desc_sha512 = repo_desc->Get("sha512", Expression::none_t{});
-    // check optional mirrors
-    auto repo_desc_mirrors = repo_desc->Get("mirrors", Expression::list_t{});
-    std::vector<std::string> mirrors{};
-    if (repo_desc_mirrors->IsList()) {
-        mirrors.reserve(repo_desc_mirrors->List().size());
-        for (auto const& elem : repo_desc_mirrors->List()) {
-            if (not elem->IsString()) {
-                (*logger)(fmt::format("ArchiveCheckout: Unsupported list entry "
-                                      "{} in optional field \"mirrors\"",
-                                      elem->ToString()),
-                          /*fatal=*/true);
-                return;
-            }
-            mirrors.emplace_back(elem->String());
-        }
-    }
-    else {
-        (*logger)(fmt::format("ArchiveCheckout: Optional field \"mirrors\" "
-                              "should be a list of strings, but found: {}",
-                              repo_desc_mirrors->ToString()),
-                  /*fatal=*/true);
-        return;
-    }
-    // check "special" pragma
-    auto repo_desc_pragma = repo_desc->At("pragma");
-    auto pragma_special = repo_desc_pragma
-                              ? repo_desc_pragma->get()->At("special")
-                              : std::nullopt;
-    auto pragma_special_value =
-        pragma_special and pragma_special->get()->IsString() and
-                kPragmaSpecialMap.contains(pragma_special->get()->String())
-            ? std::make_optional(
-                  kPragmaSpecialMap.at(pragma_special->get()->String()))
-            : std::nullopt;
-    // check "absent" pragma
-    auto pragma_absent =
-        repo_desc_pragma ? repo_desc_pragma->get()->At("absent") : std::nullopt;
-    auto pragma_absent_value = pragma_absent and
-                               pragma_absent->get()->IsBool() and
-                               pragma_absent->get()->Bool();
-    // populate struct
-    ArchiveRepoInfo archive_repo_info = {
-        .archive =
-            {.content = repo_desc_content->get()->String(),
-             .distfile = repo_desc_distfile->IsString()
-                             ? std::make_optional(repo_desc_distfile->String())
-                             : std::nullopt,
-             .fetch_url = repo_desc_fetch->get()->String(),
-             .mirrors = std::move(mirrors),
-             .sha256 = repo_desc_sha256->IsString()
-                           ? std::make_optional(repo_desc_sha256->String())
-                           : std::nullopt,
-             .sha512 = repo_desc_sha512->IsString()
-                           ? std::make_optional(repo_desc_sha512->String())
-                           : std::nullopt,
-             .origin = repo_name,
-             .fetch_only = false},
-        .repo_type = repo_type,
-        .subdir = subdir.empty() ? "." : subdir.string(),
-        .pragma_special = pragma_special_value,
-        .absent = pragma_absent_value};
     // get the WS root as git tree
     content_git_map->ConsumeAfterKeysReady(
         ts,
-        {std::move(archive_repo_info)},
+        {std::move(*archive_repo_info)},
         [repos = std::move(repos), repo_name, setter](auto const& values) {
             auto ws_root = values[0]->first;
             nlohmann::json cfg({});
@@ -300,6 +236,47 @@ void ArchiveCheckout(ExpressionPtr const& repo_desc,
                                   "repository {} of type {}:\n{}",
                                   nlohmann::json(repo_name).dump(),
                                   nlohmann::json(repo_type).dump(),
+                                  msg),
+                      fatal);
+        });
+}
+
+/// \brief Perform checkout for an archive type repository.
+/// Guarantees the logger is called exactly once with fatal if a failure occurs.
+void ForeignFileCheckout(
+    ExpressionPtr const& repo_desc,
+    ExpressionPtr&& repos,
+    std::string const& repo_name,
+    gsl::not_null<ForeignFileGitMap*> const& foreign_file_git_map,
+    gsl::not_null<TaskSystem*> const& ts,
+    ReposToSetupMap::SetterPtr const& setter,
+    ReposToSetupMap::LoggerPtr const& logger) {
+    auto foreign_file_repo_info =
+        ParseForeignFileDescription(repo_desc, repo_name, logger);
+    if (not foreign_file_repo_info) {
+        return;
+    }
+    // get the WS root as git tree
+    foreign_file_git_map->ConsumeAfterKeysReady(
+        ts,
+        {std::move(*foreign_file_repo_info)},
+        [repos = std::move(repos), repo_name, setter](auto const& values) {
+            auto ws_root = values[0]->first;
+            nlohmann::json cfg({});
+            cfg["workspace_root"] = ws_root;
+            SetReposTakeOver(&cfg, repos, repo_name);
+            if (values[0]->second) {
+                JustMRStatistics::Instance().IncrementCacheHitsCounter();
+            }
+            else {
+                JustMRStatistics::Instance().IncrementExecutedCounter();
+            }
+            (*setter)(std::move(cfg));
+        },
+        [logger, repo_name](auto const& msg, bool fatal) {
+            (*logger)(fmt::format("While setting the workspace root for "
+                                  "foreign-file repository {}:\n{}",
+                                  nlohmann::json(repo_name).dump(),
                                   msg),
                       fatal);
         });
@@ -334,9 +311,10 @@ void FileCheckout(ExpressionPtr const& repo_desc,
         std::filesystem::absolute(repo_desc_path->get()->String()));
     // check "special" pragma
     auto repo_desc_pragma = repo_desc->At("pragma");
-    auto pragma_special = repo_desc_pragma
-                              ? repo_desc_pragma->get()->At("special")
-                              : std::nullopt;
+    bool const& pragma_is_map =
+        repo_desc_pragma and repo_desc_pragma->get()->IsMap();
+    auto pragma_special =
+        pragma_is_map ? repo_desc_pragma->get()->At("special") : std::nullopt;
     auto pragma_special_value =
         pragma_special and pragma_special->get()->IsString() and
                 kPragmaSpecialMap.contains(pragma_special->get()->String())
@@ -345,14 +323,14 @@ void FileCheckout(ExpressionPtr const& repo_desc,
             : std::nullopt;
     // check "to_git" pragma
     auto pragma_to_git =
-        repo_desc_pragma ? repo_desc_pragma->get()->At("to_git") : std::nullopt;
+        pragma_is_map ? repo_desc_pragma->get()->At("to_git") : std::nullopt;
     // resolving symlinks implies also to_git
     if (pragma_special_value == PragmaSpecial::ResolvePartially or
         pragma_special_value == PragmaSpecial::ResolveCompletely or
         (pragma_to_git and pragma_to_git->get()->IsBool() and
          pragma_to_git->get()->Bool())) {
         // check "absent" pragma
-        auto pragma_absent = repo_desc_pragma
+        auto pragma_absent = pragma_is_map
                                  ? repo_desc_pragma->get()->At("absent")
                                  : std::nullopt;
         auto pragma_absent_value = pragma_absent and
@@ -425,12 +403,15 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
     }
     // check "absent" pragma
     auto repo_desc_pragma = repo_desc->At("pragma");
-    auto pragma_absent =
-        repo_desc_pragma ? repo_desc_pragma->get()->At("absent") : std::nullopt;
+    auto pragma_absent = (repo_desc_pragma and repo_desc_pragma->get()->IsMap())
+                             ? repo_desc_pragma->get()->At("absent")
+                             : std::nullopt;
     auto pragma_absent_value = pragma_absent and
                                pragma_absent->get()->IsBool() and
                                pragma_absent->get()->Bool();
     // map of distfile to content
+    auto distdir_content_for_id = std::make_shared<
+        std::unordered_map<std::string, std::pair<std::string, bool>>>();
     auto distdir_content =
         std::make_shared<std::unordered_map<std::string, std::string>>();
     // get distdir list
@@ -590,8 +571,7 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
                 .sha512 = repo_desc_sha512->IsString()
                               ? std::make_optional(repo_desc_sha512->String())
                               : std::nullopt,
-                .origin = dist_repo_name,
-                .fetch_only = true};
+                .origin = dist_repo_name};
 
             // add to distdir content map
             auto repo_distfile =
@@ -599,6 +579,8 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
                                   : std::filesystem::path(archive.fetch_url)
                                         .filename()
                                         .string());
+            distdir_content_for_id->insert_or_assign(
+                repo_distfile, std::make_pair(archive.content, false));
             distdir_content->insert_or_assign(repo_distfile, archive.content);
             // add to fetch list
             dist_repos_to_fetch->emplace_back(std::move(archive));
@@ -606,7 +588,8 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
     }
     // get hash of distdir content
     auto distdir_content_id =
-        HashFunction::ComputeBlobHash(nlohmann::json(*distdir_content).dump())
+        HashFunction::ComputeBlobHash(
+            nlohmann::json(*distdir_content_for_id).dump())
             .HexString();
     // get the WS root as git tree
     DistdirInfo distdir_info = {
@@ -727,9 +710,10 @@ void GitTreeCheckout(ExpressionPtr const& repo_desc,
     }
     // check "special" pragma
     auto repo_desc_pragma = repo_desc->At("pragma");
-    auto pragma_special = repo_desc_pragma
-                              ? repo_desc_pragma->get()->At("special")
-                              : std::nullopt;
+    bool const& pragma_is_map =
+        repo_desc_pragma and repo_desc_pragma->get()->IsMap();
+    auto pragma_special =
+        pragma_is_map ? repo_desc_pragma->get()->At("special") : std::nullopt;
     auto pragma_special_value =
         pragma_special and pragma_special->get()->IsString() and
                 kPragmaSpecialMap.contains(pragma_special->get()->String())
@@ -738,7 +722,7 @@ void GitTreeCheckout(ExpressionPtr const& repo_desc,
             : std::nullopt;
     // check "absent" pragma
     auto pragma_absent =
-        repo_desc_pragma ? repo_desc_pragma->get()->At("absent") : std::nullopt;
+        pragma_is_map ? repo_desc_pragma->get()->At("absent") : std::nullopt;
     auto pragma_absent_value = pragma_absent and
                                pragma_absent->get()->IsBool() and
                                pragma_absent->get()->Bool();
@@ -778,21 +762,24 @@ void GitTreeCheckout(ExpressionPtr const& repo_desc,
 
 }  // namespace
 
-auto CreateReposToSetupMap(std::shared_ptr<Configuration> const& config,
-                           std::optional<std::string> const& main,
-                           bool interactive,
-                           gsl::not_null<CommitGitMap*> const& commit_git_map,
-                           gsl::not_null<ContentGitMap*> const& content_git_map,
-                           gsl::not_null<FilePathGitMap*> const& fpath_git_map,
-                           gsl::not_null<DistdirGitMap*> const& distdir_git_map,
-                           gsl::not_null<TreeIdGitMap*> const& tree_id_git_map,
-                           bool fetch_absent,
-                           std::size_t jobs) -> ReposToSetupMap {
+auto CreateReposToSetupMap(
+    std::shared_ptr<Configuration> const& config,
+    std::optional<std::string> const& main,
+    bool interactive,
+    gsl::not_null<CommitGitMap*> const& commit_git_map,
+    gsl::not_null<ContentGitMap*> const& content_git_map,
+    gsl::not_null<ForeignFileGitMap*> const& foreign_file_git_map,
+    gsl::not_null<FilePathGitMap*> const& fpath_git_map,
+    gsl::not_null<DistdirGitMap*> const& distdir_git_map,
+    gsl::not_null<TreeIdGitMap*> const& tree_id_git_map,
+    bool fetch_absent,
+    std::size_t jobs) -> ReposToSetupMap {
     auto setup_repo = [config,
                        main,
                        interactive,
                        commit_git_map,
                        content_git_map,
+                       foreign_file_git_map,
                        fpath_git_map,
                        distdir_git_map,
                        tree_id_git_map,
@@ -819,6 +806,13 @@ auto CreateReposToSetupMap(std::shared_ptr<Configuration> const& config,
                           /*fatal=*/true);
                 return;
             }
+            if (not repo_desc_key->get()->IsMap()) {
+                (*logger)(fmt::format("Config: Config entry for repository {} "
+                                      "is not a map",
+                                      nlohmann::json(key).dump()),
+                          /*fatal=*/true);
+                return;
+            }
             auto repo_desc = repo_desc_key->get()->At("repository");
             if (not repo_desc) {
                 (*logger)(fmt::format("Config: Mandatory key \"repository\" "
@@ -834,6 +828,13 @@ auto CreateReposToSetupMap(std::shared_ptr<Configuration> const& config,
                                       "repository {}",
                                       nlohmann::json(key).dump()),
                           /*fatal=*/true);
+                return;
+            }
+            if (not resolved_repo_desc.value()->IsMap()) {
+                Logger::Log(
+                    LogLevel::Error,
+                    "Config: Repository {} resolves to a non-map description",
+                    nlohmann::json(key).dump());
                 return;
             }
             auto repo_type = (*resolved_repo_desc)->At("type");
@@ -891,6 +892,16 @@ auto CreateReposToSetupMap(std::shared_ptr<Configuration> const& config,
                                     ts,
                                     setter,
                                     wrapped_logger);
+                    break;
+                }
+                case CheckoutType::ForeignFile: {
+                    ForeignFileCheckout(*resolved_repo_desc,
+                                        std::move(repos),
+                                        key,
+                                        foreign_file_git_map,
+                                        ts,
+                                        setter,
+                                        wrapped_logger);
                     break;
                 }
                 case CheckoutType::File: {

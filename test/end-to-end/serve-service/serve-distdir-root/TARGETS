@@ -1,0 +1,63 @@
+{ "serve-distdir (data)":
+  { "type": "install"
+  , "files":
+    { "src.tar": ["end-to-end/serve-service", "serve-tree (archive)"]
+    , "src-syms.tar":
+      [ "end-to-end/serve-service/serve-archive-root"
+      , "serve-tree-syms (archive)"
+      ]
+    , "unrelated.txt": "unrelated file"
+    }
+  }
+, "unrelated file":
+  {"type": "file_gen", "name": "unrelated", "data": "unrelated content"}
+, "present":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["present"]
+  , "test": ["present.sh"]
+  , "deps":
+    [ ["end-to-end", "mr-tool-under-test"]
+    , ["end-to-end", "tool-under-test"]
+    , "serve-distdir (data)"
+    ]
+  , "repos": ["serve-distdir (data)"]
+  }
+, "absent":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["absent"]
+  , "test": ["absent.sh"]
+  , "deps":
+    [ ["end-to-end", "mr-tool-under-test"]
+    , ["end-to-end", "tool-under-test"]
+    , "serve-distdir (data)"
+    ]
+  , "repos": ["serve-distdir (data)"]
+  }
+, "upload":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["upload"]
+  , "test": ["upload.sh"]
+  , "deps":
+    [ ["end-to-end", "mr-tool-under-test"]
+    , ["end-to-end", "tool-under-test"]
+    , "serve-distdir (data)"
+    ]
+  }
+, "foreign-file":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["foreign-file"]
+  , "test": ["foreign-file.sh"]
+  , "deps":
+    [ ["end-to-end", "mr-tool-under-test"]
+    , ["end-to-end", "tool-under-test"]
+    , ["TREE", null, "foreign-file-data"]
+    ]
+  , "repos": [["TREE", null, "foreign-file-data"]]
+  }
+, "TESTS":
+  { "type": "install"
+  , "arguments_config": ["TEST_COMPATIBLE_REMOTE"]
+  , "tainted": ["test"]
+  , "deps": ["present", "absent", "upload", "foreign-file"]
+  }
+}

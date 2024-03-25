@@ -17,30 +17,51 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
+#include "gsl/gsl"
+#include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/base_maps/entity_name.hpp"
 #include "src/buildtool/build_engine/expression/evaluator.hpp"
 #include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/build_engine/target_map/target_map.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
 #include "src/buildtool/common/repository_config.hpp"
+#include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/execution_api/execution_service/file_chunker.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
+#include "src/buildtool/logging/log_config.hpp"
+#include "src/buildtool/logging/log_level.hpp"
+#include "src/buildtool/logging/log_sink_cmdline.hpp"
+#include "src/buildtool/logging/log_sink_file.hpp"
+#include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/main/add_to_cas.hpp"
 #include "src/buildtool/main/analyse.hpp"
+#include "src/buildtool/main/build_utils.hpp"
 #include "src/buildtool/main/cli.hpp"
 #include "src/buildtool/main/constants.hpp"
 #include "src/buildtool/main/describe.hpp"
 #include "src/buildtool/main/diagnose.hpp"
 #include "src/buildtool/main/exit_codes.hpp"
 #include "src/buildtool/main/install_cas.hpp"
+#include "src/buildtool/main/version.hpp"
+#include "src/buildtool/multithreading/async_map_consumer.hpp"
+#include "src/buildtool/multithreading/task_system.hpp"
+#include "src/buildtool/progress_reporting/progress.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
+#include "src/buildtool/storage/storage.hpp"
 #include "src/buildtool/storage/target_cache.hpp"
+#include "src/utils/cpp/concepts.hpp"
+#include "src/utils/cpp/json.hpp"
 #ifndef BOOTSTRAP_BUILD_TOOL
+#include "fmt/core.h"
 #include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/remote/retry_parameters.hpp"
 #include "src/buildtool/execution_api/execution_service/operation_cache.hpp"
@@ -53,15 +74,6 @@
 #include "src/buildtool/serve_api/serve_service/serve_server_implementation.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
 #endif  // BOOTSTRAP_BUILD_TOOL
-#include "src/buildtool/logging/log_config.hpp"
-#include "src/buildtool/logging/log_sink_cmdline.hpp"
-#include "src/buildtool/logging/log_sink_file.hpp"
-#include "src/buildtool/main/build_utils.hpp"
-#include "src/buildtool/main/version.hpp"
-#include "src/buildtool/multithreading/async_map_consumer.hpp"
-#include "src/buildtool/multithreading/task_system.hpp"
-#include "src/utils/cpp/concepts.hpp"
-#include "src/utils/cpp/json.hpp"
 
 namespace {
 
@@ -309,6 +321,10 @@ void SetupHashFunction() {
     HashFunction::SetHashType(Compatibility::IsCompatible()
                                   ? HashFunction::JustHash::Compatible
                                   : HashFunction::JustHash::Native);
+}
+
+void SetupFileChunker() {
+    FileChunker::Initialize();
 }
 
 void SetupRetryConfig(RetryArguments const& args) {
@@ -844,6 +860,7 @@ auto main(int argc, char* argv[]) -> int {
         GitContext::Create();
 
         SetupHashFunction();
+        SetupFileChunker();
         SetupExecutionConfig(
             arguments.endpoint, arguments.build, arguments.rebuild);
         SetupServeConfig(
@@ -851,7 +868,8 @@ auto main(int argc, char* argv[]) -> int {
         SetupAuthConfig(arguments.auth, arguments.cauth, arguments.sauth);
 
         if (arguments.cmd == SubCommand::kGc) {
-            if (GarbageCollector::TriggerGarbageCollection()) {
+            if (GarbageCollector::TriggerGarbageCollection(
+                    arguments.gc.no_rotate)) {
                 return kExitSuccess;
             }
             return kExitFailure;
@@ -905,6 +923,11 @@ auto main(int argc, char* argv[]) -> int {
                 ? std::make_optional(std::move(arguments.rebuild))
                 : std::nullopt;
 
+        // statistics and progress instances; need to be kept alive
+        // used also in bootstrapped just
+        Statistics stats{};
+        Progress progress{};
+
 #ifndef BOOTSTRAP_BUILD_TOOL
         SetupRetryConfig(arguments.retry);
         GraphTraverser const traverser{
@@ -915,7 +938,9 @@ auto main(int argc, char* argv[]) -> int {
             &repo_config,
             RemoteExecutionConfig::PlatformProperties(),
             RemoteExecutionConfig::DispatchList(),
-            ProgressReporter::Reporter()};
+            &stats,
+            &progress,
+            ProgressReporter::Reporter(&stats, &progress)};
 
         if (arguments.cmd == SubCommand::kInstallCas) {
             if (not repo_config.SetGitCAS(StorageConfig::GitRoot())) {
@@ -926,6 +951,11 @@ auto main(int argc, char* argv[]) -> int {
             return FetchAndInstallArtifacts(traverser.GetRemoteApi(),
                                             traverser.GetLocalApi(),
                                             arguments.fetch)
+                       ? kExitSuccess
+                       : kExitFailure;
+        }
+        if (arguments.cmd == SubCommand::kAddToCas) {
+            return AddArtifactsToCas(arguments.to_add, traverser.GetRemoteApi())
                        ? kExitSuccess
                        : kExitFailure;
         }
@@ -990,11 +1020,14 @@ auto main(int argc, char* argv[]) -> int {
                 AnalyseTarget(id,
                               &result_map,
                               &repo_config,
+                              Storage::Instance().TargetCache(),
+                              &stats,
                               arguments.common.jobs,
                               arguments.analysis.request_action_input);
             if (result) {
                 if (arguments.analysis.graph_file) {
-                    result_map.ToFile(*arguments.analysis.graph_file);
+                    result_map.ToFile(
+                        *arguments.analysis.graph_file, &stats, &progress);
                 }
                 auto const [artifacts, runfiles] =
                     ReadOutputArtifacts(result->target);
@@ -1009,7 +1042,7 @@ auto main(int argc, char* argv[]) -> int {
                     ReportTaintedness(*result);
                     // Clean up in parallel
                     {
-                        TaskSystem ts;
+                        TaskSystem ts{arguments.common.jobs};
                         result_map.Clear(&ts);
                     }
                     return kExitSuccess;
@@ -1019,23 +1052,26 @@ auto main(int argc, char* argv[]) -> int {
                             "Analysed target {}",
                             result->id.ToString());
 
-                auto const& stat = Statistics::Instance();
                 {
-                    auto cached = stat.ExportsCachedCounter();
-                    auto uncached = stat.ExportsUncachedCounter();
-                    auto not_eligible = stat.ExportsNotEligibleCounter();
-                    Logger::Log(cached + uncached + not_eligible > 0
-                                    ? LogLevel::Info
-                                    : LogLevel::Debug,
-                                "Export targets found: {} cached, {} uncached, "
-                                "{} not eligible for caching",
-                                cached,
-                                uncached,
-                                not_eligible);
+                    auto cached = stats.ExportsCachedCounter();
+                    auto served = stats.ExportsServedCounter();
+                    auto uncached = stats.ExportsUncachedCounter();
+                    auto not_eligible = stats.ExportsNotEligibleCounter();
+                    Logger::Log(
+                        served + cached + uncached + not_eligible > 0
+                            ? LogLevel::Info
+                            : LogLevel::Debug,
+                        "Export targets found: {} cached, {}{} uncached, "
+                        "{} not eligible for caching",
+                        cached,
+                        served > 0 ? fmt::format("{} served, ", served) : "",
+                        uncached,
+                        not_eligible);
                 }
 
                 ReportTaintedness(*result);
-                auto const& [actions, blobs, trees] = result_map.ToResult();
+                auto const& [actions, blobs, trees] =
+                    result_map.ToResult(&stats, &progress);
 
                 // collect cache targets and artifacts for target-level caching
                 auto const cache_targets = result_map.CacheTargets();
@@ -1043,7 +1079,7 @@ auto main(int argc, char* argv[]) -> int {
 
                 // Clean up result map, now that it is no longer needed
                 {
-                    TaskSystem ts;
+                    TaskSystem ts{arguments.common.jobs};
                     result_map.Clear(&ts);
                 }
 

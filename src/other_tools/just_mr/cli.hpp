@@ -46,6 +46,7 @@ struct MultiRepoCommonArguments {
     std::optional<std::string> main{std::nullopt};
     std::optional<std::filesystem::path> rc_path{std::nullopt};
     std::optional<std::filesystem::path> git_path{std::nullopt};
+    std::optional<std::filesystem::path> dump_rc{std::nullopt};
     bool norc{false};
     std::size_t jobs{std::max(1U, std::thread::hardware_concurrency())};
     std::vector<std::string> defines{};
@@ -91,6 +92,10 @@ struct MultiRepoRemoteAuthArguments {
     std::optional<std::filesystem::path> tls_client_key{std::nullopt};
 };
 
+struct ForwardOnlyArguments {
+    std::vector<std::string> remote_execution_properties{};
+};
+
 enum class SubCommand {
     kUnknown,
     kMRVersion,
@@ -111,6 +116,7 @@ struct CommandLineArguments {
     MultiRepoUpdateArguments update;
     MultiRepoJustSubCmdsArguments just_cmd;
     MultiRepoRemoteAuthArguments auth;
+    ForwardOnlyArguments launch_fwd;
 };
 
 static inline void SetupMultiRepoCommonArguments(
@@ -207,6 +213,9 @@ static inline void SetupMultiRepoCommonArguments(
                     clargs->git_path,
                     fmt::format("Path to the git binary. (Default: {})",
                                 kDefaultGitPath))
+        ->type_name("PATH");
+    app->add_option(
+           "--dump-rc", clargs->dump_rc, "Dump the effective rc value.")
         ->type_name("PATH");
     app->add_flag("--norc", clargs->norc, "Do not use any just-mrrc file.");
     app->add_option("-j, --jobs",

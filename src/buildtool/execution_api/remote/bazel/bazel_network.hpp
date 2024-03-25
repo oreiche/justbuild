@@ -75,8 +75,17 @@ class BazelNetwork {
     [[nodiscard]] auto IsAvailable(std::vector<bazel_re::Digest> const& digests)
         const noexcept -> std::vector<bazel_re::Digest>;
 
-    [[nodiscard]] auto SplitBlob(bazel_re::Digest const& digest) const noexcept
-        -> std::optional<std::vector<bazel_re::Digest>>;
+    [[nodiscard]] auto SplitBlob(bazel_re::Digest const& blob_digest)
+        const noexcept -> std::optional<std::vector<bazel_re::Digest>>;
+
+    [[nodiscard]] auto SpliceBlob(
+        bazel_re::Digest const& blob_digest,
+        std::vector<bazel_re::Digest> const& chunk_digests) const noexcept
+        -> std::optional<bazel_re::Digest>;
+
+    [[nodiscard]] auto BlobSplitSupport() const noexcept -> bool;
+
+    [[nodiscard]] auto BlobSpliceSupport() const noexcept -> bool;
 
     /// \brief Uploads blobs to CAS
     /// \param blobs              The blobs to upload

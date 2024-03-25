@@ -15,10 +15,11 @@
 #include "src/buildtool/serve_api/remote/source_tree_client.hpp"
 
 #include "src/buildtool/common/remote/client_common.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 
 namespace {
 
-auto StringToArchiveType(std::string const& type)
+auto StringToArchiveType(std::string const& type) noexcept
     -> justbuild::just_serve::ServeArchiveTreeRequest_ArchiveType {
     using ServeArchiveType =
         justbuild::just_serve::ServeArchiveTreeRequest_ArchiveType;
@@ -64,8 +65,7 @@ SourceTreeClient::SourceTreeClient(std::string const& server,
 
 auto SourceTreeClient::ServeCommitTree(std::string const& commit_id,
                                        std::string const& subdir,
-                                       bool sync_tree)
-    -> std::optional<std::string> {
+                                       bool sync_tree) noexcept -> result_t {
     justbuild::just_serve::ServeCommitTreeRequest request{};
     request.set_commit(commit_id);
     request.set_subdir(subdir);
@@ -77,16 +77,18 @@ auto SourceTreeClient::ServeCommitTree(std::string const& commit_id,
 
     if (not status.ok()) {
         LogStatus(&logger_, LogLevel::Debug, status);
-        return std::nullopt;
+        return true;  // fatal failure
     }
     if (response.status() !=
         ::justbuild::just_serve::ServeCommitTreeResponse::OK) {
         logger_.Emit(LogLevel::Debug,
                      "ServeCommitTree response returned with {}",
                      static_cast<int>(response.status()));
-        return std::nullopt;
+        return /*fatal = */ (
+            response.status() !=
+            ::justbuild::just_serve::ServeCommitTreeResponse::NOT_FOUND);
     }
-    return response.tree();
+    return response.tree();  // success
 }
 
 auto SourceTreeClient::ServeArchiveTree(
@@ -94,7 +96,7 @@ auto SourceTreeClient::ServeArchiveTree(
     std::string const& archive_type,
     std::string const& subdir,
     std::optional<PragmaSpecial> const& resolve_symlinks,
-    bool sync_tree) -> std::optional<std::string> {
+    bool sync_tree) noexcept -> result_t {
     justbuild::just_serve::ServeArchiveTreeRequest request{};
     request.set_content(content);
     request.set_archive_type(StringToArchiveType(archive_type));
@@ -109,27 +111,30 @@ auto SourceTreeClient::ServeArchiveTree(
 
     if (not status.ok()) {
         LogStatus(&logger_, LogLevel::Debug, status);
-        return std::nullopt;
+        return true;  // fatal failure
     }
     if (response.status() !=
         ::justbuild::just_serve::ServeArchiveTreeResponse::OK) {
         logger_.Emit(LogLevel::Debug,
                      "ServeArchiveTree response returned with {}",
                      static_cast<int>(response.status()));
-        return std::nullopt;
+        return /*fatal = */ (
+            response.status() !=
+            ::justbuild::just_serve::ServeArchiveTreeResponse::NOT_FOUND);
     }
-    return response.tree();
+    return response.tree();  // success
 }
 
 auto SourceTreeClient::ServeDistdirTree(
     std::shared_ptr<std::unordered_map<std::string, std::string>> const&
         distfiles,
-    bool sync_tree) -> std::optional<std::string> {
+    bool sync_tree) noexcept -> result_t {
     justbuild::just_serve::ServeDistdirTreeRequest request{};
     for (auto const& [k, v] : *distfiles) {
         auto* distfile = request.add_distfiles();
         distfile->set_name(k);
         distfile->set_content(v);
+        distfile->set_executable(false);
     }
     request.set_sync_tree(sync_tree);
 
@@ -139,19 +144,53 @@ auto SourceTreeClient::ServeDistdirTree(
 
     if (not status.ok()) {
         LogStatus(&logger_, LogLevel::Debug, status);
-        return std::nullopt;
+        return true;  // fatal failure
     }
     if (response.status() !=
         ::justbuild::just_serve::ServeDistdirTreeResponse::OK) {
         logger_.Emit(LogLevel::Debug,
                      "ServeDistdirTree response returned with {}",
                      static_cast<int>(response.status()));
-        return std::nullopt;
+        return /*fatal = */ (
+            response.status() !=
+            ::justbuild::just_serve::ServeDistdirTreeResponse::NOT_FOUND);
     }
-    return response.tree();
+    return response.tree();  // success
 }
 
-auto SourceTreeClient::ServeContent(std::string const& content) -> bool {
+auto SourceTreeClient::ServeForeignFileTree(const std::string& content,
+                                            const std::string& name,
+                                            bool executable) noexcept
+    -> result_t {
+    justbuild::just_serve::ServeDistdirTreeRequest request{};
+    auto* distfile = request.add_distfiles();
+    distfile->set_name(name);
+    distfile->set_content(content);
+    distfile->set_executable(executable);
+
+    grpc::ClientContext context;
+    justbuild::just_serve::ServeDistdirTreeResponse response;
+    grpc::Status status = stub_->ServeDistdirTree(&context, request, &response);
+
+    if (not status.ok()) {
+        LogStatus(&logger_, LogLevel::Debug, status);
+        return true;  // fatal failure
+    }
+    if (response.status() !=
+        ::justbuild::just_serve::ServeDistdirTreeResponse::OK) {
+        logger_.Emit(LogLevel::Debug,
+                     "ServeDistdirTree called for foreign file response "
+                     "returned with {}",
+                     static_cast<int>(response.status()));
+        return /*fatal = */ (
+            response.status() !=
+            ::justbuild::just_serve::ServeDistdirTreeResponse::NOT_FOUND);
+    }
+    return response.tree();  // success
+}
+
+auto SourceTreeClient::ServeContent(std::string const& content) noexcept
+    -> bool {
     justbuild::just_serve::ServeContentRequest request{};
     request.set_content(content);
 
@@ -173,7 +212,7 @@ auto SourceTreeClient::ServeContent(std::string const& content) -> bool {
     return true;
 }
 
-auto SourceTreeClient::ServeTree(std::string const& tree_id) -> bool {
+auto SourceTreeClient::ServeTree(std::string const& tree_id) noexcept -> bool {
     justbuild::just_serve::ServeTreeRequest request{};
     request.set_tree(tree_id);
 
@@ -191,5 +230,56 @@ auto SourceTreeClient::ServeTree(std::string const& tree_id) -> bool {
                      static_cast<int>(response.status()));
         return false;
     }
+    return true;
+}
+
+auto SourceTreeClient::CheckRootTree(std::string const& tree_id) noexcept
+    -> std::optional<bool> {
+    justbuild::just_serve::CheckRootTreeRequest request{};
+    request.set_tree(tree_id);
+
+    grpc::ClientContext context;
+    justbuild::just_serve::CheckRootTreeResponse response;
+    grpc::Status status = stub_->CheckRootTree(&context, request, &response);
+
+    if (not status.ok()) {
+        LogStatus(&logger_, LogLevel::Debug, status);
+        return std::nullopt;
+    }
+    if (response.status() !=
+        ::justbuild::just_serve::CheckRootTreeResponse::OK) {
+        if (response.status() !=
+            ::justbuild::just_serve::CheckRootTreeResponse::NOT_FOUND) {
+            logger_.Emit(LogLevel::Debug,
+                         "CheckRootTree response returned with {}",
+                         static_cast<int>(response.status()));
+            return std::nullopt;  // tree lookup failed
+        }
+        return false;  // tree not found
+    }
+    return true;  // tree found
+}
+
+auto SourceTreeClient::GetRemoteTree(std::string const& tree_id) noexcept
+    -> bool {
+    justbuild::just_serve::GetRemoteTreeRequest request{};
+    request.set_tree(tree_id);
+
+    grpc::ClientContext context;
+    justbuild::just_serve::GetRemoteTreeResponse response;
+    grpc::Status status = stub_->GetRemoteTree(&context, request, &response);
+
+    if (not status.ok()) {
+        LogStatus(&logger_, LogLevel::Debug, status);
+        return false;
+    }
+    if (response.status() !=
+        ::justbuild::just_serve::GetRemoteTreeResponse::OK) {
+        logger_.Emit(LogLevel::Debug,
+                     "GetRemoteTree response returned with {}",
+                     static_cast<int>(response.status()));
+        return false;  // retrieving tree or import-to-git failed
+    }
+    // success!
     return true;
 }

@@ -37,17 +37,30 @@
 class TargetService final : public justbuild::just_serve::Target::Service {
   public:
     // Given a target-level caching key, returns the computed value. In doing
-    // so, it can build on the associated end-point passing the
+    // so, it can build on the associated endpoint passing the
     // RemoteExecutionProperties contained in the ServeTargetRequest.
+    // The execution backend description, the resulting target cache value,
+    // and all other artifacts referenced therein MUST be made available in
+    // the CAS of the associated remote execution endpoint.
     //
-    // If the status has a code different from `OK`, the response MUST not be
-    // used.
+    // A failure to analyse or build a known target (i.e., a target for which
+    // we have all the needed information available) should NOT be reported as
+    // an error. Instead, the failure log should be uploaded as a blob to the
+    // CAS of the associated remote execution endpoint and its digest provided
+    // to the client in the response field `log`. In this case, the field
+    // `target_value` MUST not be set.
+    //
+    // If the status has a code different from `OK` or `NOT_FOUND`, the
+    // response MUST not be used.
     //
     // Errors:
-    // * `FAILED_PRECONDITION`: Failed to find required information in the CAS
-    //   or the target cache key is malformed.
+    // * `NOT_FOUND`: Unknown target or missing needed local information.
+    //   This should only be used for non-fatal failures.
+    // * `FAILED_PRECONDITION`: Required entries missing in the remote
+    //   execution endpoint.
     // * `UNAVAILABLE`: Could not communicate with the remote execution
     //   endpoint.
+    // * `INVALID_ARGUMENT`: The client provided invalid arguments in request.
     // * `INTERNAL`: Internally, something is very broken.
     auto ServeTarget(
         ::grpc::ServerContext* /*context*/,
@@ -118,8 +131,20 @@ class TargetService final : public justbuild::just_serve::Target::Service {
     /// also ensures the content has the expected format.
     /// \returns An error + data union, with a pair of grpc status at index 0
     /// and the dispatch list stored as a JSON object at index 1.
-    auto GetDispatchList(ArtifactDigest const& dispatch_digest)
+    [[nodiscard]] auto GetDispatchList(
+        ArtifactDigest const& dispatch_digest) noexcept
         -> std::variant<::grpc::Status, dispatch_t>;
+
+    /// \brief Handles the processing of the log after a failed analysis or
+    /// build. Will populate the response as needed and set the status to be
+    /// returned to the client.
+    /// \param failure_scope String stating where the failure occurred, to be
+    /// included in the local error messaging.
+    [[nodiscard]] auto HandleFailureLog(
+        std::filesystem::path const& logfile,
+        std::string const& failure_scope,
+        ::justbuild::just_serve::ServeTargetResponse* response) noexcept
+        -> ::grpc::Status;
 };
 
 #endif  // INCLUDED_SRC_BUILD_SERVE_API_SERVE_SERVICE_TARGET_HPP

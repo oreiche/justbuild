@@ -18,12 +18,15 @@
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
+#include "src/buildtool/multithreading/async_map_utils.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/fs_utils.hpp"
 #include "src/buildtool/storage/storage.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
+#include "src/other_tools/root_maps/root_utils.hpp"
 #include "src/other_tools/utils/content.hpp"
 #include "src/utils/archive/archive_ops.hpp"
 
@@ -46,38 +49,139 @@ namespace {
     return "unrecognized repository type";
 }
 
+/// \brief Helper function for ensuring the serve endpoint, if given, has the
+/// root if it was marked absent.
+/// It guarantees the logger is called exactly once with fatal on failure, and
+/// the setter on success.
+void EnsureRootAsAbsent(
+    std::string const& tree_id,
+    ArchiveRepoInfo const& key,
+    bool serve_api_exists,
+    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
+    bool is_cache_hit,
+    ContentGitMap::SetterPtr const& ws_setter,
+    ContentGitMap::LoggerPtr const& logger) {
+    // this is an absent root
+    if (serve_api_exists) {
+        // check if the serve endpoint has this root
+        auto has_tree = CheckServeHasAbsentRoot(tree_id, logger);
+        if (not has_tree) {
+            return;
+        }
+        if (not *has_tree) {
+            // try to see if serve endpoint has the information to prepare the
+            // root itself
+            auto serve_result =
+                ServeApi::RetrieveTreeFromArchive(key.archive.content,
+                                                  key.repo_type,
+                                                  key.subdir,
+                                                  key.pragma_special,
+                                                  /*sync_tree=*/false);
+            if (std::holds_alternative<std::string>(serve_result)) {
+                // if serve has set up the tree, it must match what we expect
+                auto const& served_tree_id =
+                    std::get<std::string>(serve_result);
+                if (tree_id != served_tree_id) {
+                    (*logger)(fmt::format("Mismatch in served root tree "
+                                          "id:\nexpected {}, but got {}",
+                                          tree_id,
+                                          served_tree_id),
+                              /*fatal=*/true);
+                    return;
+                }
+            }
+            else {
+                // check if serve failure was due to archive content not being
+                // found or it is otherwise fatal
+                auto const& is_fatal = std::get<bool>(serve_result);
+                if (is_fatal) {
+                    (*logger)(fmt::format("Serve endpoint failed to set up "
+                                          "root from known archive content {}",
+                                          key.archive.content),
+                              /*fatal=*/true);
+                    return;
+                }
+                if (not remote_api) {
+                    (*logger)(
+                        fmt::format("Missing or incompatible remote-execution "
+                                    "endpoint needed to sync workspace root {} "
+                                    "with the serve endpoint.",
+                                    tree_id),
+                        /*fatal=*/true);
+                    return;
+                }
+                // the tree is known locally, so we can upload it to remote CAS
+                // for the serve endpoint to retrieve it and set up the root
+                if (not EnsureAbsentRootOnServe(tree_id,
+                                                StorageConfig::GitRoot(),
+                                                *remote_api,
+                                                logger,
+                                                /*no_sync_is_fatal=*/true)) {
+                    return;
+                }
+            }
+        }
+    }
+    else {
+        // give warning
+        (*logger)(fmt::format("Workspace root {} marked absent but no suitable "
+                              "serve endpoint provided.",
+                              tree_id),
+                  /*fatal=*/false);
+    }
+    // set root as absent
+    (*ws_setter)(
+        std::pair(nlohmann::json::array({FileRoot::kGitTreeMarker, tree_id}),
+                  /*is_cache_hit=*/is_cache_hit));
+}
+
+/// \brief Called to get the resolved root (with respect to symlinks) from an
+/// unresolved tree.
+/// It guarantees the logger is called exactly once with fatal on failure, and
+/// the setter on success.
 void ResolveContentTree(
-    std::string const& content,
+    ArchiveRepoInfo const& key,
     std::string const& tree_hash,
     bool is_cache_hit,
-    std::optional<PragmaSpecial> const& pragma_special,
-    bool absent,
-    bool fetch_absent,
+    bool is_absent,
+    bool serve_api_exists,
+    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& ws_setter,
     ContentGitMap::LoggerPtr const& logger) {
-    if (pragma_special) {
+    if (key.pragma_special) {
         // get the resolved tree
         auto tree_id_file =
-            StorageUtils::GetResolvedTreeIDFile(tree_hash, *pragma_special);
+            StorageUtils::GetResolvedTreeIDFile(tree_hash, *key.pragma_special);
         if (FileSystemManager::Exists(tree_id_file)) {
             // read resolved tree id
             auto resolved_tree_id = FileSystemManager::ReadFile(tree_id_file);
             if (not resolved_tree_id) {
-                (*logger)(fmt::format("Failed to read resolved "
-                                      "tree id from file {}",
-                                      tree_id_file.string()),
-                          /*fatal=*/true);
+                (*logger)(
+                    fmt::format("Failed to read resolved tree id from file {}",
+                                tree_id_file.string()),
+                    /*fatal=*/true);
                 return;
             }
             // set the workspace root
-            auto root = nlohmann::json::array(
-                {FileRoot::kGitTreeMarker, *resolved_tree_id});
-            if (fetch_absent or not absent) {
-                root.emplace_back(StorageConfig::GitRoot().string());
+            if (is_absent) {
+                // try all the available means to generate & set the absent root
+                EnsureRootAsAbsent(*resolved_tree_id,
+                                   key,
+                                   serve_api_exists,
+                                   remote_api,
+                                   is_cache_hit,
+                                   ws_setter,
+                                   logger);
             }
-            (*ws_setter)(std::pair(std::move(root), true));
+            else {
+                (*ws_setter)(std::pair(
+                    nlohmann::json::array({FileRoot::kGitTreeMarker,
+                                           *resolved_tree_id,
+                                           StorageConfig::GitRoot().string()}),
+                    /*is_cache_hit=*/is_cache_hit));
+            }
         }
         else {
             // resolve tree
@@ -85,21 +189,24 @@ void ResolveContentTree(
                 ts,
                 {GitObjectToResolve(tree_hash,
                                     ".",
-                                    *pragma_special,
+                                    *key.pragma_special,
                                     /*known_info=*/std::nullopt)},
                 [resolve_symlinks_map,
                  tree_hash,
                  tree_id_file,
                  is_cache_hit,
-                 absent,
-                 fetch_absent,
+                 key,
+                 is_absent,
+                 serve_api_exists,
+                 remote_api,
                  ws_setter,
                  logger](auto const& hashes) {
                     if (not hashes[0]) {
                         // check for cycles
-                        auto error = DetectAndReportCycle(*resolve_symlinks_map,
-                                                          tree_hash);
-                        if (error) {
+                        if (auto error = DetectAndReportCycle(
+                                fmt::format("resolving Git tree {}", tree_hash),
+                                *resolve_symlinks_map,
+                                kGitObjectToResolvePrinter)) {
                             (*logger)(fmt::format("Failed to resolve symlinks "
                                                   "in tree {}:\n{}",
                                                   tree_hash,
@@ -124,14 +231,28 @@ void ResolveContentTree(
                         return;
                     }
                     // set the workspace root
-                    auto root = nlohmann::json::array(
-                        {FileRoot::kGitTreeMarker, resolved_tree.id});
-                    if (fetch_absent or not absent) {
-                        root.emplace_back(StorageConfig::GitRoot().string());
+                    if (is_absent) {
+                        // try all the available means to generate & set the
+                        // absent root
+                        EnsureRootAsAbsent(resolved_tree.id,
+                                           key,
+                                           serve_api_exists,
+                                           remote_api,
+                                           is_cache_hit,
+                                           ws_setter,
+                                           logger);
                     }
-                    (*ws_setter)(std::pair(std::move(root), is_cache_hit));
+                    else {
+                        (*ws_setter)(
+                            std::pair(nlohmann::json::array(
+                                          {FileRoot::kGitTreeMarker,
+                                           resolved_tree.id,
+                                           StorageConfig::GitRoot().string()}),
+                                      /*is_cache_hit=*/is_cache_hit));
+                    }
                 },
-                [logger, content](auto const& msg, bool fatal) {
+                [logger, content = key.archive.content](auto const& msg,
+                                                        bool fatal) {
                     (*logger)(fmt::format("While resolving symlinks for "
                                           "content {}:\n{}",
                                           content,
@@ -142,26 +263,37 @@ void ResolveContentTree(
     }
     else {
         // set the workspace root as-is
-        auto root =
-            nlohmann::json::array({FileRoot::kGitTreeMarker, tree_hash});
-        if (fetch_absent or not absent) {
-            root.emplace_back(StorageConfig::GitRoot().string());
+        if (is_absent) {
+            // try all the available means to generate & set the absent root
+            EnsureRootAsAbsent(tree_hash,
+                               key,
+                               serve_api_exists,
+                               remote_api,
+                               is_cache_hit,
+                               ws_setter,
+                               logger);
         }
-        (*ws_setter)(std::pair(std::move(root), is_cache_hit));
+        else {
+            (*ws_setter)(std::pair(
+                nlohmann::json::array({FileRoot::kGitTreeMarker,
+                                       tree_hash,
+                                       StorageConfig::GitRoot().string()}),
+                /*is_cache_hit=*/is_cache_hit));
+        }
     }
 }
 
-// Helper function for improved readability. It guarantees the logger is called
-// exactly once with fatal if failure.
+/// \brief Called to store the file association and then set the root.
+/// It guarantees the logger is called exactly once with fatal on failure, and
+/// the setter on success.
 void WriteIdFileAndSetWSRoot(
+    ArchiveRepoInfo const& key,
     std::string const& archive_tree_id,
     GitCASPtr const& just_git_cas,
     std::filesystem::path const& archive_tree_id_file,
-    std::string const& content_id,
-    std::string const& subdir,
-    std::optional<PragmaSpecial> const& pragma_special,
-    bool absent,
-    bool fetch_absent,
+    bool is_absent,
+    bool serve_api_exists,
+    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
@@ -183,7 +315,8 @@ void WriteIdFileAndSetWSRoot(
     }
     // setup wrapped logger
     auto wrapped_logger = std::make_shared<AsyncMapConsumerLogger>(
-        [&logger, subdir, tree = archive_tree_id](auto const& msg, bool fatal) {
+        [&logger, subdir = key.subdir, tree = archive_tree_id](auto const& msg,
+                                                               bool fatal) {
             (*logger)(fmt::format("While getting subdir {} from tree {}:\n{}",
                                   subdir,
                                   tree,
@@ -192,69 +325,69 @@ void WriteIdFileAndSetWSRoot(
         });
     // get subtree id
     auto subtree_hash = just_git_repo->GetSubtreeFromTree(
-        archive_tree_id, subdir, wrapped_logger);
+        archive_tree_id, key.subdir, wrapped_logger);
     if (not subtree_hash) {
         return;
     }
     // resolve tree and set workspace root
-    ResolveContentTree(content_id,
+    ResolveContentTree(key,
                        *subtree_hash,
                        false, /*is_cache_hit*/
-                       pragma_special,
-                       absent,
-                       fetch_absent,
+                       is_absent,
+                       serve_api_exists,
+                       remote_api,
                        resolve_symlinks_map,
                        ts,
                        setter,
                        logger);
 }
 
-// Helper function for improved readability. It guarantees the logger is called
-// exactly once with fatal if failure.
+/// \brief Called when archive is in local CAS. Performs the import-to-git and
+/// follow-up processing.
+/// It guarantees the logger is called exactly once with fatal on failure, and
+/// the setter on success.
 void ExtractAndImportToGit(
+    ArchiveRepoInfo const& key,
     std::filesystem::path const& content_cas_path,
     std::filesystem::path const& archive_tree_id_file,
-    std::string const& repo_type,
-    std::string const& content_id,
-    std::string const& subdir,
-    std::optional<PragmaSpecial> const& pragma_special,
-    bool absent,
-    bool fetch_absent,
+    bool is_absent,
+    bool serve_api_exists,
+    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
     ContentGitMap::LoggerPtr const& logger) {
     // extract archive
-    auto tmp_dir = StorageUtils::CreateTypedTmpDir(repo_type);
+    auto tmp_dir = StorageConfig::CreateTypedTmpDir(key.repo_type);
     if (not tmp_dir) {
         (*logger)(fmt::format("Failed to create tmp path for {} target {}",
-                              repo_type,
-                              content_id),
+                              key.repo_type,
+                              key.archive.content),
                   /*fatal=*/true);
         return;
     }
-    auto res = ExtractArchive(content_cas_path, repo_type, tmp_dir->GetPath());
+    auto res =
+        ExtractArchive(content_cas_path, key.repo_type, tmp_dir->GetPath());
     if (res != std::nullopt) {
-        (*logger)(fmt::format("Failed to extract archive {} "
-                              "from CAS with error: {}",
-                              content_cas_path.string(),
-                              *res),
-                  /*fatal=*/true);
+        (*logger)(
+            fmt::format("Failed to extract archive {} from CAS with error:\n{}",
+                        content_cas_path.string(),
+                        *res),
+            /*fatal=*/true);
         return;
     }
     // import to git
-    CommitInfo c_info{tmp_dir->GetPath(), repo_type, content_id};
+    CommitInfo c_info{tmp_dir->GetPath(), key.repo_type, key.archive.content};
     import_to_git_map->ConsumeAfterKeysReady(
         ts,
         {std::move(c_info)},
         [tmp_dir,  // keep tmp_dir alive
          archive_tree_id_file,
-         content_id,
-         subdir,
-         pragma_special,
-         absent,
-         fetch_absent,
+         key,
+         is_absent,
+         serve_api_exists,
+         remote_api,
          resolve_symlinks_map,
          ts,
          setter,
@@ -275,14 +408,13 @@ void ExtractAndImportToGit(
                 return;
             }
             // write to id file and process subdir tree
-            WriteIdFileAndSetWSRoot(archive_tree_id,
+            WriteIdFileAndSetWSRoot(key,
+                                    archive_tree_id,
                                     just_git_cas,
                                     archive_tree_id_file,
-                                    content_id,
-                                    subdir,
-                                    pragma_special,
-                                    absent,
-                                    fetch_absent,
+                                    is_absent,
+                                    serve_api_exists,
+                                    remote_api,
                                     resolve_symlinks_map,
                                     ts,
                                     setter,
@@ -290,8 +422,7 @@ void ExtractAndImportToGit(
         },
         [logger, target_path = tmp_dir->GetPath()](auto const& msg,
                                                    bool fatal) {
-            (*logger)(fmt::format("While importing target {} "
-                                  "to Git:\n{}",
+            (*logger)(fmt::format("While importing target {} to Git:\n{}",
                                   target_path.string(),
                                   msg),
                       fatal);
@@ -309,8 +440,7 @@ auto CreateContentGitMap(
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     bool serve_api_exists,
-    IExecutionApi* local_api,
-    IExecutionApi* remote_api,
+    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
     bool fetch_absent,
     std::size_t jobs) -> ContentGitMap {
     auto gitify_content = [content_cas_map,
@@ -321,7 +451,6 @@ auto CreateContentGitMap(
                            additional_mirrors,
                            ca_info,
                            serve_api_exists,
-                           local_api,
                            remote_api,
                            fetch_absent](auto ts,
                                          auto setter,
@@ -355,11 +484,10 @@ auto CreateContentGitMap(
                 ts,
                 {std::move(op_key)},
                 [archive_tree_id = *archive_tree_id,
-                 subdir = key.subdir,
-                 content = key.archive.content,
-                 pragma_special = key.pragma_special,
-                 absent = key.absent,
+                 key,
                  fetch_absent,
+                 serve_api_exists,
+                 remote_api,
                  resolve_symlinks_map,
                  ts,
                  setter,
@@ -390,21 +518,22 @@ auto CreateContentGitMap(
                             });
                     // get subtree id
                     auto subtree_hash = just_git_repo->GetSubtreeFromTree(
-                        archive_tree_id, subdir, wrapped_logger);
+                        archive_tree_id, key.subdir, wrapped_logger);
                     if (not subtree_hash) {
                         return;
                     }
-                    // resolve tree and set workspace root
-                    ResolveContentTree(content,
-                                       *subtree_hash,
-                                       true, /*is_cache_hit*/
-                                       pragma_special,
-                                       absent,
-                                       fetch_absent,
-                                       resolve_symlinks_map,
-                                       ts,
-                                       setter,
-                                       logger);
+                    // resolve tree and set workspace root (present or absent)
+                    ResolveContentTree(
+                        key,
+                        *subtree_hash,
+                        /*is_cache_hit = */ true,
+                        /*is_absent = */ (key.absent and not fetch_absent),
+                        serve_api_exists,
+                        remote_api,
+                        resolve_symlinks_map,
+                        ts,
+                        setter,
+                        logger);
                 },
                 [logger, target_path = StorageConfig::GitRoot()](
                     auto const& msg, bool fatal) {
@@ -417,111 +546,146 @@ auto CreateContentGitMap(
                 });
         }
         else {
-            // check if content already in CAS
-            auto const& cas = Storage::Instance().CAS();
-            auto digest = ArtifactDigest(key.archive.content, 0, false);
-            if (auto content_cas_path =
-                    cas.BlobPath(digest, /*is_executable=*/false)) {
-                ExtractAndImportToGit(*content_cas_path,
-                                      archive_tree_id_file,
-                                      key.repo_type,
-                                      key.archive.content,
-                                      key.subdir,
-                                      key.pragma_special,
-                                      key.absent,
-                                      fetch_absent,
-                                      import_to_git_map,
-                                      resolve_symlinks_map,
-                                      ts,
-                                      setter,
-                                      logger);
-                // done
-                return;
-            }
-            // check if content is in Git cache;
-            // ensure Git cache
-            GitOpKey op_key = {.params =
-                                   {
-                                       StorageConfig::GitRoot(),  // target_path
-                                       "",                        // git_hash
-                                       "",                        // branch
-                                       std::nullopt,              // message
-                                       true                       // init_bare
-                                   },
-                               .op_type = GitOpType::ENSURE_INIT};
-            critical_git_op_map->ConsumeAfterKeysReady(
-                ts,
-                {std::move(op_key)},
-                [key,
-                 digest,
-                 archive_tree_id_file,
-                 content_cas_map,
-                 import_to_git_map,
-                 resolve_symlinks_map,
-                 just_mr_paths,
-                 additional_mirrors,
-                 ca_info,
-                 serve_api_exists,
-                 local_api,
-                 remote_api,
-                 fetch_absent,
-                 ts,
-                 setter,
-                 logger](auto const& values) {
-                    GitOpValue op_result = *values[0];
-                    // check flag
-                    if (not op_result.result) {
-                        (*logger)("Git init failed",
-                                  /*fatal=*/true);
-                        return;
-                    }
-                    auto const just_git_cas = op_result.git_cas;
-                    // open fake repo wrap for GitCAS
-                    auto just_git_repo = GitRepoRemote::Open(just_git_cas);
-                    if (not just_git_repo) {
-                        (*logger)("Could not open Git cache repository!",
-                                  /*fatal=*/true);
-                        return;
-                    }
-                    // verify if local Git knows content blob
-                    auto wrapped_logger =
-                        std::make_shared<AsyncMapConsumerLogger>(
-                            [&logger, blob = key.archive.content](
-                                auto const& msg, bool fatal) {
-                                (*logger)(
-                                    fmt::format("While verifying presence of "
-                                                "blob {}:\n{}",
-                                                blob,
-                                                msg),
-                                    fatal);
-                            });
-                    auto res = just_git_repo->TryReadBlob(key.archive.content,
-                                                          wrapped_logger);
-                    if (not res.first) {
-                        // blob check failed
-                        return;
-                    }
-                    auto const& cas = Storage::Instance().CAS();
-                    if (res.second) {
-                        // blob found; add it to CAS
-                        if (not cas.StoreBlob(*res.second,
-                                              /*is_executable=*/false)) {
-                            (*logger)(fmt::format("Failed to store content {} "
-                                                  "to local CAS",
-                                                  key.archive.content),
+            // separate logic between absent and present roots
+            if (key.absent and not fetch_absent) {
+                // check if content already in CAS
+                auto const& cas = Storage::Instance().CAS();
+                auto digest = ArtifactDigest(key.archive.content, 0, false);
+                if (auto content_cas_path =
+                        cas.BlobPath(digest, /*is_executable=*/false)) {
+                    ExtractAndImportToGit(key,
+                                          *content_cas_path,
+                                          archive_tree_id_file,
+                                          /*is_absent = */ true,
+                                          serve_api_exists,
+                                          remote_api,
+                                          import_to_git_map,
+                                          resolve_symlinks_map,
+                                          ts,
+                                          setter,
+                                          logger);
+                    // done
+                    return;
+                }
+
+                // check if content is in Git cache;
+                // ensure Git cache
+                GitOpKey op_key = {
+                    .params =
+                        {
+                            StorageConfig::GitRoot(),  // target_path
+                            "",                        // git_hash
+                            "",                        // branch
+                            std::nullopt,              // message
+                            true                       // init_bare
+                        },
+                    .op_type = GitOpType::ENSURE_INIT};
+                critical_git_op_map->ConsumeAfterKeysReady(
+                    ts,
+                    {std::move(op_key)},
+                    [key,
+                     digest,
+                     archive_tree_id_file,
+                     import_to_git_map,
+                     resolve_symlinks_map,
+                     just_mr_paths,
+                     additional_mirrors,
+                     ca_info,
+                     serve_api_exists,
+                     remote_api,
+                     ts,
+                     setter,
+                     logger](auto const& values) {
+                        GitOpValue op_result = *values[0];
+                        // check flag
+                        if (not op_result.result) {
+                            (*logger)("Git init failed",
                                       /*fatal=*/true);
                             return;
                         }
+                        auto const just_git_cas = op_result.git_cas;
+                        // open fake repo wrap for GitCAS
+                        auto just_git_repo = GitRepoRemote::Open(just_git_cas);
+                        if (not just_git_repo) {
+                            (*logger)("Could not open Git cache repository!",
+                                      /*fatal=*/true);
+                            return;
+                        }
+                        // verify if local Git knows content blob
+                        auto wrapped_logger =
+                            std::make_shared<AsyncMapConsumerLogger>(
+                                [&logger, blob = key.archive.content](
+                                    auto const& msg, bool fatal) {
+                                    (*logger)(
+                                        fmt::format("While verifying presence "
+                                                    "of blob {}:\n{}",
+                                                    blob,
+                                                    msg),
+                                        fatal);
+                                });
+                        auto res = just_git_repo->TryReadBlob(
+                            key.archive.content, wrapped_logger);
+                        if (not res.first) {
+                            // blob check failed
+                            return;
+                        }
+                        auto const& cas = Storage::Instance().CAS();
+                        if (res.second) {
+                            // blob found; add it to CAS
+                            if (not cas.StoreBlob(*res.second,
+                                                  /*is_executable=*/false)) {
+                                (*logger)(fmt::format("Failed to store content "
+                                                      "{} to local CAS",
+                                                      key.archive.content),
+                                          /*fatal=*/true);
+                                return;
+                            }
+                            if (auto content_cas_path = cas.BlobPath(
+                                    digest, /*is_executable=*/false)) {
+                                ExtractAndImportToGit(key,
+                                                      *content_cas_path,
+                                                      archive_tree_id_file,
+                                                      /*is_absent=*/true,
+                                                      serve_api_exists,
+                                                      remote_api,
+                                                      import_to_git_map,
+                                                      resolve_symlinks_map,
+                                                      ts,
+                                                      setter,
+                                                      logger);
+                                // done
+                                return;
+                            }
+                            // this should normally never be reached unless
+                            // something went really wrong
+                            (*logger)(fmt::format("Failed to retrieve blob {} "
+                                                  "from local CAS",
+                                                  digest.hash()),
+                                      /*fatal=*/true);
+                            return;
+                        }
+                        JustMRProgress::Instance().TaskTracker().Start(
+                            key.archive.origin);
+                        // add distfile to CAS
+                        auto repo_distfile =
+                            (key.archive.distfile
+                                 ? key.archive.distfile.value()
+                                 : std::filesystem::path(key.archive.fetch_url)
+                                       .filename()
+                                       .string());
+                        StorageUtils::AddDistfileToCAS(repo_distfile,
+                                                       just_mr_paths);
+                        // check if content is in CAS now
                         if (auto content_cas_path =
                                 cas.BlobPath(digest, /*is_executable=*/false)) {
-                            ExtractAndImportToGit(*content_cas_path,
+                            JustMRProgress::Instance().TaskTracker().Stop(
+                                key.archive.origin);
+                            ExtractAndImportToGit(key,
+                                                  *content_cas_path,
                                                   archive_tree_id_file,
-                                                  key.repo_type,
-                                                  key.archive.content,
-                                                  key.subdir,
-                                                  key.pragma_special,
-                                                  key.absent,
-                                                  fetch_absent,
+                                                  /*is_absent=*/true,
+                                                  serve_api_exists,
+                                                  remote_api,
                                                   import_to_git_map,
                                                   resolve_symlinks_map,
                                                   ts,
@@ -530,358 +694,98 @@ auto CreateContentGitMap(
                             // done
                             return;
                         }
-                        // this should normally never be reached unless
-                        // something went really wrong
-                        (*logger)(fmt::format("Failed to retrieve blob {} from "
-                                              "local CAS",
-                                              digest.hash()),
-                                  /*fatal=*/true);
-                        return;
-                    }
-                    JustMRProgress::Instance().TaskTracker().Start(
-                        key.archive.origin);
-                    // add distfile to CAS
-                    auto repo_distfile =
-                        (key.archive.distfile
-                             ? key.archive.distfile.value()
-                             : std::filesystem::path(key.archive.fetch_url)
-                                   .filename()
-                                   .string());
-                    StorageUtils::AddDistfileToCAS(repo_distfile,
-                                                   just_mr_paths);
-                    // check if content is in CAS now
-                    if (auto content_cas_path =
-                            cas.BlobPath(digest, /*is_executable=*/false)) {
-                        JustMRProgress::Instance().TaskTracker().Stop(
-                            key.archive.origin);
-                        ExtractAndImportToGit(*content_cas_path,
-                                              archive_tree_id_file,
-                                              key.repo_type,
-                                              key.archive.content,
-                                              key.subdir,
-                                              key.pragma_special,
-                                              key.absent,
-                                              fetch_absent,
-                                              import_to_git_map,
-                                              resolve_symlinks_map,
-                                              ts,
-                                              setter,
-                                              logger);
-                        // done
-                        return;
-                    }
-                    // check if content is known to remote serve service
-                    if (serve_api_exists) {
-                        // if purely absent, request the resolved subdir tree
-                        // directly
-                        if (key.absent and not fetch_absent) {
-                            if (auto tree_id =
-                                    ServeApi::RetrieveTreeFromArchive(
-                                        key.archive.content,
-                                        key.repo_type,
-                                        key.subdir,
-                                        key.pragma_special,
-                                        /*sync_tree = */ false)) {
+                        // request the resolved subdir tree from the serve
+                        // endpoint, if given
+                        if (serve_api_exists) {
+                            auto serve_result =
+                                ServeApi::RetrieveTreeFromArchive(
+                                    key.archive.content,
+                                    key.repo_type,
+                                    key.subdir,
+                                    key.pragma_special,
+                                    /*sync_tree = */ false);
+                            if (std::holds_alternative<std::string>(
+                                    serve_result)) {
                                 // set the workspace root as absent
                                 JustMRProgress::Instance().TaskTracker().Stop(
                                     key.archive.origin);
                                 (*setter)(std::pair(
                                     nlohmann::json::array(
-                                        {FileRoot::kGitTreeMarker, *tree_id}),
+                                        {FileRoot::kGitTreeMarker,
+                                         std::get<std::string>(serve_result)}),
                                     /*is_cache_hit = */ false));
                                 return;
                             }
-                            // give warning
-                            (*logger)(
-                                fmt::format("Tree at subdir {} for archive {} "
-                                            "could not be served",
-                                            key.subdir,
-                                            key.archive.content),
-                                /*fatal=*/false);
-                        }
-                        // otherwise, request (and sync) the whole archive tree,
-                        // UNRESOLVED, to ensure we maintain the id file
-                        // association
-                        else {
-                            if (auto root_tree_id =
-                                    ServeApi::RetrieveTreeFromArchive(
-                                        key.archive.content,
-                                        key.repo_type,
-                                        /*subdir = */ ".",
-                                        /* resolve_symlinks = */ std::nullopt,
-                                        /*sync_tree = */ true)) {
-                                // verify if we already know the tree locally;
-                                // setup wrapped logger
-                                auto wrapped_logger =
-                                    std::make_shared<AsyncMapConsumerLogger>(
-                                        [&logger, tree = *root_tree_id](
-                                            auto const& msg, bool fatal) {
-                                            (*logger)(
-                                                fmt::format(
-                                                    "While verifying presence "
-                                                    "of tree {}:\n{}",
-                                                    tree,
-                                                    msg),
-                                                fatal);
-                                        });
-                                auto tree_present =
-                                    just_git_repo->CheckTreeExists(
-                                        *root_tree_id, wrapped_logger);
-                                if (not tree_present) {
-                                    return;
-                                }
-                                if (*tree_present) {
-                                    JustMRProgress::Instance()
-                                        .TaskTracker()
-                                        .Stop(key.archive.origin);
-                                    // write to id file and process subdir tree
-                                    WriteIdFileAndSetWSRoot(
-                                        *root_tree_id,
-                                        just_git_cas,
-                                        archive_tree_id_file,
-                                        key.archive.content,
-                                        key.subdir,
-                                        key.pragma_special,
-                                        key.absent,
-                                        fetch_absent,
-                                        resolve_symlinks_map,
-                                        ts,
-                                        setter,
-                                        logger);
-                                    // done
-                                    return;
-                                }
-                                // try to get root tree from remote execution
-                                // endpoint
-                                auto root_digest = ArtifactDigest{
-                                    *root_tree_id, 0, /*is_tree=*/true};
-                                if (remote_api != nullptr and
-                                    local_api != nullptr and
-                                    remote_api->RetrieveToCas(
-                                        {Artifact::ObjectInfo{
-                                            .digest = root_digest,
-                                            .type = ObjectType::Tree}},
-                                        local_api)) {
-                                    JustMRProgress::Instance()
-                                        .TaskTracker()
-                                        .Stop(key.archive.origin);
-                                    // Move tree from CAS to local git storage
-                                    auto tmp_dir =
-                                        StorageUtils::CreateTypedTmpDir(
-                                            "fetch-absent-root");
-                                    if (not tmp_dir) {
-                                        (*logger)(
-                                            fmt::format(
-                                                "Failed to create tmp "
-                                                "directory after fetching root "
-                                                "tree {} for absent archive {}",
-                                                *root_tree_id,
-                                                key.archive.content),
-                                            true);
-                                        return;
-                                    }
-                                    if (not local_api->RetrieveToPaths(
-                                            {Artifact::ObjectInfo{
-                                                .digest = root_digest,
-                                                .type = ObjectType::Tree}},
-                                            {tmp_dir->GetPath()})) {
-                                        (*logger)(
-                                            fmt::format(
-                                                "Failed to copy fetched root "
-                                                "tree {} to {}",
-                                                *root_tree_id,
-                                                tmp_dir->GetPath().string()),
-                                            true);
-                                        return;
-                                    }
-                                    CommitInfo c_info{tmp_dir->GetPath(),
-                                                      "tree",
-                                                      *root_tree_id};
-                                    import_to_git_map->ConsumeAfterKeysReady(
-                                        ts,
-                                        {std::move(c_info)},
-                                        [tmp_dir,  // keep tmp_dir alive
-                                         root_tree_id,
-                                         content = key.archive.content,
-                                         subdir = key.subdir,
-                                         pragma_special = key.pragma_special,
-                                         absent = key.absent,
-                                         fetch_absent,
-                                         just_git_cas,
-                                         archive_tree_id_file,
-                                         resolve_symlinks_map,
-                                         ts,
-                                         setter,
-                                         logger](auto const& values) {
-                                            if (not values[0]->second) {
-                                                (*logger)(
-                                                    "Importing to git failed",
-                                                    /*fatal=*/true);
-                                                return;
-                                            }
-                                            // write to id file and process
-                                            // subdir tree
-                                            WriteIdFileAndSetWSRoot(
-                                                *root_tree_id,
-                                                just_git_cas,
-                                                archive_tree_id_file,
-                                                content,
-                                                subdir,
-                                                pragma_special,
-                                                absent,
-                                                fetch_absent,
-                                                resolve_symlinks_map,
-                                                ts,
-                                                setter,
-                                                logger);
-                                        },
-                                        [logger, tmp_dir, root_tree_id](
-                                            auto const& msg, bool fatal) {
-                                            (*logger)(
-                                                fmt::format(
-                                                    "While moving root tree {} "
-                                                    "from {} to local git:\n{}",
-                                                    *root_tree_id,
-                                                    tmp_dir->GetPath().string(),
-                                                    msg),
-                                                fatal);
-                                        });
-                                    // done
-                                    return;
-                                }
-                                // try to fetch content from network
-                                content_cas_map->ConsumeAfterKeysReady(
-                                    ts,
-                                    {key.archive},
-                                    [archive_tree_id_file,
-                                     archive_origin = key.archive.origin,
-                                     repo_type = key.repo_type,
-                                     content_id = key.archive.content,
-                                     subdir = key.subdir,
-                                     pragma_special = key.pragma_special,
-                                     absent = key.absent,
-                                     fetch_absent,
-                                     import_to_git_map,
-                                     resolve_symlinks_map,
-                                     ts,
-                                     setter,
-                                     logger](
-                                        [[maybe_unused]] auto const& values) {
-                                        JustMRProgress::Instance()
-                                            .TaskTracker()
-                                            .Stop(archive_origin);
-                                        // content is in CAS
-                                        auto const& cas =
-                                            Storage::Instance().CAS();
-                                        auto content_cas_path =
-                                            cas.BlobPath(
-                                                   ArtifactDigest(
-                                                       content_id, 0, false),
-                                                   /*is_executable=*/
-                                                   false)
-                                                .value();
-                                        ExtractAndImportToGit(
-                                            content_cas_path,
-                                            archive_tree_id_file,
-                                            repo_type,
-                                            content_id,
-                                            subdir,
-                                            pragma_special,
-                                            absent,
-                                            fetch_absent,
-                                            import_to_git_map,
-                                            resolve_symlinks_map,
-                                            ts,
-                                            setter,
-                                            logger);
-                                    },
-                                    [logger, content = key.archive.content](
-                                        auto const& msg, bool fatal) {
-                                        (*logger)(fmt::format(
-                                                      "While ensuring content "
-                                                      "{} is in CAS:\n{}",
-                                                      content,
-                                                      msg),
-                                                  fatal);
-                                    });
-                                // done
+                            // check if serve failure was due to archive content
+                            // not being found or it is otherwise fatal
+                            auto const& is_fatal = std::get<bool>(serve_result);
+                            if (is_fatal) {
+                                (*logger)(
+                                    fmt::format(
+                                        "Serve endpoint failed to set up root "
+                                        "from known archive content {}",
+                                        key.archive.content),
+                                    /*fatal=*/true);
                                 return;
                             }
-                            // give warning
-                            (*logger)(fmt::format("Root tree for content {} "
-                                                  "could not be served",
-                                                  key.archive.content),
-                                      /*fatal=*/false);
                         }
-                    }
-                    else {
-                        if (key.absent) {
-                            // give warning
-                            (*logger)(
-                                fmt::format("Missing serve endpoint for "
-                                            "content {} marked absent requires "
-                                            "slower network fetch.",
-                                            key.archive.content),
-                                /*fatal=*/false);
-                        }
-                    }
-                    // revert to network fetch
-                    content_cas_map->ConsumeAfterKeysReady(
-                        ts,
-                        {key.archive},
-                        [archive_tree_id_file,
-                         archive_origin = key.archive.origin,
-                         repo_type = key.repo_type,
-                         content_id = key.archive.content,
-                         subdir = key.subdir,
-                         pragma_special = key.pragma_special,
-                         absent = key.absent,
-                         fetch_absent,
-                         import_to_git_map,
-                         resolve_symlinks_map,
-                         ts,
-                         setter,
-                         logger]([[maybe_unused]] auto const& values) {
-                            JustMRProgress::Instance().TaskTracker().Stop(
-                                archive_origin);
-                            // content is in CAS
-                            auto const& cas = Storage::Instance().CAS();
-                            auto content_cas_path =
-                                cas.BlobPath(
-                                       ArtifactDigest(content_id, 0, false),
-                                       /*is_executable=*/false)
-                                    .value();
-                            ExtractAndImportToGit(content_cas_path,
-                                                  archive_tree_id_file,
-                                                  repo_type,
-                                                  content_id,
-                                                  subdir,
-                                                  pragma_special,
-                                                  absent,
-                                                  fetch_absent,
-                                                  import_to_git_map,
-                                                  resolve_symlinks_map,
-                                                  ts,
-                                                  setter,
-                                                  logger);
-                        },
-                        [logger, content = key.archive.content](auto const& msg,
-                                                                bool fatal) {
-                            (*logger)(fmt::format("While ensuring content {} "
-                                                  "is in CAS:\n{}",
-                                                  content,
-                                                  msg),
-                                      fatal);
-                        });
-                },
-                [logger, target_path = StorageConfig::GitRoot()](
-                    auto const& msg, bool fatal) {
-                    (*logger)(fmt::format("While running critical Git op "
-                                          "ENSURE_INIT for target {}:\n{}",
-                                          target_path.string(),
-                                          msg),
-                              fatal);
-                });
+                        // report not being able to set up this root as absent
+                        (*logger)(fmt::format("Cannot create workspace root as "
+                                              "absent for content {}.",
+                                              key.archive.content),
+                                  /*fatal=*/true);
+                    },
+                    [logger, target_path = StorageConfig::GitRoot()](
+                        auto const& msg, bool fatal) {
+                        (*logger)(fmt::format("While running critical Git op "
+                                              "ENSURE_INIT for target {}:\n{}",
+                                              target_path.string(),
+                                              msg),
+                                  fatal);
+                    });
+            }
+            else {
+                // for a present root we need the archive to be present too
+                content_cas_map->ConsumeAfterKeysReady(
+                    ts,
+                    {key.archive},
+                    [archive_tree_id_file,
+                     key,
+                     import_to_git_map,
+                     resolve_symlinks_map,
+                     ts,
+                     setter,
+                     logger]([[maybe_unused]] auto const& values) {
+                        // content is in local CAS now
+                        auto const& cas = Storage::Instance().CAS();
+                        auto content_cas_path =
+                            cas.BlobPath(ArtifactDigest(
+                                             key.archive.content, 0, false),
+                                         /*is_executable=*/false)
+                                .value();
+                        // root can only be present, so default all arguments
+                        // that refer to a serve endpoint
+                        ExtractAndImportToGit(key,
+                                              content_cas_path,
+                                              archive_tree_id_file,
+                                              /*is_absent=*/false,
+                                              /*serve_api_exists=*/false,
+                                              /*remote_api=*/std::nullopt,
+                                              import_to_git_map,
+                                              resolve_symlinks_map,
+                                              ts,
+                                              setter,
+                                              logger);
+                    },
+                    [logger, content = key.archive.content](auto const& msg,
+                                                            bool fatal) {
+                        (*logger)(fmt::format("While ensuring content {} is in "
+                                              "CAS:\n{}",
+                                              content,
+                                              msg),
+                                  fatal);
+                    });
+            }
         }
     };
     return AsyncMapConsumer<ArchiveRepoInfo, std::pair<nlohmann::json, bool>>(

@@ -15,11 +15,18 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_PROGRESS_REPORTING_PROGRESS_REPORTER_HPP
 #define INCLUDED_SRC_BUILDTOOL_PROGRESS_REPORTING_PROGRESS_REPORTER_HPP
 
+#include "gsl/gsl"
+#include "src/buildtool/common/statistics.hpp"
+#include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/progress_reporting/base_progress_reporter.hpp"
+#include "src/buildtool/progress_reporting/progress.hpp"
 
 class ProgressReporter {
   public:
-    [[nodiscard]] static auto Reporter() noexcept -> progress_reporter_t;
+    [[nodiscard]] static auto Reporter(gsl::not_null<Statistics*> const& stats,
+                                       gsl::not_null<Progress*> const& progress,
+                                       Logger const* logger = nullptr) noexcept
+        -> progress_reporter_t;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_PROGRESS_REPORTING_PROGRESS_REPORTER_HPP

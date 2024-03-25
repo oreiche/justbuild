@@ -18,13 +18,75 @@
 #include "src/buildtool/execution_api/local/config.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/git_repo.hpp"
+#include "src/buildtool/multithreading/async_map_utils.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/fs_utils.hpp"
 #include "src/other_tools/git_operations/git_repo_remote.hpp"
+#include "src/other_tools/root_maps/root_utils.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
 namespace {
+
+/// \brief Does the serve endpoint checks and sets the workspace root.
+/// It guarantees the logger is called exactly once with fatal on failure, and
+/// the setter on success.
+void CheckServeAndSetRoot(
+    std::string const& tree_id,
+    std::string const& repo_root,
+    bool absent,
+    bool serve_api_exists,
+    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
+    FilePathGitMap::SetterPtr const& ws_setter,
+    FilePathGitMap::LoggerPtr const& logger) {
+    // if serve endpoint is given, try to ensure it has this tree available to
+    // be able to build against it. If root is not absent, do not fail if we
+    // don't have a suitable remote endpoint, but warn user nonetheless.
+    if (serve_api_exists) {
+        auto has_tree = CheckServeHasAbsentRoot(tree_id, logger);
+        if (not has_tree) {
+            return;  // fatal
+        }
+        if (not *has_tree) {
+            // only enforce root setup on the serve endpoint if root is absent
+            if (not remote_api) {
+                (*logger)(
+                    fmt::format("Missing or incompatible remote-execution "
+                                "endpoint needed to sync workspace root {} "
+                                "with the serve endpoint.",
+                                tree_id),
+                    /*fatal=*/absent);
+                if (absent) {
+                    return;
+                }
+            }
+            else {
+                if (not EnsureAbsentRootOnServe(tree_id,
+                                                repo_root,
+                                                *remote_api,
+                                                logger,
+                                                /*no_sync_is_fatal=*/absent)) {
+                    return;  // fatal
+                }
+            }
+        }
+    }
+    else {
+        if (absent) {
+            // give warning
+            (*logger)(fmt::format("Workspace root {} marked absent but no "
+                                  "suitable serve endpoint provided.",
+                                  tree_id),
+                      /*fatal=*/false);
+        }
+    }
+    // set the workspace root
+    auto root = nlohmann::json::array({FileRoot::kGitTreeMarker, tree_id});
+    if (not absent) {
+        root.emplace_back(repo_root);
+    }
+    (*ws_setter)(std::move(root));
+}
 
 void ResolveFilePathTree(
     std::string const& repo_root,
@@ -33,6 +95,8 @@ void ResolveFilePathTree(
     std::optional<PragmaSpecial> const& pragma_special,
     bool absent,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
+    bool serve_api_exists,
+    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
     gsl::not_null<TaskSystem*> const& ts,
     FilePathGitMap::SetterPtr const& ws_setter,
     FilePathGitMap::LoggerPtr const& logger) {
@@ -44,19 +108,21 @@ void ResolveFilePathTree(
             // read resolved tree id
             auto resolved_tree_id = FileSystemManager::ReadFile(tree_id_file);
             if (not resolved_tree_id) {
-                (*logger)(fmt::format("Failed to read resolved "
-                                      "tree id from file {}",
-                                      tree_id_file.string()),
-                          /*fatal=*/true);
+                (*logger)(
+                    fmt::format("Failed to read resolved tree id from file {}",
+                                tree_id_file.string()),
+                    /*fatal=*/true);
                 return;
             }
-            // set the workspace root
-            auto root = nlohmann::json::array(
-                {FileRoot::kGitTreeMarker, *resolved_tree_id});
-            if (not absent) {
-                root.emplace_back(repo_root);
-            }
-            (*ws_setter)(std::move(root));
+            // if serve endpoint is given, try to ensure it has this tree
+            // available to be able to build against it
+            CheckServeAndSetRoot(*resolved_tree_id,
+                                 repo_root,
+                                 absent,
+                                 serve_api_exists,
+                                 remote_api,
+                                 ws_setter,
+                                 logger);
         }
         else {
             // resolve tree
@@ -71,13 +137,16 @@ void ResolveFilePathTree(
                  repo_root,
                  tree_id_file,
                  absent,
+                 serve_api_exists,
+                 remote_api,
                  ws_setter,
                  logger](auto const& hashes) {
                     if (not hashes[0]) {
                         // check for cycles
-                        auto error = DetectAndReportCycle(*resolve_symlinks_map,
-                                                          tree_hash);
-                        if (error) {
+                        if (auto error = DetectAndReportCycle(
+                                fmt::format("resolving Git tree {}", tree_hash),
+                                *resolve_symlinks_map,
+                                kGitObjectToResolvePrinter)) {
                             (*logger)(fmt::format("Failed to resolve symlinks "
                                                   "in tree {}:\n{}",
                                                   tree_hash,
@@ -101,13 +170,15 @@ void ResolveFilePathTree(
                                   /*fatal=*/true);
                         return;
                     }
-                    // set the workspace root
-                    auto root = nlohmann::json::array(
-                        {FileRoot::kGitTreeMarker, resolved_tree.id});
-                    if (not absent) {
-                        root.emplace_back(repo_root);
-                    }
-                    (*ws_setter)(std::move(root));
+                    // if serve endpoint is given, try to ensure it has this
+                    // tree available to be able to build against it
+                    CheckServeAndSetRoot(resolved_tree.id,
+                                         repo_root,
+                                         absent,
+                                         serve_api_exists,
+                                         remote_api,
+                                         ws_setter,
+                                         logger);
                 },
                 [logger, target_path](auto const& msg, bool fatal) {
                     (*logger)(fmt::format(
@@ -119,13 +190,16 @@ void ResolveFilePathTree(
         }
     }
     else {
-        // set the workspace root as-is
-        auto root =
-            nlohmann::json::array({FileRoot::kGitTreeMarker, tree_hash});
-        if (not absent) {
-            root.emplace_back(repo_root);
-        }
-        (*ws_setter)(std::move(root));
+        // tree needs no further processing;
+        // if serve endpoint is given, try to ensure it has this tree available
+        // to be able to build against it
+        CheckServeAndSetRoot(tree_hash,
+                             repo_root,
+                             absent,
+                             serve_api_exists,
+                             remote_api,
+                             ws_setter,
+                             logger);
     }
 }
 
@@ -136,15 +210,23 @@ auto CreateFilePathGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
-    std::size_t jobs) -> FilePathGitMap {
+    bool serve_api_exists,
+    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
+    std::size_t jobs,
+    std::string multi_repo_tool_name,
+    std::string build_tool_name) -> FilePathGitMap {
     auto dir_to_git = [current_subcmd,
                        critical_git_op_map,
                        import_to_git_map,
-                       resolve_symlinks_map](auto ts,
-                                             auto setter,
-                                             auto logger,
-                                             auto /*unused*/,
-                                             auto const& key) {
+                       resolve_symlinks_map,
+                       serve_api_exists,
+                       remote_api,
+                       multi_repo_tool_name,
+                       build_tool_name](auto ts,
+                                        auto setter,
+                                        auto logger,
+                                        auto /*unused*/,
+                                        auto const& key) {
         // setup wrapped logger
         auto wrapped_logger = std::make_shared<AsyncMapConsumerLogger>(
             [logger](auto const& msg, bool fatal) {
@@ -192,6 +274,8 @@ auto CreateFilePathGitMap(
                  git_cas = std::move(git_cas),
                  repo_root = std::move(*repo_root),
                  resolve_symlinks_map,
+                 serve_api_exists,
+                 remote_api,
                  ts,
                  setter,
                  logger](auto const& values) {
@@ -233,6 +317,8 @@ auto CreateFilePathGitMap(
                                         pragma_special,
                                         absent,
                                         resolve_symlinks_map,
+                                        serve_api_exists,
+                                        remote_api,
                                         ts,
                                         setter,
                                         logger);
@@ -251,14 +337,16 @@ auto CreateFilePathGitMap(
             if (current_subcmd) {
                 (*logger)(fmt::format("Inefficient Git import of file "
                                       "path \'{}\'.\nPlease consider using "
-                                      "\'just-mr setup\' and \'just {}\' "
+                                      "\'{} setup\' and \'{} {}\' "
                                       "separately to cache the output.",
                                       key.fpath.string(),
+                                      multi_repo_tool_name,
+                                      build_tool_name,
                                       *current_subcmd),
                           /*fatal=*/false);
             }
             // it's not a git repo, so import it to git cache
-            auto tmp_dir = StorageUtils::CreateTypedTmpDir("file");
+            auto tmp_dir = StorageConfig::CreateTypedTmpDir("file");
             if (not tmp_dir) {
                 (*logger)("Failed to create import-to-git tmp directory!",
                           /*fatal=*/true);
@@ -285,6 +373,8 @@ auto CreateFilePathGitMap(
                  pragma_special = key.pragma_special,
                  absent = key.absent,
                  resolve_symlinks_map,
+                 serve_api_exists,
+                 remote_api,
                  ts,
                  setter,
                  logger](auto const& values) {
@@ -303,6 +393,8 @@ auto CreateFilePathGitMap(
                                         pragma_special,
                                         absent,
                                         resolve_symlinks_map,
+                                        serve_api_exists,
+                                        remote_api,
                                         ts,
                                         setter,
                                         logger);

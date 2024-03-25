@@ -23,10 +23,12 @@
 #include <vector>
 
 #include "google/bytestream/bytestream.grpc.pb.h"
+#include "gsl/gsl"
 #include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/common/remote/port.hpp"
 #include "src/buildtool/execution_api/common/bytestream_common.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
 /// Implements client side for google.bytestream.ByteStream service.
@@ -47,7 +49,7 @@ class ByteStreamClient {
             if (not finished_) {
                 auto status = reader_->Finish();
                 if (not status.ok()) {
-                    logger_->Emit(LogLevel::Error,
+                    logger_->Emit(LogLevel::Debug,
                                   "{}: {}",
                                   static_cast<int>(status.error_code()),
                                   status.error_message());
@@ -130,7 +132,7 @@ class ByteStreamClient {
                     auto const committed_size = QueryWriteStatus(resource_name);
                     if (committed_size <= 0) {
                         logger_.Emit(
-                            LogLevel::Error,
+                            LogLevel::Warning,
                             "broken stream for upload to resource name {}",
                             resource_name);
                         return false;
@@ -142,7 +144,7 @@ class ByteStreamClient {
                 }
             } while (pos < data.size());
             if (not writer->WritesDone()) {
-                logger_.Emit(LogLevel::Error,
+                logger_.Emit(LogLevel::Warning,
                              "broken stream for upload to resource name {}",
                              resource_name);
                 return false;
@@ -150,13 +152,13 @@ class ByteStreamClient {
 
             auto status = writer->Finish();
             if (not status.ok()) {
-                LogStatus(&logger_, LogLevel::Error, status);
+                LogStatus(&logger_, LogLevel::Debug, status);
                 return false;
             }
             if (gsl::narrow<std::size_t>(response.committed_size()) !=
                 data.size()) {
                 logger_.Emit(
-                    LogLevel::Error,
+                    LogLevel::Warning,
                     "Commited size {} is different from the original one {}.",
                     response.committed_size(),
                     data.size());
@@ -164,7 +166,7 @@ class ByteStreamClient {
             }
             return true;
         } catch (...) {
-            logger_.Emit(LogLevel::Error, "Caught exception in Write");
+            logger_.Emit(LogLevel::Warning, "Caught exception in Write");
             return false;
         }
     }

@@ -26,10 +26,13 @@
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]
     , ["src/buildtool/common", "common"]
+    , ["src/buildtool/compatibility", "compatibility"]
     , ["src/buildtool/execution_api/bazel_msg", "bazel_msg"]
     , ["src/buildtool/execution_api/local", "local"]
     , ["src/buildtool/execution_api/remote", "bazel"]
     , ["src/buildtool/file_system", "git_repo"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/multithreading", "async_map_utils"]
     , ["src/buildtool/serve_api/remote", "config"]
     , ["src/buildtool/storage", "config"]
     , ["src/buildtool/storage", "fs_utils"]
@@ -54,6 +57,7 @@
     , ["src/buildtool/auth", "auth"]
     , ["src/buildtool/common/remote", "port"]
     , ["src/buildtool/compatibility", "compatibility"]
+    , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/storage", "config"]
     , ["src/buildtool/execution_api/execution_service", "execution_server"]
     , ["src/buildtool/execution_api/execution_service", "ac_server"]
@@ -90,7 +94,9 @@
     , ["src/buildtool/build_engine/target_map", "configured_target"]
     , ["src/buildtool/build_engine/target_map", "result_map"]
     , ["src/buildtool/common/remote", "remote_common"]
+    , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/graph_traverser", "graph_traverser"]
+    , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/main", "analyse"]
     , ["src/buildtool/main", "build_utils"]
     , ["src/buildtool/multithreading", "task_system"]
@@ -110,7 +116,10 @@
   , "srcs": ["configuration.cpp"]
   , "proto": ["just_serve_proto"]
   , "stage": ["src", "buildtool", "serve_api", "serve_service"]
-  , "private-deps": [["src/buildtool/execution_api/remote", "config"]]
+  , "private-deps":
+    [ ["src/buildtool/compatibility", "compatibility"]
+    , ["src/buildtool/execution_api/remote", "config"]
+    ]
   }
 , "target_utils":
   { "type": ["@", "rules", "CC", "library"]

@@ -15,14 +15,18 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_EXECUTION_API_LOCAL_LOCAL_API_HPP
 #define INCLUDED_SRC_BUILDTOOL_EXECUTION_API_LOCAL_LOCAL_API_HPP
 
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include "fmt/core.h"
+#include "grpcpp/support/status.h"
 #include "gsl/gsl"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
@@ -30,9 +34,11 @@
 #include "src/buildtool/execution_api/bazel_msg/bazel_blob.hpp"
 #include "src/buildtool/execution_api/bazel_msg/blob_tree.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/execution_api/execution_service/cas_utils.hpp"
 #include "src/buildtool/execution_api/git/git_api.hpp"
 #include "src/buildtool/execution_api/local/local_action.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/storage/storage.hpp"
 
@@ -262,14 +268,15 @@ class LocalApi final : public IExecutionApi {
             location = storage_->CAS().BlobPath(
                 artifact_info.digest, IsExecutableObject(artifact_info.type));
         }
-        if (not location) {
-            return std::nullopt;
+        std::optional<std::string> content = std::nullopt;
+        if (location) {
+            content = FileSystemManager::ReadFile(*location);
         }
-        auto const content = FileSystemManager::ReadFile(*location);
-        if (not content) {
-            return std::nullopt;
+        if ((not content) and repo_config_) {
+            content =
+                GitApi(repo_config_.value()).RetrieveToMemory(artifact_info);
         }
-        return *content;
+        return content;
     }
 
     [[nodiscard]] auto Upload(BlobContainer const& blobs,
@@ -451,6 +458,79 @@ class LocalApi final : public IExecutionApi {
             }
         }
         return result;
+    }
+
+    [[nodiscard]] auto SplitBlob(ArtifactDigest const& blob_digest)
+        const noexcept -> std::optional<std::vector<ArtifactDigest>> final {
+        Logger::Log(LogLevel::Debug, "SplitBlob({})", blob_digest.hash());
+        auto split_result = CASUtils::SplitBlobFastCDC(
+            static_cast<bazel_re::Digest>(blob_digest), *storage_);
+        if (std::holds_alternative<grpc::Status>(split_result)) {
+            auto* status = std::get_if<grpc::Status>(&split_result);
+            Logger::Log(LogLevel::Error, status->error_message());
+            return std::nullopt;
+        }
+        auto* chunk_digests =
+            std::get_if<std::vector<bazel_re::Digest>>(&split_result);
+        Logger::Log(LogLevel::Debug, [&blob_digest, &chunk_digests]() {
+            std::stringstream ss{};
+            ss << "Split blob " << blob_digest.hash() << ":"
+               << blob_digest.size() << " into " << chunk_digests->size()
+               << " chunks: [ ";
+            for (auto const& chunk_digest : *chunk_digests) {
+                ss << chunk_digest.hash() << ":" << chunk_digest.size_bytes()
+                   << " ";
+            }
+            ss << "]";
+            return ss.str();
+        });
+        auto artifact_digests = std::vector<ArtifactDigest>{};
+        artifact_digests.reserve(chunk_digests->size());
+        std::transform(
+            chunk_digests->cbegin(),
+            chunk_digests->cend(),
+            std::back_inserter(artifact_digests),
+            [](auto const& digest) { return ArtifactDigest{digest}; });
+        return artifact_digests;
+    }
+
+    [[nodiscard]] auto BlobSplitSupport() const noexcept -> bool final {
+        return true;
+    }
+
+    [[nodiscard]] auto SpliceBlob(
+        ArtifactDigest const& blob_digest,
+        std::vector<ArtifactDigest> const& chunk_digests) const noexcept
+        -> std::optional<ArtifactDigest> final {
+        Logger::Log(LogLevel::Debug,
+                    "SpliceBlob({}, {} chunks)",
+                    blob_digest.hash(),
+                    chunk_digests.size());
+        auto digests = std::vector<bazel_re::Digest>{};
+        digests.reserve(chunk_digests.size());
+        std::transform(
+            chunk_digests.cbegin(),
+            chunk_digests.cend(),
+            std::back_inserter(digests),
+            [](auto const& artifact_digest) {
+                return static_cast<bazel_re::Digest>(artifact_digest);
+            });
+        auto splice_result =
+            CASUtils::SpliceBlob(static_cast<bazel_re::Digest>(blob_digest),
+                                 digests,
+                                 *storage_,
+                                 /* check_tree_invariant= */ false);
+        if (std::holds_alternative<grpc::Status>(splice_result)) {
+            auto* status = std::get_if<grpc::Status>(&splice_result);
+            Logger::Log(LogLevel::Error, status->error_message());
+            return std::nullopt;
+        }
+        auto* digest = std::get_if<bazel_re::Digest>(&splice_result);
+        return ArtifactDigest{*digest};
+    }
+
+    [[nodiscard]] auto BlobSpliceSupport() const noexcept -> bool final {
+        return true;
     }
 
   private:

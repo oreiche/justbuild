@@ -13,7 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -e
+set -eu
+
+env
 
 readonly JUST="${PWD}/bin/tool-under-test"
 readonly JUST_MR="${PWD}/bin/mr-tool-under-test"
@@ -23,6 +25,8 @@ readonly LBR_B="${TEST_TMPDIR}/build-root-B"
 readonly LBR_C="${TEST_TMPDIR}/build-root-C"
 readonly LBR_D="${TEST_TMPDIR}/build-root-D"
 readonly DISTDIR="${TEST_TMPDIR}/distfiles"
+
+readonly TARGET_ROOT="${PWD}/data/targets"
 
 mkdir -p "${DISTDIR}"
 cp src.tar "${DISTDIR}"
@@ -43,6 +47,12 @@ cat > repos.json <<EOF
       , "fetch": "http://example.org/src.tar"
       , "subdir": "repo"
       }
+    , "target_root": "targets"
+    , "target_file_name": "TARGETS.tree"
+    }
+  , "targets":
+    { "repository":
+      {"type": "file", "path": "${TARGET_ROOT}", "pragma": {"to_git": true}}
     }
   }
 }
@@ -61,18 +71,21 @@ echo
 echo Local build
 "${JUST_MR}" --norc --local-build-root "${LBR_A}" --just "${JUST}" \
              --distdir "${DISTDIR}" build \
+             --log-limit 4 \
              --dump-artifacts local.json 2>&1
 
 echo
 echo Remote build
 "${JUST_MR}" --norc --local-build-root "${LBR_B}" --just "${JUST}" \
              --distdir "${DISTDIR}" ${REMOTE} build \
+             --log-limit 4 \
              --dump-artifacts remote.json 2>&1
 
 echo
 echo Serve build
 "${JUST_MR}" --norc --local-build-root "${LBR_C}" --just "${JUST}" \
-             ${REMOTE} -R ${SERVE} build \
+             --distdir "${DISTDIR}" ${REMOTE} -R ${SERVE} build \
+             --log-limit 4 \
              --dump-artifacts serve.json 2>&1
 
 echo
@@ -80,6 +93,7 @@ echo Absent build
 echo -n '[""]' > abs
 "${JUST_MR}" --norc --local-build-root "${LBR_D}" --just "${JUST}" \
              --distdir "${DISTDIR}" ${REMOTE} -R ${SERVE} --absent abs build \
+             --log-limit 4 \
              --dump-artifacts absent.json 2>&1
 
 diff -u local.json remote.json

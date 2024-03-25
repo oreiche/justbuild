@@ -45,14 +45,14 @@ std::vector<std::string> const kTakeOver = {"bindings",
                                             "expression_file_name"};
 
 struct JustSubCmdFlags {
-    bool config;       // requires setup
-    bool build_root;   // supports the local build root arg
-    bool launch;       // supports the local launcher arg
-    bool defines;      // supports defines arg
-    bool remote;       // supports remote exec args
-    bool dispatch;     // supports dispatching of the remote-execution endpoint
-    bool cacert;       // supports CA cert arg
-    bool client_auth;  // supports client auth args
+    bool config;        // requires setup
+    bool build_root;    // supports the local build root arg
+    bool launch;        // supports the local launcher arg
+    bool defines;       // supports defines arg
+    bool remote;        // supports remote exec args, including client-side auth
+    bool remote_props;  // supports remote-execution properties
+    bool serve;         // supports a serve endpoint
+    bool dispatch;      // supports dispatching of the remote-execution endpoint
 };
 
 // ordered, so that we have replicability
@@ -63,72 +63,81 @@ std::map<std::string, JustSubCmdFlags> const kKnownJustSubcommands{
       .launch = false,
       .defines = false,
       .remote = false,
-      .dispatch = false,
-      .cacert = false,
-      .client_auth = false}},
+      .remote_props = false,
+      .serve = false,
+      .dispatch = false}},
     {"describe",
      {.config = true,
-      .build_root = false,
+      .build_root = true,
       .launch = false,
       .defines = true,
-      .remote = false,
-      .dispatch = false,
-      .cacert = false,
-      .client_auth = false}},
+      .remote = true,
+      .remote_props = false,
+      .serve = true,
+      .dispatch = false}},
     {"analyse",
      {.config = true,
       .build_root = true,
       .launch = false,
       .defines = true,
       .remote = true,
-      .dispatch = true,
-      .cacert = false,
-      .client_auth = false}},
+      .remote_props = true,
+      .serve = true,
+      .dispatch = true}},
     {"build",
      {.config = true,
       .build_root = true,
       .launch = true,
       .defines = true,
       .remote = true,
-      .dispatch = true,
-      .cacert = true,
-      .client_auth = true}},
+      .remote_props = true,
+      .serve = true,
+      .dispatch = true}},
     {"install",
      {.config = true,
       .build_root = true,
       .launch = true,
       .defines = true,
       .remote = true,
-      .dispatch = true,
-      .cacert = true,
-      .client_auth = true}},
+      .remote_props = true,
+      .serve = true,
+      .dispatch = true}},
     {"rebuild",
      {.config = true,
       .build_root = true,
       .launch = true,
       .defines = true,
       .remote = true,
-      .dispatch = true,
-      .cacert = true,
-      .client_auth = true}},
+      .remote_props = true,
+      .serve = true,
+      .dispatch = true}},
+    {"add-to-cas",
+     {.config = false,
+      .build_root = true,
+      .launch = false,
+      .defines = false,
+      .remote = true,
+      .remote_props = false,
+      .serve = false,
+      .dispatch = false}},
     {"install-cas",
      {.config = false,
       .build_root = true,
       .launch = false,
       .defines = false,
       .remote = true,
-      .dispatch = false,
-      .cacert = true,
-      .client_auth = true}},
+      .remote_props = false,
+      .serve = false,
+      .dispatch = false}},
     {"gc",
      {.config = false,
       .build_root = true,
       .launch = false,
       .defines = false,
       .remote = false,
-      .dispatch = false,
-      .cacert = false,
-      .client_auth = false}}};
+      .remote_props = false,
+      .serve = false,
+      .dispatch = false}}};
 
 nlohmann::json const kDefaultConfigLocations = nlohmann::json::array(
     {{{"root", "workspace"}, {"path", "repos.json"}},
@@ -137,13 +146,21 @@ nlohmann::json const kDefaultConfigLocations = nlohmann::json::array(
      {{"root", "system"}, {"path", "etc/just-repos.json"}}});
 
 /// \brief Checkout type enum
-enum class CheckoutType : std::uint8_t { Git, Archive, File, Distdir, GitTree };
+enum class CheckoutType : std::uint8_t {
+    Git,
+    Archive,
+    ForeignFile,
+    File,
+    Distdir,
+    GitTree
+};
 
 /// \brief Checkout type map
 std::unordered_map<std::string, CheckoutType> const kCheckoutTypeMap = {
     {"git", CheckoutType::Git},
     {"archive", CheckoutType::Archive},
     {"zip", CheckoutType::Archive},  // treated the same as "archive"
+    {"foreign file", CheckoutType::ForeignFile},
     {"file", CheckoutType::File},
     {"distdir", CheckoutType::Distdir},
     {"git tree", CheckoutType::GitTree}};
@@ -151,6 +168,7 @@ namespace JustMR::Utils {
 
 /// \brief Recursive part of the ResolveRepo function.
 /// Keeps track of repository names to detect any cyclic dependencies.
+/// \param repos ExpressionPtr of Map type.
 [[nodiscard]] auto ResolveRepo(
     ExpressionPtr const& repo_desc,
     ExpressionPtr const& repos,
@@ -158,9 +176,10 @@ namespace JustMR::Utils {
     -> std::optional<ExpressionPtr>;
 
 /// \brief Resolves any cyclic dependency issues and follows the repository
-/// dependencies until the one containing the WS root is found.
+/// dependencies until the one containing the workspace root is found.
 /// Returns a repository entry as an ExpressionPtr, or nullopt if cyclic
 /// dependency found.
+/// \param repos ExpressionPtr of Map type.
 [[nodiscard]] auto ResolveRepo(ExpressionPtr const& repo_desc,
                                ExpressionPtr const& repos) noexcept
     -> std::optional<ExpressionPtr>;

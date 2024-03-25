@@ -23,8 +23,6 @@
 #include <fnmatch.h>
 
 #include "fmt/core.h"
-#include "gsl/gsl"
-#include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/base_maps/field_reader.hpp"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
 #include "src/buildtool/build_engine/expression/evaluator.hpp"
@@ -32,7 +30,7 @@
 #include "src/buildtool/build_engine/expression/function_map.hpp"
 #include "src/buildtool/build_engine/target_map/built_in_rules.hpp"
 #include "src/buildtool/build_engine/target_map/utils.hpp"
-#include "src/buildtool/common/statistics.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/gsl.hpp"
 #include "src/utils/cpp/path.hpp"
@@ -1038,6 +1036,9 @@ void withRuleDefinition(
                                 msg),
                     true);
             });
+        if (not deps_names) {
+            return;
+        }
         if (not deps_names->IsList()) {
             (*logger)(fmt::format("Target parameter {} should evaluate to a "
                                   "list, but got {}",
@@ -1239,6 +1240,9 @@ void withRuleDefinition(
 void withTargetsFile(
     const BuildMaps::Target::ConfiguredTarget& key,
     const gsl::not_null<RepositoryConfig*>& repo_config,
+    const ActiveTargetCache& target_cache,
+    const gsl::not_null<Statistics*>& stats,
+    const gsl::not_null<Progress*>& exports_progress,
     const nlohmann::json& targets_file,
     const gsl::not_null<BuildMaps::Base::SourceTargetMap*>& source_target,
     const gsl::not_null<BuildMaps::Base::UserRuleMap*>& rule_map,
@@ -1273,14 +1277,18 @@ void withTargetsFile(
             return;
         }
         // Handle built-in rule, if it is
-        auto handled_as_builtin = BuildMaps::Target::HandleBuiltin(*rule_it,
-                                                                   desc,
-                                                                   key,
-                                                                   repo_config,
-                                                                   subcaller,
-                                                                   setter,
-                                                                   logger,
-                                                                   result_map);
+        auto handled_as_builtin =
+            BuildMaps::Target::HandleBuiltin(*rule_it,
+                                             desc,
+                                             key,
+                                             repo_config,
+                                             target_cache,
+                                             stats,
+                                             exports_progress,
+                                             subcaller,
+                                             setter,
+                                             logger,
+                                             result_map);
         if (handled_as_builtin) {
             return;
         }
@@ -1348,8 +1356,10 @@ void withTargetsFile(
                         }),
                     result_map);
             },
-            [logger, target = key.target](auto const& msg, auto fatal) {
-                (*logger)(fmt::format("While looking up rule for {}:\n{}",
+            [logger, rule = *rule_name, target = key.target](auto const& msg,
+                                                             auto fatal) {
+                (*logger)(fmt::format("While looking up rule {} for {}:\n{}",
+                                      rule.ToString(),
                                       target.ToString(),
                                       msg),
                           fatal);
@@ -1455,7 +1465,8 @@ void TreeTarget(
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
     const gsl::not_null<BuildMaps::Target::ResultTargetMap*>& result_map,
     const gsl::not_null<BuildMaps::Base::DirectoryEntriesMap*>&
-        directory_entries) {
+        directory_entries,
+    const gsl::not_null<Statistics*>& stats) {
     const auto& target = key.target.GetNamedTarget();
     const auto dir_name = std::filesystem::path{target.module} / target.name;
     auto module_ = BuildMaps::Base::ModuleName{target.repository, dir_name};
@@ -1463,7 +1474,7 @@ void TreeTarget(
     directory_entries->ConsumeAfterKeysReady(
         ts,
         {module_},
-        [setter, subcaller, target, key, result_map, logger, dir_name](
+        [setter, subcaller, target, key, result_map, logger, dir_name, stats](
             auto values) {
             // expected values.size() == 1
             const auto& dir_entries = *values[0];
@@ -1493,7 +1504,7 @@ void TreeTarget(
                     "Source tree reference for non-known tree {}",
                     key.target.ToString());
             });
-            Statistics::Instance().IncrementTreesAnalysedCounter();
+            stats->IncrementTreesAnalysedCounter();
 
             using BuildMaps::Target::ConfiguredTarget;
 
@@ -1657,6 +1668,9 @@ auto CreateTargetMap(
     const gsl::not_null<AbsentTargetMap*>& absent_target_map,
     const gsl::not_null<ResultTargetMap*>& result_map,
     const gsl::not_null<RepositoryConfig*>& repo_config,
+    const ActiveTargetCache& target_cache,
+    const gsl::not_null<Statistics*>& stats,
+    const gsl::not_null<Progress*>& exports_progress,
     std::size_t jobs) -> TargetMap {
     auto target_reader = [source_target_map,
                           targets_file_map,
@@ -1664,11 +1678,14 @@ auto CreateTargetMap(
                           directory_entries_map,
                           absent_target_map,
                           result_map,
-                          repo_config](auto ts,
-                                       auto setter,
-                                       auto logger,
-                                       auto subcaller,
-                                       auto key) {
+                          repo_config,
+                          target_cache,
+                          stats,
+                          exports_progress](auto ts,
+                                            auto setter,
+                                            auto logger,
+                                            auto subcaller,
+                                            auto key) {
         if (key.target.IsAnonymousTarget()) {
             withTargetNode(key,
                            repo_config,
@@ -1696,7 +1713,8 @@ auto CreateTargetMap(
                        setter,
                        wrapped_logger,
                        result_map,
-                       directory_entries_map);
+                       directory_entries_map,
+                       stats);
         }
         else if (key.target.GetNamedTarget().reference_t ==
                  BuildMaps::Base::ReferenceType::kFile) {
@@ -1770,14 +1788,14 @@ auto CreateTargetMap(
                 (*logger)(
                     fmt::format("Root for target {} is absent, but no serve "
                                 "endpoint was configured. Please provide "
-                                "--remote-serve=address and retry.",
+                                "--remote-serve-address and retry.",
                                 key.target.ToJson().dump()),
                     /*is_fatal=*/true);
                 return;
             }
             if (not ServeApi::CheckServeRemoteExecution()) {
                 (*logger)(
-                    "Inconsistent remote execution endpoint and just serve "
+                    "Inconsistent remote execution endpoint and serve endpoint"
                     "configuration detected.",
                     /*is_fatal=*/true);
                 return;
@@ -1803,6 +1821,9 @@ auto CreateTargetMap(
                 {key.target.ToModule()},
                 [key,
                  repo_config,
+                 target_cache,
+                 stats,
+                 exports_progress,
                  source_target_map,
                  rule_map,
                  ts,
@@ -1812,6 +1833,9 @@ auto CreateTargetMap(
                  result_map](auto values) {
                     withTargetsFile(key,
                                     repo_config,
+                                    target_cache,
+                                    stats,
+                                    exports_progress,
                                     *values[0],
                                     source_target_map,
                                     rule_map,

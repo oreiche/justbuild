@@ -17,7 +17,9 @@
 #include "fmt/core.h"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/file_system/git_utils.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/system/system_command.hpp"
 #include "src/other_tools/git_operations/git_config_settings.hpp"
 
@@ -392,14 +394,21 @@ auto GitRepoRemote::FetchFromRemote(std::shared_ptr<git_config> cfg,
 }
 
 auto GitRepoRemote::UpdateCommitViaTmpRepo(
-    std::filesystem::path const& tmp_dir,
     std::string const& repo_url,
     std::string const& branch,
+    std::vector<std::string> const& inherit_env,
     std::string const& git_bin,
     std::vector<std::string> const& launcher,
     anon_logger_ptr const& logger) const noexcept
     -> std::optional<std::string> {
     try {
+        auto tmp_dir = StorageConfig::CreateTypedTmpDir("update");
+        if (not tmp_dir) {
+            (*logger)("Failed to create temp dir for running 'git ls-remote'",
+                      /*fatal=*/true);
+            return std::nullopt;
+        }
+        auto const& tmp_path = tmp_dir->GetPath();
         // check for internally supported protocols
         if (IsSupported(repo_url)) {
             // preferably with a "fake" repository!
@@ -409,7 +418,7 @@ auto GitRepoRemote::UpdateCommitViaTmpRepo(
             }
             // create the temporary real repository
             auto tmp_repo =
-                GitRepoRemote::InitAndOpen(tmp_dir, /*is_bare=*/true);
+                GitRepoRemote::InitAndOpen(tmp_path / "git", /*is_bare=*/true);
             if (tmp_repo == std::nullopt) {
                 return std::nullopt;
             }
@@ -442,24 +451,37 @@ auto GitRepoRemote::UpdateCommitViaTmpRepo(
             "Git commit update for remote {} must shell out. Running:\n{}",
             repo_url,
             nlohmann::json(cmdline).dump());
+        std::map<std::string, std::string> env{};
+        for (auto const& k : inherit_env) {
+            const char* v = std::getenv(k.c_str());
+            if (v != nullptr) {
+                env[k] = std::string(v);
+            }
+        }
         // set up the system command
         SystemCommand system{repo_url};
-        auto const command_output =
+        auto const exit_code =
             system.Execute(cmdline,
-                           {},            // default env
+                           env,
                            GetGitPath(),  // which path is not actually relevant
-                           tmp_dir);
+                           tmp_path);
+
+        if (not exit_code) {
+            (*logger)(fmt::format("exec() on command failed."),
+                      /*fatal=*/true);
+            return std::nullopt;
+        }
+
         // output file can be read anyway
         std::string out_str{};
-        auto cmd_out = FileSystemManager::ReadFile(command_output->stdout_file);
+        auto cmd_out = FileSystemManager::ReadFile(tmp_path / "stdout");
         if (cmd_out) {
             out_str = *cmd_out;
         }
         // check for command failure
-        if (not command_output) {
+        if (*exit_code != 0) {
             std::string err_str{};
-            auto cmd_err =
-                FileSystemManager::ReadFile(command_output->stderr_file);
+            auto cmd_err = FileSystemManager::ReadFile(tmp_path / "stderr");
 
             if (cmd_err) {
                 err_str = *cmd_err;
@@ -507,16 +529,24 @@ auto GitRepoRemote::UpdateCommitViaTmpRepo(
     }
 }
 
-auto GitRepoRemote::FetchViaTmpRepo(std::filesystem::path const& tmp_dir,
-                                    std::string const& repo_url,
+auto GitRepoRemote::FetchViaTmpRepo(std::string const& repo_url,
                                     std::optional<std::string> const& branch,
+                                    std::vector<std::string> const& inherit_env,
                                     std::string const& git_bin,
                                     std::vector<std::string> const& launcher,
                                     anon_logger_ptr const& logger) noexcept
     -> bool {
     try {
+        auto tmp_dir = StorageConfig::CreateTypedTmpDir("fetch");
+        if (not tmp_dir) {
+            (*logger)("Failed to create temp dir for running 'git fetch'",
+                      /*fatal=*/true);
+            return false;
+        }
+        auto const& tmp_path = tmp_dir->GetPath();
         // check for internally supported protocols
         if (IsSupported(repo_url)) {
+            Logger::Log(LogLevel::Debug, "Try fetch from URL {}", repo_url);
             // preferably with a "fake" repository!
             if (not IsRepoFake()) {
                 Logger::Log(LogLevel::Debug,
@@ -526,7 +556,7 @@ auto GitRepoRemote::FetchViaTmpRepo(std::filesystem::path const& tmp_dir,
             // it can be bare, as the refspecs for this fetch will be given
             // explicitly.
             auto tmp_repo =
-                GitRepoRemote::InitAndOpen(tmp_dir, /*is_bare=*/true);
+                GitRepoRemote::InitAndOpen(tmp_path / "git", /*is_bare=*/true);
             if (tmp_repo == std::nullopt) {
                 return false;
             }
@@ -580,19 +610,29 @@ auto GitRepoRemote::FetchViaTmpRepo(std::filesystem::path const& tmp_dir,
                     "Git fetch for remote {} must shell out. Running:\n{}",
                     repo_url,
                     nlohmann::json(cmdline).dump());
+        std::map<std::string, std::string> env{};
+        for (auto const& k : inherit_env) {
+            const char* v = std::getenv(k.c_str());
+            if (v != nullptr) {
+                env[k] = std::string(v);
+            }
+        }
         // run command
         SystemCommand system{repo_url};
-        auto const command_output = system.Execute(cmdline,
-                                                   {},  // caller env
-                                                   GetGitPath(),
-                                                   tmp_dir);
-        if (not command_output) {
+        auto const exit_code =
+            system.Execute(cmdline, env, GetGitPath(), tmp_path);
+
+        if (not exit_code) {
+            (*logger)(fmt::format("exec() on command failed."),
+                      /*fatal=*/true);
+            return false;
+        }
+
+        if (*exit_code != 0) {
             std::string out_str{};
             std::string err_str{};
-            auto cmd_out =
-                FileSystemManager::ReadFile(command_output->stdout_file);
-            auto cmd_err =
-                FileSystemManager::ReadFile(command_output->stderr_file);
+            auto cmd_out = FileSystemManager::ReadFile(tmp_path / "stdout");
+            auto cmd_err = FileSystemManager::ReadFile(tmp_path / "stderr");
             if (cmd_out) {
                 out_str = *cmd_out;
             }

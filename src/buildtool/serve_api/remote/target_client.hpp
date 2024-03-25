@@ -19,8 +19,10 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "gsl/gsl"
 #include "justbuild/just_serve/just_serve.grpc.pb.h"
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
@@ -30,6 +32,16 @@
 #include "src/buildtool/storage/target_cache_entry.hpp"
 #include "src/buildtool/storage/target_cache_key.hpp"
 
+/// \brief Result union for the ServeTarget request.
+/// Index 0 will contain the hash of the blob containing the logged
+/// analysis/build failure received from the endpoint, as a string.
+/// Index 1 will contain any other failure message, as a string.
+/// Index 2 will contain the target cache value information on success.
+using serve_target_result_t =
+    std::variant<std::string,
+                 std::string,
+                 std::pair<TargetCacheEntry, Artifact::ObjectInfo>>;
+
 /// Implements client side for Target service defined in:
 /// src/buildtool/serve_api/serve_service/just_serve.proto
 class TargetClient {
@@ -38,12 +50,13 @@ class TargetClient {
 
     /// \brief Retrieve the pair of TargetCacheEntry and ObjectInfo associated
     /// to the given key.
-    /// \param[in] key The TargetCacheKey of an export target
-    /// \param[in] repo_key The RepositoryKey to upload as precondition
-    /// \returns Pair of cache entry and its object info on success or nullopt.
+    /// \param[in] key The TargetCacheKey of an export target.
+    /// \param[in] repo_key The RepositoryKey to upload as precondition.
+    /// \returns A correspondingly populated result union, or nullopt if remote
+    /// reported that the target was not found.
     [[nodiscard]] auto ServeTarget(const TargetCacheKey& key,
-                                   const std::string& repo_key)
-        -> std::optional<std::pair<TargetCacheEntry, Artifact::ObjectInfo>>;
+                                   const std::string& repo_key) noexcept
+        -> std::optional<serve_target_result_t>;
 
     /// \brief Retrieve the flexible config variables of an export target.
     /// \param[in] target_root_id Hash of target-level root tree.
@@ -52,7 +65,7 @@ class TargetClient {
     /// \returns The list of flexible config variables, or nullopt on errors.
     [[nodiscard]] auto ServeTargetVariables(std::string const& target_root_id,
                                             std::string const& target_file,
-                                            std::string const& target)
+                                            std::string const& target) noexcept
         -> std::optional<std::vector<std::string>>;
 
     /// \brief Retrieve the artifact digest of the blob containing the export
@@ -61,10 +74,10 @@ class TargetClient {
     /// \param[in] target_file Relative path of the target file.
     /// \param[in] target Name of the target to interrogate.
     /// \returns The artifact digest, or nullopt on errors.
-    [[nodiscard]] auto ServeTargetDescription(std::string const& target_root_id,
-                                              std::string const& target_file,
-                                              std::string const& target)
-        -> std::optional<ArtifactDigest>;
+    [[nodiscard]] auto ServeTargetDescription(
+        std::string const& target_root_id,
+        std::string const& target_file,
+        std::string const& target) noexcept -> std::optional<ArtifactDigest>;
 
   private:
     std::unique_ptr<justbuild::just_serve::Target::Stub> stub_;

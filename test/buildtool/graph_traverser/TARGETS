@@ -5,9 +5,13 @@
   , "deps":
     [ ["@", "catch2", "", "catch2"]
     , ["@", "src", "src/buildtool/common", "common"]
+    , ["@", "src", "src/buildtool/execution_api/local", "config"]
     , ["@", "src", "src/buildtool/file_system", "file_system_manager"]
     , ["@", "src", "src/buildtool/file_system", "jsonfs"]
     , ["@", "src", "src/buildtool/graph_traverser", "graph_traverser"]
+    , ["@", "src", "src/buildtool/logging", "log_level"]
+    , ["@", "src", "src/buildtool/logging", "logging"]
+    , ["@", "src", "src/buildtool/progress_reporting", "progress"]
     , ["utils", "test_env"]
     ]
   , "stage": ["test", "buildtool", "graph_traverser"]

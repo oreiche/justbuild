@@ -19,7 +19,9 @@
 
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/utils/cpp/gsl.hpp"
 #include "src/utils/cpp/hex_string.hpp"
 #include "src/utils/cpp/path.hpp"
@@ -932,9 +934,9 @@ auto GitRepo::FetchFromPath(std::shared_ptr<git_config> cfg,
 auto GitRepo::GetSubtreeFromCommit(std::string const& commit,
                                    std::string const& subdir,
                                    anon_logger_ptr const& logger) noexcept
-    -> std::optional<std::string> {
+    -> std::variant<bool, std::string> {
 #ifdef BOOTSTRAP_BUILD_TOOL
-    return std::nullopt;
+    return true;
 #else
     try {
         // preferably with a "fake" repository!
@@ -955,7 +957,7 @@ auto GitRepo::GetSubtreeFromCommit(std::string const& commit,
                             GetGitCAS()->git_path_.string(),
                             GitLastError()),
                 true /*fatal*/);
-            return std::nullopt;
+            return true;  // fatal failure
         }
 
         git_commit* commit_ptr{nullptr};
@@ -968,7 +970,7 @@ auto GitRepo::GetSubtreeFromCommit(std::string const& commit,
                       true /*fatal*/);
             // cleanup resources
             git_commit_free(commit_ptr);
-            return std::nullopt;
+            return false;  // non-fatal failure
         }
         auto commit_obj = std::unique_ptr<git_commit, decltype(&commit_closer)>(
             commit_ptr, commit_closer);
@@ -985,7 +987,7 @@ auto GitRepo::GetSubtreeFromCommit(std::string const& commit,
                       true /*fatal*/);
             // cleanup resources
             git_tree_free(tree_ptr);
-            return std::nullopt;
+            return true;  // fatal failure
         }
         auto tree = std::unique_ptr<git_tree, decltype(&tree_closer)>(
             tree_ptr, tree_closer);
@@ -1004,7 +1006,7 @@ auto GitRepo::GetSubtreeFromCommit(std::string const& commit,
                     true /*fatal*/);
                 // cleanup resources
                 git_tree_entry_free(subtree_entry_ptr);
-                return std::nullopt;
+                return true;  // fatal failure
             }
             auto subtree_entry =
                 std::unique_ptr<git_tree_entry, decltype(&tree_entry_closer)>(
@@ -1012,16 +1014,16 @@ auto GitRepo::GetSubtreeFromCommit(std::string const& commit,
 
             std::string subtree_hash{
                 git_oid_tostr_s(git_tree_entry_id(subtree_entry.get()))};
-            return subtree_hash;
+            return subtree_hash;  // success
         }
         // if no subdir, get hash from tree
         std::string tree_hash{git_oid_tostr_s(git_tree_id(tree.get()))};
-        return tree_hash;
+        return tree_hash;  // success
     } catch (std::exception const& ex) {
         Logger::Log(LogLevel::Error,
                     "get subtree from commit failed with:\n{}",
                     ex.what());
-        return std::nullopt;
+        return true;  // fatal failure
     }
 #endif  // BOOTSTRAP_BUILD_TOOL
 }
@@ -1145,7 +1147,11 @@ auto GitRepo::GetSubtreeFromPath(std::filesystem::path const& fpath,
         // find relative path from root to given path
         auto subdir = std::filesystem::relative(fpath, *root).string();
         // get subtree from head commit and subdir
-        return GetSubtreeFromCommit(head_commit, subdir, wrapped_logger);
+        auto res = GetSubtreeFromCommit(head_commit, subdir, wrapped_logger);
+        if (std::holds_alternative<bool>(res)) {
+            return std::nullopt;
+        }
+        return std::get<std::string>(res);
     } catch (std::exception const& ex) {
         Logger::Log(LogLevel::Error,
                     "get subtree from path failed with:\n{}",
@@ -1537,8 +1543,7 @@ auto GitRepo::GetObjectByPathFromTree(std::string const& tree_id,
 #endif  // BOOTSTRAP_BUILD_TOOL
 }
 
-auto GitRepo::LocalFetchViaTmpRepo(std::filesystem::path const& tmp_dir,
-                                   std::string const& repo_path,
+auto GitRepo::LocalFetchViaTmpRepo(std::string const& repo_path,
                                    std::optional<std::string> const& branch,
                                    anon_logger_ptr const& logger) noexcept
     -> bool {
@@ -1551,10 +1556,17 @@ auto GitRepo::LocalFetchViaTmpRepo(std::filesystem::path const& tmp_dir,
             Logger::Log(LogLevel::Debug,
                         "Branch local fetch called on a real repository");
         }
+        auto tmp_dir = StorageConfig::CreateTypedTmpDir("local_fetch");
+        if (not tmp_dir) {
+            (*logger)("Failed to create temp dir for Git repository",
+                      /*fatal=*/true);
+            return false;
+        }
+        auto const& tmp_path = tmp_dir->GetPath();
         // create the temporary real repository
         // it can be bare, as the refspecs for this fetch will be given
         // explicitly.
-        auto tmp_repo = GitRepo::InitAndOpen(tmp_dir, /*is_bare=*/true);
+        auto tmp_repo = GitRepo::InitAndOpen(tmp_path, /*is_bare=*/true);
         if (tmp_repo == std::nullopt) {
             return false;
         }

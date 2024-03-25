@@ -38,6 +38,7 @@
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/gsl.hpp"
+#include "src/utils/cpp/tmp_dir.hpp"
 
 /// \brief Global storage configuration.
 class StorageConfig {
@@ -170,11 +171,27 @@ class StorageConfig {
         }
     }
 
+    /// \brief Root directory for all ephemeral directories, i.e., directories
+    /// that can (and should) be removed immediately by garbage collection.
+    [[nodiscard]] static auto EphemeralRoot() noexcept
+        -> std::filesystem::path {
+        return GenerationCacheRoot(0) / "ephemeral";
+    }
+
     /// \brief Root directory for local action executions; individual actions
     /// create a working directory below this root.
     [[nodiscard]] static auto ExecutionRoot() noexcept
         -> std::filesystem::path {
-        return GenerationCacheRoot(0) / "exec_root";
+        return EphemeralRoot() / "exec_root";
+    }
+
+    /// \brief Create a tmp directory with controlled lifetime for specific
+    /// operations (archive, zip, file, distdir checkouts; fetch; update).
+    [[nodiscard]] static auto CreateTypedTmpDir(
+        std::string const& type) noexcept -> TmpDirPtr {
+        // try to create parent dir
+        auto parent_path = EphemeralRoot() / "tmp-workspaces" / type;
+        return TmpDir::Create(parent_path);
     }
 
   private:

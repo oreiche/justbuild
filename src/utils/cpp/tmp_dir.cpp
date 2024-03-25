@@ -14,8 +14,9 @@
 
 #include "src/utils/cpp/tmp_dir.hpp"
 
-#include "gsl/gsl"
 #include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/logging/log_level.hpp"
+#include "src/buildtool/logging/logger.hpp"
 
 auto TmpDir::Create(std::filesystem::path const& prefix,
                     std::string const& dir_template) noexcept -> TmpDirPtr {
@@ -53,7 +54,7 @@ auto TmpDir::Create(std::filesystem::path const& prefix,
     }
 }
 
-auto TmpDir::GetPath() const noexcept -> std::filesystem::path {
+auto TmpDir::GetPath() const& noexcept -> std::filesystem::path const& {
     return tmp_dir_;
 }
 

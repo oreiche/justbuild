@@ -15,7 +15,13 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_FILE_SYSTEM_GIT_REPO_HPP
 #define INCLUDED_SRC_BUILDTOOL_FILE_SYSTEM_GIT_REPO_HPP
 
+#include <filesystem>
 #include <functional>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <variant>
+#include <vector>
 
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/file_system/git_cas.hpp"
@@ -178,12 +184,15 @@ class GitRepo {
 
     /// \brief Get the tree id of a subtree given the root commit
     /// Calling it from a fake repository allows thread-safe use.
-    /// Returns the subtree hash, as a string, or nullopt if failure.
+    /// Returns an error + data union, where at index 0 is a flag stating the
+    /// nature of the error on failure (true is fatal, false is non-fatal, i.e.,
+    /// commit not found), and at index 1 is the subtree hash on success.
     /// It guarantees the logger is called exactly once with fatal if failure.
     [[nodiscard]] auto GetSubtreeFromCommit(
         std::string const& commit,
         std::string const& subdir,
-        anon_logger_ptr const& logger) noexcept -> std::optional<std::string>;
+        anon_logger_ptr const& logger) noexcept
+        -> std::variant<bool, std::string>;
 
     /// \brief Get the tree id of a subtree given the root tree hash
     /// Calling it from a fake repository allows thread-safe use.
@@ -263,13 +272,10 @@ class GitRepo {
 
     /// \brief Fetch from given local repository via a temporary location. Uses
     /// tmp dir to fetch asynchronously using libgit2.
-    /// Caller needs to make sure the temporary directory exists and that the
-    /// given path is thread- and process-safe!
     /// Uses either a given branch, or fetches all (with base refspecs).
     /// Returns a success flag.
     /// It guarantees the logger is called exactly once with fatal if failure.
     [[nodiscard]] auto LocalFetchViaTmpRepo(
-        std::filesystem::path const& tmp_dir,
         std::string const& repo_path,
         std::optional<std::string> const& branch,
         anon_logger_ptr const& logger) noexcept -> bool;

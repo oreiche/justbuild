@@ -29,8 +29,10 @@
   , "deps": [["src/buildtool/file_system", "git_repo"]]
   , "stage": ["src", "other_tools", "git_operations"]
   , "private-deps":
-    [ ["src/buildtool/logging", "logging"]
+    [ ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/file_system", "git_utils"]
+    , ["src/buildtool/storage", "config"]
     , ["@", "fmt", "", "fmt"]
     , ["", "libgit2"]
     , ["@", "json", "", "json"]

@@ -14,11 +14,9 @@
 
 #include "src/buildtool/main/analyse.hpp"
 
-#ifndef BOOTSTRAP_BUILD_TOOL
 #include <atomic>
 #include <condition_variable>
 #include <thread>
-#endif  // BOOTSTRAP_BUILD_TOOL
 
 #include "src/buildtool/build_engine/base_maps/directory_map.hpp"
 #include "src/buildtool/build_engine/base_maps/entity_name.hpp"
@@ -28,57 +26,20 @@
 #include "src/buildtool/build_engine/base_maps/targets_file_map.hpp"
 #include "src/buildtool/build_engine/target_map/absent_target_map.hpp"
 #include "src/buildtool/build_engine/target_map/target_map.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
+#include "src/buildtool/multithreading/async_map_utils.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
+#include "src/buildtool/progress_reporting/exports_progress_reporter.hpp"
+#include "src/buildtool/progress_reporting/progress.hpp"
 #ifndef BOOTSTRAP_BUILD_TOOL
-#include "src/buildtool/serve_api/progress_reporting/progress_reporter.hpp"
+#include "src/buildtool/serve_api/remote/config.hpp"
 #endif  // BOOTSTRAP_BUILD_TOOL
 
 namespace {
 
 namespace Base = BuildMaps::Base;
 namespace Target = BuildMaps::Target;
-
-template <HasToString K, typename V>
-[[nodiscard]] auto DetectAndReportCycle(std::string const& name,
-                                        AsyncMapConsumer<K, V> const& map)
-    -> bool {
-    using namespace std::string_literals;
-    auto cycle = map.DetectCycle();
-    if (cycle) {
-        bool found{false};
-        std::ostringstream oss{};
-        oss << fmt::format("Cycle detected in {}:", name) << std::endl;
-        for (auto const& k : *cycle) {
-            auto match = (k == cycle->back());
-            auto prefix{match   ? found ? "`-- "s : ".-> "s
-                        : found ? "|   "s
-                                : "    "s};
-            oss << prefix << k.ToString() << std::endl;
-            found = found or match;
-        }
-        Logger::Log(LogLevel::Error, "{}", oss.str());
-        return true;
-    }
-    return false;
-}
-
-template <HasToString K, typename V>
-void DetectAndReportPending(std::string const& name,
-                            AsyncMapConsumer<K, V> const& map) {
-    using namespace std::string_literals;
-    auto keys = map.GetPendingKeys();
-    if (not keys.empty()) {
-        std::ostringstream oss{};
-        oss << fmt::format("Internal error, failed to evaluate pending {}:",
-                           name)
-            << std::endl;
-        for (auto const& k : keys) {
-            oss << "  " << k.ToString() << std::endl;
-        }
-        Logger::Log(LogLevel::Error, "{}", oss.str());
-    }
-}
 
 [[nodiscard]] auto GetActionNumber(const AnalysedTarget& target, int number)
     -> std::optional<ActionDescription::Ptr> {
@@ -136,9 +97,14 @@ void DetectAndReportPending(std::string const& name,
     const Target::ConfiguredTarget& id,
     gsl::not_null<Target::ResultTargetMap*> const& result_map,
     gsl::not_null<RepositoryConfig*> const& repo_config,
+    ActiveTargetCache const& target_cache,
+    gsl::not_null<Statistics*> const& stats,
     std::size_t jobs,
-    std::optional<std::string> const& request_action_input)
-    -> std::optional<AnalysisResult> {
+    std::optional<std::string> const& request_action_input,
+    Logger const* logger) -> std::optional<AnalysisResult> {
+    // create progress tracker for export targets
+    Progress exports_progress{};
+    // create async maps
     auto directory_entries = Base::CreateDirectoryEntriesMap(repo_config, jobs);
     auto expressions_file_map =
         Base::CreateExpressionFileMap(repo_config, jobs);
@@ -150,8 +116,15 @@ void DetectAndReportPending(std::string const& name,
         Base::CreateRuleMap(&rule_file_map, &expr_map, repo_config, jobs);
     auto source_targets =
         Base::CreateSourceTargetMap(&directory_entries, repo_config, jobs);
+    auto absent_target_variables_map =
+        Target::CreateAbsentTargetVariablesMap(jobs);
     auto absent_target_map =
-        Target::CreateAbsentTargetMap(result_map, repo_config, jobs);
+        Target::CreateAbsentTargetMap(result_map,
+                                      &absent_target_variables_map,
+                                      repo_config,
+                                      stats,
+                                      &exports_progress,
+                                      jobs);
     auto target_map = Target::CreateTargetMap(&source_targets,
                                               &targets_file_map,
                                               &rule_map,
@@ -159,17 +132,28 @@ void DetectAndReportPending(std::string const& name,
                                               &absent_target_map,
                                               result_map,
                                               repo_config,
+                                              target_cache,
+                                              stats,
+                                              &exports_progress,
                                               jobs);
-    Logger::Log(LogLevel::Info, "Requested target is {}", id.ToString());
+    Logger::Log(
+        logger, LogLevel::Info, "Requested target is {}", id.ToString());
     AnalysedTargetPtr target{};
 
+    // we should only report served export targets if a serve endpoint exists
+    bool has_serve{false};
 #ifndef BOOTSTRAP_BUILD_TOOL
+    if (RemoteServeConfig::RemoteAddress()) {
+        has_serve = true;
+    }
+#endif  // BOOTSTRAP_BUILD_TOOL
+
     std::atomic<bool> done{false};
     std::condition_variable cv{};
-    auto reporter = ServeServiceProgressReporter::Reporter();
+    auto reporter = ExportsProgressReporter::Reporter(
+        stats, &exports_progress, has_serve, logger);
     auto observer =
         std::thread([reporter, &done, &cv]() { reporter(&done, &cv); });
-#endif  // BOOTSTRAP_BUILD_TOOL
 
     bool failed{false};
     {
@@ -178,33 +162,43 @@ void DetectAndReportPending(std::string const& name,
             &ts,
             {id},
             [&target](auto values) { target = *values[0]; },
-            [&failed](auto const& msg, bool fatal) {
-                Logger::Log(fatal ? LogLevel::Error : LogLevel::Warning,
+            [&failed, logger](auto const& msg, bool fatal) {
+                Logger::Log(logger,
+                            fatal ? LogLevel::Error : LogLevel::Warning,
                             "While processing targets:\n{}",
                             msg);
                 failed = failed or fatal;
             });
     }
 
-#ifndef BOOTSTRAP_BUILD_TOOL
-    // close progress observer
+    // close analysis progress observer
     done = true;
     cv.notify_all();
     observer.join();
-#endif  // BOOTSTRAP_BUILD_TOOL
 
     if (failed) {
         return std::nullopt;
     }
 
     if (not target) {
-        Logger::Log(
-            LogLevel::Error, "Failed to analyse target: {}", id.ToString());
-        if (not(DetectAndReportCycle("expression imports", expr_map) or
-                DetectAndReportCycle("target dependencies", target_map))) {
-            DetectAndReportPending("expressions", expr_map);
-            DetectAndReportPending("targets", expr_map);
+        Logger::Log(logger,
+                    LogLevel::Error,
+                    "Failed to analyse target: {}",
+                    id.ToString());
+        if (auto error_msg = DetectAndReportCycle(
+                "expression imports", expr_map, Base::kEntityNamePrinter)) {
+            Logger::Log(logger, LogLevel::Error, *error_msg);
+            return std::nullopt;
         }
+        if (auto error_msg =
+                DetectAndReportCycle("target dependencies",
+                                     target_map,
+                                     Target::kConfiguredTargetPrinter)) {
+            Logger::Log(logger, LogLevel::Error, *error_msg);
+            return std::nullopt;
+        }
+        DetectAndReportPending("expressions", expr_map, logger);
+        DetectAndReportPending("targets", expr_map, logger);
         return std::nullopt;
     }
 
@@ -227,14 +221,16 @@ void DetectAndReportPending(std::string const& name,
             auto action_id = request_action_input->substr(1);
             auto action = result_map->GetAction(action_id);
             if (action) {
-                Logger::Log(LogLevel::Info,
+                Logger::Log(logger,
+                            LogLevel::Info,
                             "Request is input of action %{}",
                             action_id);
                 target = SwitchToActionInput(target, *action);
                 modified = fmt::format("%{}", action_id);
             }
             else {
-                Logger::Log(LogLevel::Error,
+                Logger::Log(logger,
+                            LogLevel::Error,
                             "Action {} not part of the action graph of the "
                             "requested target",
                             action_id);
@@ -245,13 +241,16 @@ void DetectAndReportPending(std::string const& name,
             auto number = std::atoi(request_action_input->substr(1).c_str());
             auto action = GetActionNumber(*target, number);
             if (action) {
-                Logger::Log(
-                    LogLevel::Info, "Request is input of action #{}", number);
+                Logger::Log(logger,
+                            LogLevel::Info,
+                            "Request is input of action #{}",
+                            number);
                 target = SwitchToActionInput(target, *action);
                 modified = fmt::format("#{}", number);
             }
             else {
-                Logger::Log(LogLevel::Error,
+                Logger::Log(logger,
+                            LogLevel::Error,
                             "Action #{} out of range for the requested target",
                             number);
                 return std::nullopt;
@@ -260,7 +259,8 @@ void DetectAndReportPending(std::string const& name,
         else {
             auto action = result_map->GetAction(*request_action_input);
             if (action) {
-                Logger::Log(LogLevel::Info,
+                Logger::Log(logger,
+                            LogLevel::Info,
                             "Request is input of action %{}",
                             *request_action_input);
                 target = SwitchToActionInput(target, *action);
@@ -270,7 +270,8 @@ void DetectAndReportPending(std::string const& name,
                 auto number = std::atoi(request_action_input->c_str());
                 auto action = GetActionNumber(*target, number);
                 if (action) {
-                    Logger::Log(LogLevel::Info,
+                    Logger::Log(logger,
+                                LogLevel::Info,
                                 "Request is input of action #{}",
                                 number);
                     target = SwitchToActionInput(target, *action);
@@ -278,6 +279,7 @@ void DetectAndReportPending(std::string const& name,
                 }
                 else {
                     Logger::Log(
+                        logger,
                         LogLevel::Error,
                         "Action #{} out of range for the requested target",
                         number);

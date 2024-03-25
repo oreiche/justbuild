@@ -67,12 +67,13 @@ void KeepCommitAndSetTree(
                                     msg),
                         fatal);
                 });
-            auto tree_hash =
+            auto res =
                 git_repo->GetSubtreeFromCommit(commit, ".", wrapped_logger);
-            if (not tree_hash) {
+            if (not std::holds_alternative<std::string>(res)) {
                 return;
             }
-            (*setter)(std::pair<std::string, GitCASPtr>(*tree_hash, git_cas));
+            (*setter)(std::pair<std::string, GitCASPtr>(
+                std::get<std::string>(res), git_cas));
         },
         [logger, commit, target_path](auto const& msg, bool fatal) {
             (*logger)(fmt::format("While running critical Git op KEEP_TAG for "
@@ -166,17 +167,6 @@ auto CreateImportToGitMap(
                                       /*fatal=*/true);
                             return;
                         }
-                        // create tmp directory
-                        auto tmp_dir =
-                            StorageUtils::CreateTypedTmpDir("import-to-git");
-                        if (not tmp_dir) {
-                            (*logger)(
-                                fmt::format("Could not create unique path "
-                                            "for target {}",
-                                            target_path.string()),
-                                /*fatal=*/true);
-                            return;
-                        }
                         auto wrapped_logger =
                             std::make_shared<AsyncMapConsumerLogger>(
                                 [logger, target_path](auto const& msg,
@@ -189,9 +179,9 @@ auto CreateImportToGitMap(
                                         fatal);
                                 });
                         if (not just_git_repo->FetchViaTmpRepo(
-                                tmp_dir->GetPath(),
                                 target_path.string(),
                                 std::nullopt,
+                                std::vector<std::string>{} /* XXX */,
                                 git_bin,
                                 launcher,
                                 wrapped_logger)) {

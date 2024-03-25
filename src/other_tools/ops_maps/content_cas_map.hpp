@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "gsl/gsl"
 #include "src/buildtool/common/user_structs.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
@@ -36,8 +37,6 @@ struct ArchiveContent {
     std::optional<std::string> sha512{std::nullopt};
     // name of repository for which work is done; used in progress reporting
     std::string origin{};
-    // flag to separate logic for pure fetch operations
-    bool fetch_only{};
 
     [[nodiscard]] auto operator==(const ArchiveContent& other) const -> bool {
         return content == other.content;
@@ -62,6 +61,18 @@ struct ArchiveRepoInfo {
     }
 };
 
+struct ForeignFileInfo {
+    ArchiveContent archive{}; /* key */
+    std::string name{};       /* key */
+    bool executable{};        /* key */
+    bool absent{};            /* key */
+
+    [[nodiscard]] auto operator==(const ForeignFileInfo& other) const -> bool {
+        return archive == other.archive and name == other.name and
+               executable == other.executable and absent == other.absent;
+    }
+};
+
 /// \brief Maps the content hash of an archive to nullptr, as we only care if
 /// the map fails or not.
 using ContentCASMap = AsyncMapConsumer<ArchiveContent, std::nullptr_t>;
@@ -72,8 +83,8 @@ using ContentCASMap = AsyncMapConsumer<ArchiveContent, std::nullptr_t>;
     CAInfoPtr const& ca_info,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     bool serve_api_exists,
-    IExecutionApi* local_api,
-    IExecutionApi* remote_api,
+    gsl::not_null<IExecutionApi*> const& local_api,
+    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
     std::size_t jobs) -> ContentCASMap;
 
 namespace std {
@@ -95,6 +106,19 @@ struct hash<ArchiveRepoInfo> {
         hash_combine<std::string>(&seed, ct.repo_type);
         hash_combine<std::string>(&seed, ct.subdir);
         hash_combine<std::optional<PragmaSpecial>>(&seed, ct.pragma_special);
+        hash_combine<bool>(&seed, ct.absent);
+        return seed;
+    }
+};
+
+template <>
+struct hash<ForeignFileInfo> {
+    [[nodiscard]] auto operator()(const ForeignFileInfo& ct) const noexcept
+        -> std::size_t {
+        size_t seed{};
+        hash_combine<ArchiveContent>(&seed, ct.archive);
+        hash_combine<std::string>(&seed, ct.name);
+        hash_combine<bool>(&seed, ct.executable);
         hash_combine<bool>(&seed, ct.absent);
         return seed;
     }

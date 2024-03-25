@@ -24,6 +24,7 @@
   , "srcs": ["create_test_archives.cpp"]
   , "private-deps":
     [ ["@", "src", "src/buildtool/file_system", "file_system_manager"]
+    , ["@", "src", "src/buildtool/logging", "log_level"]
     , ["@", "src", "src/buildtool/logging", "logging"]
     , ["@", "src", "src/utils/archive", "archive_ops"]
     , ["@", "src", "src/utils/cpp", "tmp_dir"]
@@ -48,6 +49,7 @@
   , "deps":
     [ "create_test_archives"
     , ["utils", "test_utils_install"]
+    , ["utils", "null server"]
     , ["end-to-end", "mr-tool-under-test"]
     ]
   }
@@ -179,6 +181,41 @@
   , "deps":
     [["end-to-end", "mr-tool-under-test"], ["end-to-end", "tool-under-test"]]
   }
+, "git-env":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["git-env"]
+  , "test": ["git-env.sh"]
+  , "deps":
+    [["end-to-end", "mr-tool-under-test"], ["end-to-end", "tool-under-test"]]
+  }
+, "foreign-file":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["foreign-file"]
+  , "test": ["foreign-file.sh"]
+  , "deps":
+    [["end-to-end", "mr-tool-under-test"], ["end-to-end", "tool-under-test"]]
+  }
+, "reporting-verbosity":
+  { "type": ["end-to-end", "with remote"]
+  , "name": ["reporting-verbosity"]
+  , "test": ["reporting-verbosity.sh"]
+  , "deps":
+    [ ["end-to-end", "tool-under-test"]
+    , ["end-to-end", "mr-tool-under-test"]
+    , "fetch-absent (data)"
+    ]
+  }
+, "stay-local":
+  { "type": ["end-to-end", "with remote"]
+  , "name": ["stay-local"]
+  , "test": ["stay-local.sh"]
+  , "deps":
+    [ ["end-to-end", "tool-under-test"]
+    , ["end-to-end", "mr-tool-under-test"]
+    , "fetch-absent (data)"
+    , ["utils", "null server"]
+    ]
+  }
 , "TESTS":
   { "type": "install"
   , "tainted": ["test"]
@@ -198,8 +235,11 @@
               , "just_mr_mirrors"
               , "git-tree-verbosity"
               , "git-tree-env"
+              , "git-env"
               , "defaults"
               , "absent-roots"
+              , "foreign-file"
+              , "reporting-verbosity"
               ]
             , { "type": "if"
               , "cond": {"type": "var", "name": "TEST_COMPATIBLE_REMOTE"}
@@ -213,6 +253,7 @@
                 , "fetch-absent-archives"
                 , "fetch-absent-archives-symlinks"
                 , "fetch-absent-distdir-archive"
+                , "stay-local"
                 ]
               }
             ]

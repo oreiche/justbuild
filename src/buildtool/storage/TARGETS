@@ -13,9 +13,9 @@
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/utils/cpp", "gsl"]
+    , ["src/utils/cpp", "tmp_dir"]
     ]
   , "stage": ["src", "buildtool", "storage"]
-  , "private-deps": [["src/buildtool/file_system", "file_storage"]]
   }
 , "storage":
   { "type": ["@", "rules", "CC", "library"]
@@ -56,7 +56,10 @@
     , ["src/buildtool/common", "artifact_description"]
     ]
   , "stage": ["src", "buildtool", "storage"]
-  , "private-deps": [["src/buildtool/execution_api/remote", "config"]]
+  , "private-deps":
+    [ ["src/buildtool/execution_api/remote", "config"]
+    , ["src/buildtool/logging", "log_level"]
+    ]
   }
 , "fs_utils":
   { "type": ["@", "rules", "CC", "library"]
@@ -66,11 +69,13 @@
   , "deps":
     [ ["src/buildtool/common", "user_structs"]
     , ["src/buildtool/file_system/symlinks_map", "pragma_special"]
-    , ["src/utils/cpp", "tmp_dir"]
     ]
   , "stage": ["src", "buildtool", "storage"]
   , "private-deps":
-    [ ["src/buildtool/file_system", "file_system_manager"]
+    [ ["@", "json", "", "json"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "path"]
     , "config"
     , "storage"

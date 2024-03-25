@@ -1,14 +1,20 @@
 { "just":
   { "type": ["@", "rules", "CC", "binary"]
-  , "arguments_config": ["BUILD_STATIC_BINARY", "FINAL_LDFLAGS"]
+  , "arguments_config": ["FINAL_LDFLAGS"]
   , "name": ["just"]
   , "srcs": ["main.cpp"]
   , "private-deps":
-    [ ["src/buildtool/common", "config"]
+    [ ["@", "fmt", "", "fmt"]
+    , ["@", "gsl", "", "gsl"]
+    , ["@", "json", "", "json"]
+    , ["src/buildtool/common", "common"]
+    , ["src/buildtool/common", "config"]
     , ["src/buildtool/storage", "storage"]
     , ["src/buildtool/compatibility", "compatibility"]
     , ["src/buildtool/graph_traverser", "graph_traverser"]
+    , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/progress_reporting", "progress"]
     , ["src/buildtool/progress_reporting", "progress_reporter"]
     , ["src/buildtool/build_engine/target_map", "result_map"]
     , ["src/buildtool/build_engine/target_map", "target_map"]
@@ -26,10 +32,12 @@
     , ["src/buildtool/serve_api/remote", "config"]
     , ["src/buildtool/serve_api/serve_service", "serve_server_implementation"]
     , ["src/buildtool/common/remote", "retry_parameters"]
+    , ["src/buildtool/execution_api/execution_service", "file_chunker"]
     , "common"
     , "cli"
     , "version"
     , "analyse"
+    , "add_to_cas"
     , "install_cas"
     , "describe"
     , "diagnose"
@@ -42,10 +50,6 @@
     { "type": "++"
     , "$1":
       [ ["-Wl,-z,stack-size=8388608"]
-      , { "type": "if"
-        , "cond": {"type": "var", "name": "BUILD_STATIC_BINARY"}
-        , "then": ["-static"]
-        }
       , {"type": "var", "name": "FINAL_LDFLAGS", "default": []}
       ]
     }
@@ -56,7 +60,8 @@
   , "hdrs": ["describe.hpp"]
   , "srcs": ["describe.cpp"]
   , "deps":
-    [ ["src/buildtool/build_engine/base_maps", "entity_name"]
+    [ ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/build_engine/base_maps", "entity_name"]
     , ["src/buildtool/build_engine/target_map", "configured_target"]
     , ["src/buildtool/common", "config"]
     ]
@@ -68,6 +73,7 @@
     , ["src/buildtool/build_engine/target_map", "target_map"]
     , ["src/buildtool/execution_api/remote", "config"]
     , ["src/buildtool/execution_api/common", "create_execution_api"]
+    , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/serve_api/remote", "config"]
     , ["src/buildtool/serve_api/remote", "serve_api"]
@@ -87,7 +93,12 @@
   , "srcs": ["cli.cpp"]
   , "stage": ["src", "buildtool", "main"]
   , "deps": [["src/buildtool/common", "cli"]]
-  , "private-deps": [["@", "gsl", "", "gsl"], "common"]
+  , "private-deps":
+    [ ["@", "gsl", "", "gsl"]
+    , "common"
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
+    ]
   }
 , "install_cas":
   { "type": ["@", "rules", "CC", "library"]
@@ -105,9 +116,31 @@
     [ ["src/buildtool/compatibility", "compatibility"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/execution_api/remote", "config"]
+    , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/execution_api/utils", "subobject"]
     ]
+  }
+, "add_to_cas":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["add_to_cas"]
+  , "hdrs": ["add_to_cas.hpp"]
+  , "srcs": ["add_to_cas.cpp"]
+  , "deps":
+    [ ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/common", "cli"]
+    , ["src/buildtool/execution_api/common", "common"]
+    ]
+  , "private-deps":
+    [ ["src/buildtool/compatibility", "compatibility"]
+    , ["src/buildtool/execution_api/bazel_msg", "bazel_msg_factory"]
+    , ["src/buildtool/execution_api/local", "local"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/storage", "storage"]
+    ]
+  , "stage": ["src", "buildtool", "main"]
   }
 , "analyse":
   { "type": ["@", "rules", "CC", "library"]
@@ -115,22 +148,33 @@
   , "hdrs": ["analyse.hpp"]
   , "srcs": ["analyse.cpp"]
   , "deps":
-    [ ["src/buildtool/common", "cli"]
+    [ ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/common", "cli"]
+    , ["src/buildtool/common", "common"]
     , ["src/buildtool/build_engine/target_map", "configured_target"]
     , ["src/buildtool/build_engine/target_map", "result_map"]
     , ["src/buildtool/build_engine/analysed_target", "target"]
     , ["src/buildtool/common", "config"]
+    , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/storage", "storage"]
     ]
   , "stage": ["src", "buildtool", "main"]
   , "private-deps":
     [ ["src/buildtool/multithreading", "async_map_consumer"]
+    , ["src/buildtool/multithreading", "async_map_utils"]
     , ["src/buildtool/multithreading", "task_system"]
+    , ["src/buildtool/build_engine/base_maps", "entity_name"]
+    , ["src/buildtool/build_engine/base_maps", "expression_map"]
     , ["src/buildtool/build_engine/base_maps", "directory_map"]
     , ["src/buildtool/build_engine/base_maps", "rule_map"]
     , ["src/buildtool/build_engine/base_maps", "source_map"]
     , ["src/buildtool/build_engine/base_maps", "targets_file_map"]
+    , ["src/buildtool/build_engine/target_map", "absent_target_map"]
     , ["src/buildtool/build_engine/target_map", "target_map"]
-    , ["src/buildtool/serve_api/progress_reporting", "progress_reporter"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/progress_reporting", "exports_progress_reporter"]
+    , ["src/buildtool/progress_reporting", "progress"]
+    , ["src/buildtool/serve_api/remote", "config"]
     ]
   }
 , "diagnose":
@@ -144,7 +188,13 @@
     , ["src/buildtool/common", "cli"]
     , ["src/buildtool/build_engine/target_map", "result_map"]
     ]
-  , "private-deps": [["src/utils/cpp", "json"], ["@", "json", "", "json"]]
+  , "private-deps":
+    [ ["src/utils/cpp", "json"]
+    , ["@", "gsl", "", "gsl"]
+    , ["@", "json", "", "json"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
+    ]
   }
 , "version":
   { "type": ["@", "rules", "CC", "library"]
@@ -221,9 +271,14 @@
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/common", "config"]
     , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/multithreading", "async_map_consumer"]
     , ["src/buildtool/storage", "storage"]
     ]
   , "stage": ["src", "buildtool", "main"]
-  , "private-deps": [["src/buildtool/logging", "logging"]]
+  , "private-deps":
+    [ ["src/buildtool/multithreading", "async_map_utils"]
+    , ["src/buildtool/logging", "log_level"]
+    ]
   }
 }

@@ -32,12 +32,14 @@
 #include "src/other_tools/ops_maps/critical_git_op_map.hpp"
 #include "src/other_tools/ops_maps/git_tree_fetch_map.hpp"
 #include "src/other_tools/ops_maps/import_to_git_map.hpp"
+#include "src/other_tools/utils/parse_archive.hpp"
 
 auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                     MultiRepoCommonArguments const& common_args,
                     MultiRepoSetupArguments const& setup_args,
                     MultiRepoFetchArguments const& fetch_args,
-                    MultiRepoRemoteAuthArguments const& auth_args) -> int {
+                    MultiRepoRemoteAuthArguments const& auth_args,
+                    std::string multi_repository_tool_name) -> int {
     // provide report
     Logger::Log(LogLevel::Info, "Performing repositories fetch");
 
@@ -66,6 +68,12 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                     "Config: Mandatory key \"repositories\" missing");
         return kExitFetchError;
     }
+    if (not repos->IsMap()) {
+        Logger::Log(LogLevel::Error,
+                    "Config: Value for key \"repositories\" is not a map");
+        return kExitFetchError;
+    }
+
     auto fetch_repos =
         std::make_shared<JustMR::SetupRepos>();  // repos to setup and include
     JustMR::Utils::DefaultReachableRepositories(repos, fetch_repos);
@@ -124,7 +132,7 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
     Logger::Log(LogLevel::Info, "Fetching to {}", fetch_dir->string());
 
     // gather all repos to be fetched
-    std::vector<ArchiveRepoInfo> archives_to_fetch{};
+    std::vector<ArchiveContent> archives_to_fetch{};
     std::vector<GitTreeInfo> git_trees_to_fetch{};
     archives_to_fetch.reserve(
         fetch_repos->to_include.size());  // pre-reserve a maximum size
@@ -138,6 +146,12 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                         nlohmann::json(repo_name).dump());
             return kExitFetchError;
         }
+        if (not repo_desc->get()->IsMap()) {
+            Logger::Log(LogLevel::Error,
+                        "Config: Config entry for repository {} is not a map",
+                        nlohmann::json(repo_name).dump());
+            return kExitFetchError;
+        }
         auto repo = repo_desc->get()->At("repository");
         if (repo) {
             auto resolved_repo_desc =
@@ -146,6 +160,13 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                 Logger::Log(LogLevel::Error,
                             "Config: Found cyclic dependency for repository {}",
                             nlohmann::json(repo_name).dump());
+                return kExitFetchError;
+            }
+            if (not resolved_repo_desc.value()->IsMap()) {
+                Logger::Log(
+                    LogLevel::Error,
+                    "Config: Repository {} resolves to a non-map description",
+                    nlohmann::json(repo_name).dump());
                 return kExitFetchError;
             }
             // get repo_type
@@ -176,127 +197,58 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
             // only do work if repo is archive or git tree type
             switch (kCheckoutTypeMap.at(repo_type_str)) {
                 case CheckoutType::Archive: {
-                    // check "absent" pragma
-                    auto repo_desc_pragma = (*resolved_repo_desc)->At("pragma");
-                    auto pragma_absent =
-                        repo_desc_pragma ? repo_desc_pragma->get()->At("absent")
-                                         : std::nullopt;
-                    auto pragma_absent_value =
-                        pragma_absent and pragma_absent->get()->IsBool() and
-                        pragma_absent->get()->Bool();
+                    auto logger = std::make_shared<AsyncMapConsumerLogger>(
+                        [&repo_name](std::string const& msg, bool fatal) {
+                            Logger::Log(
+                                fatal ? LogLevel::Error : LogLevel::Warning,
+                                "While parsing description of repository "
+                                "{}:\n{}",
+                                nlohmann::json(repo_name).dump(),
+                                msg);
+                        });
+
+                    auto archive_repo_info = ParseArchiveDescription(
+                        *resolved_repo_desc, repo_type_str, repo_name, logger);
+                    if (not archive_repo_info) {
+                        return kExitFetchError;
+                    }
                     // only fetch if either archive is not marked absent, or if
                     // explicitly told to fetch absent archives
-                    if (not pragma_absent_value or common_args.fetch_absent) {
-                        // check mandatory fields
-                        auto repo_desc_content =
-                            (*resolved_repo_desc)->At("content");
-                        if (not repo_desc_content) {
-                            Logger::Log(LogLevel::Error,
-                                        "Config: Mandatory field \"content\" "
-                                        "is missing");
-                            return kExitFetchError;
-                        }
-                        if (not repo_desc_content->get()->IsString()) {
-                            Logger::Log(LogLevel::Error,
-                                        "Config: Unsupported value {} for "
-                                        "mandatory field \"content\"",
-                                        repo_desc_content->get()->ToString());
-                            return kExitFetchError;
-                        }
-                        auto repo_desc_fetch =
-                            (*resolved_repo_desc)->At("fetch");
-                        if (not repo_desc_fetch) {
+                    if (not archive_repo_info->absent or
+                        common_args.fetch_absent) {
+                        archives_to_fetch.emplace_back(
+                            archive_repo_info->archive);
+                    }
+                } break;
+                case CheckoutType::ForeignFile: {
+                    auto logger = std::make_shared<AsyncMapConsumerLogger>(
+                        [&repo_name](std::string const& msg, bool fatal) {
                             Logger::Log(
-                                LogLevel::Error,
-                                "Config: Mandatory field \"fetch\" is missing");
-                            return kExitFetchError;
-                        }
-                        if (not repo_desc_fetch->get()->IsString()) {
-                            Logger::Log(LogLevel::Error,
-                                        "Config: Unsupported value {} for "
-                                        "mandatory field \"fetch\"",
-                                        repo_desc_fetch->get()->ToString());
-                            return kExitFetchError;
-                        }
-                        auto repo_desc_subdir =
-                            (*resolved_repo_desc)
-                                ->Get("subdir", Expression::none_t{});
-                        auto subdir = std::filesystem::path(
-                                          repo_desc_subdir->IsString()
-                                              ? repo_desc_subdir->String()
-                                              : "")
-                                          .lexically_normal();
-                        auto repo_desc_distfile =
-                            (*resolved_repo_desc)
-                                ->Get("distfile", Expression::none_t{});
-                        auto repo_desc_sha256 =
-                            (*resolved_repo_desc)
-                                ->Get("sha256", Expression::none_t{});
-                        auto repo_desc_sha512 =
-                            (*resolved_repo_desc)
-                                ->Get("sha512", Expression::none_t{});
-                        auto repo_desc_mirrors =
-                            (*resolved_repo_desc)
-                                ->Get("mirrors", Expression::list_t{});
-                        std::vector<std::string> mirrors{};
-                        if (repo_desc_mirrors->IsList()) {
-                            mirrors.reserve(repo_desc_mirrors->List().size());
-                            for (auto const& elem : repo_desc_mirrors->List()) {
-                                if (not elem->IsString()) {
-                                    Logger::Log(
-                                        LogLevel::Error,
-                                        "Config: Unsupported list entry {} in "
-                                        "optional field \"mirrors\"",
-                                        elem->ToString());
-                                    return kExitFetchError;
-                                }
-                                mirrors.emplace_back(elem->String());
-                            }
-                        }
-                        else {
-                            Logger::Log(LogLevel::Error,
-                                        "Config: Optional field \"mirrors\" "
-                                        "should be a list of strings, but "
-                                        "found: {}",
-                                        repo_desc_mirrors->ToString());
-                            return kExitFetchError;
-                        }
+                                fatal ? LogLevel::Error : LogLevel::Warning,
+                                "While parsing description of repository "
+                                "{}:\n{}",
+                                nlohmann::json(repo_name).dump(),
+                                msg);
+                        });
 
-                        ArchiveRepoInfo archive_info = {
-                            .archive =
-                                {.content = repo_desc_content->get()->String(),
-                                 .distfile =
-                                     repo_desc_distfile->IsString()
-                                         ? std::make_optional(
-                                               repo_desc_distfile->String())
-                                         : std::nullopt,
-                                 .fetch_url = repo_desc_fetch->get()->String(),
-                                 .mirrors = std::move(mirrors),
-                                 .sha256 = repo_desc_sha256->IsString()
-                                               ? std::make_optional(
-                                                     repo_desc_sha256->String())
-                                               : std::nullopt,
-                                 .sha512 = repo_desc_sha512->IsString()
-                                               ? std::make_optional(
-                                                     repo_desc_sha512->String())
-                                               : std::nullopt,
-                                 .origin = repo_name,
-                                 .fetch_only = true},
-                            .repo_type = repo_type_str,
-                            .subdir = subdir.empty() ? "." : subdir.string(),
-                            .pragma_special = std::nullopt,  // not used
-                            .absent = false                  // not used
-                        };
-                        // add to list
-                        archives_to_fetch.emplace_back(std::move(archive_info));
+                    auto repo_info = ParseForeignFileDescription(
+                        *resolved_repo_desc, repo_name, logger);
+                    if (not repo_info) {
+                        return kExitFetchError;
+                    }
+                    // only fetch if either archive is not marked absent, or if
+                    // explicitly told to fetch absent archives
+                    if (not repo_info->absent or common_args.fetch_absent) {
+                        archives_to_fetch.emplace_back(repo_info->archive);
                     }
                 } break;
                 case CheckoutType::GitTree: {
                     // check "absent" pragma
                     auto repo_desc_pragma = (*resolved_repo_desc)->At("pragma");
                     auto pragma_absent =
-                        repo_desc_pragma ? repo_desc_pragma->get()->At("absent")
-                                         : std::nullopt;
+                        (repo_desc_pragma and repo_desc_pragma->get()->IsMap())
+                            ? repo_desc_pragma->get()->At("absent")
+                            : std::nullopt;
                     auto pragma_absent_value =
                         pragma_absent and pragma_absent->get()->IsBool() and
                         pragma_absent->get()->Bool();
@@ -425,53 +377,95 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
     auto str_a = fmt::format("{} {}", nr_a, nr_a == 1 ? "archive" : "archives");
     auto str_gt =
         fmt::format("{} git {}", nr_gt, nr_gt == 1 ? "tree" : "trees");
-    Logger::Log(LogLevel::Info,
-                "Found {}{}{} to fetch",
-                nr_a != 0 ? str_a : std::string(),
-                nr_a != 0 and nr_gt != 0 ? " and " : "",
-                nr_gt != 0 ? str_gt : std::string());
+    auto fetchables = fmt::format("{}{}{}",
+                                  nr_a != 0 ? str_a : std::string(),
+                                  nr_a != 0 and nr_gt != 0 ? " and " : "",
+                                  nr_gt != 0 ? str_gt : std::string());
+    if (fetchables.empty()) {
+        Logger::Log(LogLevel::Info, "No fetch required");
+    }
+    else {
+        Logger::Log(LogLevel::Info, "Found {} to fetch", fetchables);
+    }
 
-    // setup the APIs for archive fetches
-    auto remote_api = JustMR::Utils::GetRemoteApi(
-        common_args.remote_execution_address, auth_args);
-    IExecutionApi::Ptr local_api{remote_api ? std::make_unique<LocalApi>()
-                                            : nullptr};
+    // setup the APIs for archive fetches; only happens if in native mode
+    auto remote_api =
+        JustMR::Utils::GetRemoteApi(common_args.remote_execution_address,
+                                    common_args.remote_serve_address,
+                                    auth_args);
+    IExecutionApi::Ptr local_api{std::make_unique<LocalApi>()};
+    bool remote_compatible{common_args.compatible == true};
 
-    // setup the API for serving trees of Git repos or archives
+    // setup the API for serving roots
     auto serve_api_exists = JustMR::Utils::SetupServeApi(
         common_args.remote_serve_address, auth_args);
+
+    // check configuration of the serve endpoint provided
+    if (serve_api_exists) {
+        // check the compatibility mode of the serve endpoint
+        auto compatible = ServeApi::IsCompatible();
+        if (not compatible) {
+            Logger::Log(LogLevel::Warning,
+                        "Checking compatibility configuration of the provided "
+                        "serve endpoint failed. Serve endpoint ignored.");
+            serve_api_exists = false;
+        }
+        if (*compatible != remote_compatible) {
+            Logger::Log(
+                LogLevel::Warning,
+                "Provided serve endpoint operates in a different compatibility "
+                "mode than stated. Serve endpoint ignored.");
+            serve_api_exists = false;
+        }
+        // if we have a remote endpoint explicitly given by the user, it must
+        // match what the serve endpoint expects
+        if (remote_api and common_args.remote_execution_address and
+            not ServeApi::CheckServeRemoteExecution()) {
+            return kExitFetchError;  // this check logs error on failure
+        }
+    }
 
     // create async maps
     auto crit_git_op_ptr = std::make_shared<CriticalGitOpGuard>();
     auto critical_git_op_map = CreateCriticalGitOpMap(crit_git_op_ptr);
+
     auto content_cas_map =
         CreateContentCASMap(common_args.just_mr_paths,
                             common_args.alternative_mirrors,
                             common_args.ca_info,
                             &critical_git_op_map,
                             serve_api_exists,
-                            local_api ? &(*local_api) : nullptr,
-                            remote_api ? &(*remote_api) : nullptr,
+                            &(*local_api),
+                            (remote_api and not remote_compatible)
+                                ? std::make_optional(&(*remote_api))
+                                : std::nullopt,
                             common_args.jobs);
+
     auto archive_fetch_map = CreateArchiveFetchMap(
         &content_cas_map,
         *fetch_dir,
-        (fetch_args.backup_to_remote and local_api) ? &(*local_api) : nullptr,
-        (fetch_args.backup_to_remote and remote_api) ? &(*remote_api) : nullptr,
+        &(*local_api),
+        (fetch_args.backup_to_remote and remote_api and not remote_compatible)
+            ? std::make_optional(&(*remote_api))
+            : std::nullopt,
         common_args.jobs);
+
     auto import_to_git_map =
         CreateImportToGitMap(&critical_git_op_map,
                              common_args.git_path->string(),
                              *common_args.local_launcher,
                              common_args.jobs);
+
     auto git_tree_fetch_map =
         CreateGitTreeFetchMap(&critical_git_op_map,
                               &import_to_git_map,
                               common_args.git_path->string(),
                               *common_args.local_launcher,
                               serve_api_exists,
-                              local_api ? &(*local_api) : nullptr,
-                              remote_api ? &(*remote_api) : nullptr,
+                              &(*local_api),
+                              (remote_api and not remote_compatible)
+                                  ? std::make_optional(&(*remote_api))
+                                  : std::nullopt,
                               fetch_args.backup_to_remote,
                               common_args.jobs);
 
@@ -491,9 +485,11 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
             &ts,
             archives_to_fetch,
             []([[maybe_unused]] auto const& values) {},
-            [&failed_archives](auto const& msg, bool fatal) {
+            [&failed_archives, &multi_repository_tool_name](auto const& msg,
+                                                            bool fatal) {
                 Logger::Log(fatal ? LogLevel::Error : LogLevel::Warning,
-                            "While performing just-mr fetch:\n{}",
+                            "While performing {} fetch:\n{}",
+                            multi_repository_tool_name,
                             msg);
                 failed_archives = failed_archives or fatal;
             });
@@ -505,9 +501,11 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
             &ts,
             git_trees_to_fetch,
             []([[maybe_unused]] auto const& values) {},
-            [&failed_git_trees](auto const& msg, bool fatal) {
+            [&failed_git_trees, &multi_repository_tool_name](auto const& msg,
+                                                             bool fatal) {
                 Logger::Log(fatal ? LogLevel::Error : LogLevel::Warning,
-                            "While performing just-mr fetch:\n{}",
+                            "While performing {} fetch:\n{}",
+                            multi_repository_tool_name,
                             msg);
                 failed_git_trees = failed_git_trees or fatal;
             });

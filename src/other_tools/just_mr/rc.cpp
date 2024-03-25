@@ -22,6 +22,7 @@
 #include "src/buildtool/logging/log_sink_file.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
+#include "src/other_tools/just_mr/rc_merge.hpp"
 
 namespace {
 
@@ -127,13 +128,8 @@ namespace {
     return std::nullopt;
 }
 
-}  // namespace
-
-/// \brief Read just-mrrc file and set up various configs. Return the path to
-/// the repository config file, if any is provided.
-[[nodiscard]] auto ReadJustMRRC(
-    gsl::not_null<CommandLineArguments*> const& clargs)
-    -> std::optional<std::filesystem::path> {
+[[nodiscard]] auto ObtainRCConfig(
+    gsl::not_null<CommandLineArguments*> const& clargs) -> Configuration {
     Configuration rc_config{};
     auto rc_path = clargs->common.rc_path;
     // set default if rcpath not given
@@ -173,6 +169,70 @@ namespace {
             }
         }
     }
+    return rc_config;
+}
+
+}  // namespace
+
+/// \brief Read just-mrrc file and set up various configs. Return the path to
+/// the repository config file, if any is provided.
+[[nodiscard]] auto ReadJustMRRC(
+    gsl::not_null<CommandLineArguments*> const& clargs)
+    -> std::optional<std::filesystem::path> {
+    Configuration rc_config = ObtainRCConfig(clargs);
+
+    // Merge in the rc-files to overlay
+    auto extra_rc_files = rc_config["rc files"];
+    if (not extra_rc_files->IsNone()) {
+        if (not extra_rc_files->IsList()) {
+            Logger::Log(
+                LogLevel::Error,
+                "'rc files' has to be a list of location objects, but found {}",
+                extra_rc_files->ToString());
+            std::exit(kExitConfigError);
+        }
+        for (auto const& entry : extra_rc_files->List()) {
+            auto extra_rc_location = ReadLocation(
+                entry, clargs->common.just_mr_paths->workspace_root);
+            if (extra_rc_location) {
+                auto const& extra_rc_path = extra_rc_location->first;
+                if (FileSystemManager::IsFile(extra_rc_path)) {
+                    Configuration extra_rc_config{};
+                    try {
+                        std::ifstream fs(extra_rc_path);
+                        auto map =
+                            Expression::FromJson(nlohmann::json::parse(fs));
+                        if (not map->IsMap()) {
+                            Logger::Log(LogLevel::Error,
+                                        "In extra RC file {}: expected an "
+                                        "object but found:\n{}",
+                                        extra_rc_path.string(),
+                                        map->ToString());
+                            std::exit(kExitConfigError);
+                        }
+                        extra_rc_config = Configuration{map};
+                    } catch (std::exception const& e) {
+                        Logger::Log(LogLevel::Error,
+                                    "Parsing extra RC file {} as JSON failed "
+                                    "with error:\n{}",
+                                    extra_rc_path.string(),
+                                    e.what());
+                        std::exit(kExitConfigError);
+                    }
+                    rc_config = MergeMRRC(rc_config, extra_rc_config);
+                }
+            }
+        }
+    }
+
+    // If requested, dump effective rc
+    if (clargs->common.dump_rc) {
+        auto dump_json = rc_config.ToJson();
+        dump_json.erase("rc files");
+        std::ofstream os(*clargs->common.dump_rc);
+        os << dump_json.dump(2) << std::endl;
+    }
+
     // read local build root; overwritten if user provided it already
     if (not clargs->common.just_mr_paths->root) {
         auto build_root =
@@ -297,6 +357,30 @@ namespace {
                 args.emplace_back(arg->String());
             }
             clargs->just_cmd.just_args[cmd_name] = std::move(args);
+        }
+    }
+    // read remote-execution properties, used for extending the launch
+    // command-line (not settable on just-mr's command line).
+    auto re_props = rc_config["remote-execution properties"];
+    if (re_props.IsNotNull()) {
+        if (not re_props->IsList()) {
+            Logger::Log(LogLevel::Error,
+                        "Configuration-file provided remote-execution "
+                        "properties have to be a list of strings, but found {}",
+                        re_props->ToString());
+            std::exit(kExitConfigError);
+        }
+        for (auto const& entry : re_props->List()) {
+            if (not entry->IsString()) {
+                Logger::Log(
+                    LogLevel::Error,
+                    "Configuration-file provided remote-execution properties "
+                    "have to be a list of strings, but found entry {}",
+                    entry->ToString());
+                std::exit(kExitConfigError);
+            }
+            clargs->launch_fwd.remote_execution_properties.emplace_back(
+                entry->String());
         }
     }
     // read default for local launcher

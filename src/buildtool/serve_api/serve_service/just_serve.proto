@@ -46,7 +46,7 @@ message ServeCommitTreeResponse {
     // Failed to upload tree remotely
     SYNC_ERROR = 1;
 
-    // Tree not found
+    // Commit not found
     NOT_FOUND = 2;
 
     // Internally, something is very broken
@@ -116,7 +116,7 @@ message ServeArchiveTreeResponse {
     // Failed to resolve symlinks as requested
     RESOLVE_ERROR = 3;
 
-    // Tree not found
+    // Content blob not known
     NOT_FOUND = 4;
 
     // Internally, something is very broken
@@ -138,6 +138,10 @@ message ServeDistdirTreeRequest {
 
     // The git blob identifier of the distfile content.
     string content = 2;
+
+    // Whether the blob should occur executable in the resulting
+    // directory.
+    bool executable = 3;
   }
 
   // The list of distfiles.
@@ -230,6 +234,56 @@ message ServeTreeResponse {
   ServeTreeStatus status = 1;
 }
 
+// A request message for
+// [TargetLevelCache.CheckRootTree][justbuild.just_serve.TargetLevelCache.CheckRootTree].
+message CheckRootTreeRequest {
+  // The git tree identifier.
+  string tree = 1;
+}
+
+// A response message for
+// [TargetLevelCache.CheckRootTree][justbuild.just_serve.TargetLevelCache.CheckRootTree].
+message CheckRootTreeResponse {
+  enum CheckRootTreeStatus{
+    // All good
+    OK = 0;
+
+    // Tree not known
+    NOT_FOUND = 1;
+
+    // Internally, something is very broken
+    INTERNAL_ERROR = 2;
+  }
+
+  // If the status has a code `OK`, the tree is known locally
+  CheckRootTreeStatus status = 1;
+}
+
+// A request message for
+// [TargetLevelCache.GetRemoteTree][justbuild.just_serve.TargetLevelCache.GetRemoteTree].
+message GetRemoteTreeRequest {
+  // The git tree identifier.
+  string tree = 1;
+}
+
+// A response message for
+// [TargetLevelCache.GetRemoteTree][justbuild.just_serve.TargetLevelCache.GetRemoteTree].
+message GetRemoteTreeResponse {
+  enum GetRemoteTreeStatus{
+    // All good
+    OK = 0;
+
+    // Tree is not found in remote CAS or it failed to be retrieved
+    FAILED_PRECONDITION = 1;
+
+    // Internally, something is very broken
+    INTERNAL_ERROR = 2;
+  }
+
+  // If the status has a code `OK`, the tree is in the local CAS
+  GetRemoteTreeStatus status = 1;
+}
+
 // Services for improved interaction with the target-level cache.
 service SourceTree {
   // Retrieve the Git-subtree identifier from a given Git commit.
@@ -261,6 +315,21 @@ service SourceTree {
   //
   // There are no method-specific errors.
   rpc ServeTree(ServeTreeRequest) returns (ServeTreeResponse) {}
+
+  // Checks if a Git-tree is locally known and, if found, makes it available
+  // in a location where this serve instance can build against.
+  // The implementation should not interrogate the associated remote-execution
+  // endpoint at any point during the completion of this request.
+  //
+  // There are no method-specific errors.
+  rpc CheckRootTree(CheckRootTreeRequest) returns (CheckRootTreeResponse) {}
+
+  // Retrieves a given Git-tree from the CAS of the associated
+  // remote-execution endpoint and makes it available in a location where this
+  // serve instance can build against.
+  //
+  // There are no method-specific errors.
+  rpc GetRemoteTree(GetRemoteTreeRequest) returns (GetRemoteTreeResponse) {}
 }
 
 message ServeTargetRequest {
@@ -292,9 +361,13 @@ message ServeTargetRequest {
 
 message ServeTargetResponse {
   // Digest of the blob with the JSON object containing the target-cache value
-  // The implementation must guarantee that all the referenced objects are
-  // present in the remote CAS.
+  // on success. The implementation must guarantee that all the referenced
+  // objects are present in the remote CAS.
   build.bazel.remote.execution.v2.Digest target_value = 1;
+
+  // Digest of the blob containing a log report relevant to the user, e.g.,
+  // the error report for a failed analysis or build of a known target.
+  build.bazel.remote.execution.v2.Digest log = 2;
 }
 
 message ServeTargetVariablesRequest {
@@ -330,16 +403,31 @@ message ServeTargetDescriptionResponse {
 }
 
 service Target {
-  // Given a target-level caching key, returns the computed value. In doing so,
-  // it can build on the associated end-point passing the
+  // Given a target-level caching key, returns the computed value. In doing
+  // so, it can build on the associated endpoint passing the
   // RemoteExecutionProperties contained in the ServeTargetRequest.
+  // The execution backend description, the resulting target cache value,
+  // and all other artifacts referenced therein MUST be made available in
+  // the CAS of the associated remote execution endpoint.
   //
-  // If the status has a code different from `OK`, the response MUST not be used.
+  // A failure to analyse or build a known target (i.e., a target for which
+  // we have all the needed information available) should NOT be reported as
+  // an error. Instead, the failure log should be uploaded as a blob to the
+  // CAS of the associated remote execution endpoint and its digest provided
+  // to the client in the response field `log`. In this case, the field
+  // `target_value` MUST not be set.
+  //
+  // If the status has a code different from `OK` or `NOT_FOUND`, the
+  // response MUST not be used.
   //
   // Errors:
-  // * `FAILED_PRECONDITION`: Failed to find required information in the CAS or
-  //   the target cache key is malformed.
-  // * `UNAVAILABLE`: Could not communicate with the remote execution endpoint.
+  // * `NOT_FOUND`: Unknown target or missing needed local information.
+  //   This should only be used for non-fatal failures.
+  // * `FAILED_PRECONDITION`: Required entries missing in the remote
+  //   execution endpoint.
+  // * `UNAVAILABLE`: Could not communicate with the remote execution
+  //   endpoint.
+  // * `INVALID_ARGUMENT`: The client provided invalid arguments in request.
   // * `INTERNAL`: Internally, something is very broken.
   rpc ServeTarget(ServeTargetRequest) returns (ServeTargetResponse) {}
 
@@ -383,6 +471,12 @@ message RemoteExecutionEndpointResponse {
   string address = 1;
 }
 
+message CompatibilityRequest {}
+
+message CompatibilityResponse {
+  bool compatible = 1;
+}
+
 // This service can be used by the client to double check the server configuration
 service Configuration {
   // Returns the address of the associated remote endpoint, if set,
@@ -391,4 +485,10 @@ service Configuration {
   //
   // There are no method-specific errors.
   rpc RemoteExecutionEndpoint(RemoteExecutionEndpointRequest) returns (RemoteExecutionEndpointResponse) {}
+
+  // Returns a flag signaling whether the associated remote execution
+  // endpoint uses the standard remote-execution protocol.
+  //
+  // There are no method-specific errors.
+  rpc Compatibility(CompatibilityRequest) returns (CompatibilityResponse) {}
 }

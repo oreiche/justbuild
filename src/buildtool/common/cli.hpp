@@ -180,6 +180,15 @@ struct ServeArguments {
     std::vector<std::filesystem::path> repositories{};
 };
 
+struct GcArguments {
+    bool no_rotate{};
+};
+
+struct ToAddArguments {
+    std::filesystem::path location{};
+    bool follow_symlinks{};
+};
+
 static inline auto SetupCommonArguments(
     gsl::not_null<CLI::App*> const& app,
     gsl::not_null<CommonArguments*> const& clargs) {
@@ -598,6 +607,34 @@ static inline auto SetupFetchArguments(
         "--remember", clargs->remember, "Copy object to local CAS first");
 }
 
+static inline auto SetupToAddArguments(
+    gsl::not_null<CLI::App*> const& app,
+    gsl::not_null<ToAddArguments*> const& clargs) {
+    app->add_option_function<std::string>(
+           "location",
+           [clargs](auto const& path_raw) {
+               std::filesystem::path in = ToNormalPath(path_raw);
+               if (not in.is_absolute()) {
+                   try {
+                       in = std::filesystem::absolute(in);
+                   } catch (std::exception const& e) {
+                       Logger::Log(LogLevel::Error,
+                                   "Failed to convert input path {} ({})",
+                                   path_raw,
+                                   e.what());
+                       throw e;
+                   }
+               }
+               clargs->location = in;
+           },
+           "The path on the local file system to be added to CAS")
+        ->required();
+    app->add_flag("--follow-symlinks",
+                  clargs->follow_symlinks,
+                  "Resolve the positional argument to not be a symbolic link "
+                  "before adding it to CAS.");
+}
+
 static inline auto SetupGraphArguments(
     gsl::not_null<CLI::App*> const& app,
     gsl::not_null<GraphArguments*> const& clargs) {
@@ -721,6 +758,14 @@ static inline void SetupRetryArguments(
                     "The backoff time cannot be bigger than this parameter. "
                     "Note that some jitter is still added to avoid to overload "
                     "the resources that survived the outage. (Default: 60)");
+}
+
+static inline void SetupGcArguments(gsl::not_null<CLI::App*> const& app,
+                                    gsl::not_null<GcArguments*> const& args) {
+    app->add_flag("--no-rotate",
+                  args->no_rotate,
+                  "Do not rotate cache generations, only clean up what can be "
+                  "done without losing cache.");
 }
 
 #endif  // INCLUDED_SRC_BUILDTOOL_COMMON_CLI_HPP

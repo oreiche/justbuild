@@ -21,7 +21,7 @@
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
-#include "src/buildtool/storage/fs_utils.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/other_tools/git_operations/git_repo_remote.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
@@ -31,7 +31,8 @@
 
 auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
                      MultiRepoCommonArguments const& common_args,
-                     MultiRepoUpdateArguments const& update_args) -> int {
+                     MultiRepoUpdateArguments const& update_args,
+                     std::string multi_repo_tool_name) -> int {
     // provide report
     Logger::Log(LogLevel::Info, "Performing repositories update");
 
@@ -49,8 +50,13 @@ auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
                     "Config: Mandatory key \"repositories\" missing");
         return kExitUpdateError;
     }
+    if (not repos->IsMap()) {
+        Logger::Log(LogLevel::Error,
+                    "Config: Value for key \"repositories\" is not a map");
+        return kExitUpdateError;
+    }
     // gather repos to update
-    std::vector<std::pair<std::string, std::string>> repos_to_update{};
+    std::vector<RepoDescriptionForUpdating> repos_to_update{};
     repos_to_update.reserve(update_args.repos_to_update.size());
     for (auto const& repo_name : update_args.repos_to_update) {
         auto repo_desc_parent = repos->At(repo_name);
@@ -69,6 +75,13 @@ auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
                             fmt::format("Config: Found cyclic dependency for "
                                         "repository {}",
                                         nlohmann::json(repo_name).dump()));
+                return kExitUpdateError;
+            }
+            if (not resolved_repo_desc.value()->IsMap()) {
+                Logger::Log(
+                    LogLevel::Error,
+                    "Config: Repository {} resolves to a non-map description",
+                    nlohmann::json(repo_name).dump());
                 return kExitUpdateError;
             }
             // get repo_type
@@ -129,9 +142,33 @@ auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
                                 nlohmann::json(repo_name).dump());
                     return kExitUpdateError;
                 }
-                repos_to_update.emplace_back(
-                    std::make_pair(repo_desc_repository->get()->String(),
-                                   repo_desc_branch->get()->String()));
+                std::vector<std::string> inherit_env{};
+                auto repo_desc_inherit_env =
+                    (*resolved_repo_desc)
+                        ->Get("inherit env", Expression::kEmptyList);
+                if (not repo_desc_inherit_env->IsList()) {
+                    Logger::Log(LogLevel::Error,
+                                "GitCheckout: optional field \"inherit env\" "
+                                "should be a list of strings, but found {}",
+                                repo_desc_inherit_env->ToString());
+                    return kExitUpdateError;
+                }
+                for (auto const& var : repo_desc_inherit_env->List()) {
+                    if (not var->IsString()) {
+                        Logger::Log(
+                            LogLevel::Error,
+                            "GitCheckout: optional field \"inherit env\" "
+                            "should be a list of strings, but found entry {}",
+                            var->ToString());
+                        return kExitUpdateError;
+                    }
+                    inherit_env.emplace_back(var->String());
+                }
+
+                repos_to_update.emplace_back(RepoDescriptionForUpdating{
+                    .repo = repo_desc_repository->get()->String(),
+                    .branch = repo_desc_branch->get()->String(),
+                    .inherit_env = inherit_env});
             }
             else {
                 Logger::Log(LogLevel::Error,
@@ -149,7 +186,7 @@ auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
         }
     }
     // Create fake repo for the anonymous remotes
-    auto tmp_dir = StorageUtils::CreateTypedTmpDir("update");
+    auto tmp_dir = StorageConfig::CreateTypedTmpDir("update");
     if (not tmp_dir) {
         Logger::Log(LogLevel::Error, "Failed to create commit update tmp dir");
         return kExitUpdateError;
@@ -204,9 +241,10 @@ auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
                              ["commit"] = *values[i];
                 }
             },
-            [&failed](auto const& msg, bool fatal) {
+            [&failed, &multi_repo_tool_name](auto const& msg, bool fatal) {
                 Logger::Log(fatal ? LogLevel::Error : LogLevel::Warning,
-                            "While performing just-mr update:\n{}",
+                            "While performing {} update:\n{}",
+                            multi_repo_tool_name,
                             msg);
                 failed = failed or fatal;
             });
