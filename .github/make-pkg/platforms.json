@@ -343,7 +343,7 @@
     ]
   }
 , "bundled-deb":
-  {"type": "deb", "prebuilt": "static-x86_64", "image": "ubuntu:20.04"}
+  {"type": "deb", "prebuilt": "static-x86_64", "image": "ubuntu:22.04"}
 , "bundled-rpm":
   {"type": "rpm", "prebuilt": "static-x86_64", "image": "fedora:33"}
 }
