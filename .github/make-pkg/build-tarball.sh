@@ -7,8 +7,28 @@ set -eu
 NAME=justbuild-$VERSION-$TARGET_ARCH-linux
 OUTDIR=$(pwd)/../$NAME
 
+MI_CC="gcc"
 if [ "$TARGET_ARCH" = "aarch64" ]; then
+  MI_CC="aarch64-linux-musl-gcc"
   TARGET_ARCH="arm64"
+fi
+
+mkdir -p "${BUILDDIR}"
+rm -rf "${BUILDDIR}"/*
+
+# build mimalloc.o from source
+( cd "${BUILDDIR}"
+  export GIT_SSL_NO_VERIFY=true
+  git clone --depth 1 -b v2.1.2 https://github.com/microsoft/mimalloc.git
+  MI_CFLAGS="-std=gnu11 -O3 -DNDEBUG -DMI_MALLOC_OVERRIDE -I./mimalloc/include \
+      -fPIC -fvisibility=hidden -ftls-model=initial-exec -fno-builtin-malloc"
+  ${MI_CC} ${MI_CFLAGS} -c ./mimalloc/src/static.c -o mimalloc.o
+)
+
+MIMALLOC_OBJ="${BUILDDIR}/mimalloc.o"
+if [ ! -f "$MIMALLOC_OBJ" ]; then
+  echo "Could not find mimalloc.o"
+  exit 1
 fi
 
 cat > build.conf << EOF
@@ -17,6 +37,7 @@ cat > build.conf << EOF
 , "AR": "ar"
 , "BUILD_STATIC_BINARY": true
 , "SOURCE_DATE_EPOCH": $SOURCE_DATE_EPOCH
+, "FINAL_LDFLAGS": ["$MIMALLOC_OBJ"]
 }
 EOF
 
