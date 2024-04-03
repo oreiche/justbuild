@@ -31,11 +31,14 @@
     , "target_cache_key.hpp"
     , "target_cache_entry.hpp"
     , "garbage_collector.hpp"
+    , "large_object_cas.hpp"
+    , "large_object_cas.tpp"
     ]
   , "srcs":
     ["target_cache_key.cpp", "target_cache_entry.cpp", "garbage_collector.cpp"]
   , "deps":
     [ "config"
+    , "file_chunker"
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/file_system", "file_storage"]
     , ["src/buildtool/file_system", "object_cas"]
@@ -47,6 +50,7 @@
     , ["src/utils/cpp", "gsl"]
     , ["@", "gsl", "", "gsl"]
     , ["@", "json", "", "json"]
+    , ["@", "fmt", "", "fmt"]
     , ["src/buildtool/file_system", "object_type"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/execution_api/bazel_msg", "bazel_msg_factory"]
@@ -54,6 +58,7 @@
     , ["src/buildtool/common", "bazel_types"]
     , ["src/buildtool/file_system", "git_repo"]
     , ["src/buildtool/common", "artifact_description"]
+    , ["src/buildtool/compatibility", "compatibility"]
     ]
   , "stage": ["src", "buildtool", "storage"]
   , "private-deps":
@@ -80,5 +85,13 @@
     , "config"
     , "storage"
     ]
+  }
+, "file_chunker":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["file_chunker"]
+  , "hdrs": ["file_chunker.hpp"]
+  , "srcs": ["file_chunker.cpp"]
+  , "stage": ["src", "buildtool", "storage"]
+  , "private-deps": [["@", "gsl", "", "gsl"]]
   }
 }

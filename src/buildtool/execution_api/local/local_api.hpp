@@ -15,6 +15,7 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_EXECUTION_API_LOCAL_LOCAL_API_HPP
 #define INCLUDED_SRC_BUILDTOOL_EXECUTION_API_LOCAL_LOCAL_API_HPP
 
+#include <cstddef>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -22,6 +23,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>  // std::move
 #include <variant>
 #include <vector>
 
@@ -515,11 +517,8 @@ class LocalApi final : public IExecutionApi {
             [](auto const& artifact_digest) {
                 return static_cast<bazel_re::Digest>(artifact_digest);
             });
-        auto splice_result =
-            CASUtils::SpliceBlob(static_cast<bazel_re::Digest>(blob_digest),
-                                 digests,
-                                 *storage_,
-                                 /* check_tree_invariant= */ false);
+        auto splice_result = CASUtils::SpliceBlob(
+            static_cast<bazel_re::Digest>(blob_digest), digests, *storage_);
         if (std::holds_alternative<grpc::Status>(splice_result)) {
             auto* status = std::get_if<grpc::Status>(&splice_result);
             Logger::Log(LogLevel::Error, status->error_message());

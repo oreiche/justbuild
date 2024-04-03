@@ -16,6 +16,7 @@
 #define INCLUDED_SRC_BUILDTOOL_COMMON_CLI_HPP
 
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -137,6 +138,7 @@ struct FetchArguments {
     std::optional<std::filesystem::path> sub_path{};
     bool remember{false};
     bool raw_tree{};
+    bool archive{};
 };
 
 /// \brief Arguments required for running from graph file.
@@ -599,9 +601,11 @@ static inline auto SetupFetchArguments(
            "tree).")
         ->type_name("PATH");
 
+    app->add_flag(
+        "--archive", clargs->archive, "Dump the tree as a single archive.");
     app->add_flag("--raw-tree",
                   clargs->raw_tree,
-                  "Dump raw tree object (omit pretty printing)");
+                  "Dump raw tree object (omit pretty printing).");
 
     app->add_flag(
         "--remember", clargs->remember, "Copy object to local CAS first");

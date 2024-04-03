@@ -16,8 +16,6 @@
       , "protoc": "protobuf"
       , "libcurl": "com_github_curl_curl"
       , "libarchive": "com_github_libarchive_libarchive"
-      , "lzma": "lzma"
-      , "bzip2": "bzip2"
       }
     , "bootstrap": {"link": ["-pthread"]}
     , "bootstrap_local": {"link": ["-pthread"]}
@@ -189,11 +187,11 @@
   , "cli11":
     { "repository":
       { "type": "archive"
-      , "content": "f2eee8c3fe04347bbb65cbb555c83d4c8d6a7034"
-      , "fetch": "https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.3.2.tar.gz"
-      , "sha256": "aac0ab42108131ac5d3344a9db0fdf25c4db652296641955720a4fbe52334e22"
-      , "sha512": "f48b289d52034c47b90db58c035a123b464bed488cf31bcdbe10a692214a5c05e62b99d6fb7c4b065f42df862ecf3813f11dd533b3697939d761e99d2b89c2ec"
-      , "subdir": "CLI11-2.3.2/"
+      , "content": "eb82119c62808a65bb2d15561f1968259ed50c95"
+      , "fetch": "https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.4.1.tar.gz"
+      , "sha256": "73b7ec52261ce8fe980a29df6b4ceb66243bb0b779451dbd3d014cfec9fdbb58"
+      , "sha512": "965290d09977672d3bc3c57ca4b89a88c2c09461da6e866b18217d702d4d5a0977588fcb8fef1a3c3804e61ad80d276029f47469cc83dbfdc7021ee35f6b7269"
+      , "subdir": "CLI11-2.4.1"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.cli11"
@@ -203,10 +201,10 @@
   , "json":
     { "repository":
       { "type": "zip"
-      , "content": "a0cf5f0e098b6a8748eb1c106b0b1994b92fead9"
-      , "fetch": "https://github.com/nlohmann/json/releases/download/v3.11.2/include.zip"
-      , "sha256": "e5c7a9f49a16814be27e4ed0ee900ecd0092bfb7dbfca65b5a421b774dccaaed"
-      , "sha512": "99d9e6d588cabe8913a37437f86acb5d4b8b98bce12423e633c11c13b61e6c7f92ef8f9a4e991baa590329ee2b5c09ca9db9894bee1e54bdd68e8d09d83cc245"
+      , "content": "733571f96614cc01fcebf76c8359f52706677c61"
+      , "fetch": "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
+      , "sha256": "a22461d13119ac5c78f205d3df1db13403e58ce1bb1794edc9313677313f4a9d"
+      , "sha512": "8d923e2586acf736fc1886bf1839ca0126444ec60ce93a4bd18c21eef4475dff6f608203e42bf4968878dc50727a8c20c517dd8c1ac5c6b0bb6a95f2dce5546e"
       , "subdir": "include/nlohmann"
       }
     , "target_root": "import targets"
@@ -217,11 +215,11 @@
   , "fmt":
     { "repository":
       { "type": "zip"
-      , "content": "cc5c5716a567b89ed227096522a2073b5ef3d4df"
-      , "fetch": "https://github.com/fmtlib/fmt/releases/download/10.1.1/fmt-10.1.1.zip"
-      , "sha256": "b84e58a310c9b50196cda48d5678d5fa0849bca19e5fdba6b684f0ee93ed9d1b"
-      , "sha512": "ea5fec1330e14a7e73f5820afbcb0131320ae00e567e9f66479592dfc5eae7f275fa42b2be3d6afe034e14460365cb5be8bfd8c975d3b71143308e3cbf788e27"
-      , "subdir": "fmt-10.1.1"
+      , "content": "c54a3ec3cba9177c0be51051b762a74449ea1466"
+      , "fetch": "https://github.com/fmtlib/fmt/releases/download/10.2.1/fmt-10.2.1.zip"
+      , "sha256": "312151a2d13c8327f5c9c586ac6cf7cddc1658e8f53edae0ec56509c8fa516c9"
+      , "sha512": "1cf0e3dd09c7d87e0890b8743559159d3be2a8f33c135516962d17c4eeb7b00659e6acd74518bd5566ee4e83ddaba155fecb4c229f90cd258b3b832e72ad82cd"
+      , "subdir": "fmt-10.2.1"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.fmt"
@@ -414,11 +412,11 @@
   , "com_github_libgit2_libgit2":
     { "repository":
       { "type": "archive"
-      , "content": "02793bbe15088985989d1ff636a23958f4a62c57"
-      , "fetch": "https://github.com/libgit2/libgit2/archive/refs/tags/v1.7.0.tar.gz"
-      , "sha256": "d9d0f84a86bf98b73e68997f5c1543cc5067d0ca9c7a5acaba3e8d117ecefef3"
-      , "sha512": "68c8ed289de7daccaec17ea2ac49f4610325595cf90cddef763a31546a0a1c6bd400bf6180b68e2d3a8bdc3d031328efbbbaf3b61467dfc1b944e8cf3efcfd69"
-      , "subdir": "libgit2-1.7.0"
+      , "content": "80f999c62e8da8da7d64fe543c8eeb9953bf6974"
+      , "fetch": "https://github.com/libgit2/libgit2/archive/refs/tags/v1.7.2.tar.gz"
+      , "sha256": "de384e29d7efc9330c6cdb126ebf88342b5025d920dcb7c645defad85195ea7f"
+      , "sha512": "825737e4a1991fba50ea535f15b0e560ebe76ead752e04aeba36925b944d0da77fe9826a70980a1aa3d0bf9afbedfab79dd92e799c9252931384c89ebec9b012"
+      , "subdir": "libgit2-1.7.2"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.git2"
@@ -429,11 +427,11 @@
   , "catch2":
     { "repository":
       { "type": "archive"
-      , "content": "fd54249eeb20894ece50696a84ef674a0052b6da"
-      , "fetch": "https://github.com/catchorg/Catch2/archive/refs/tags/v3.3.2.tar.gz"
-      , "sha256": "8361907f4d9bff3ae7c1edb027f813659f793053c99b67837a0c0375f065bae2"
-      , "sha512": "3d0c5666509a19be54ea0c48a3c8e1c4a951a2d991a7c9f7fe6d326661464538f1ab9dc573b1b2647f49fb6bef45bbd866142a4ce0fba38545ad182b8d55f61f"
-      , "subdir": "Catch2-3.3.2"
+      , "content": "5af653af0c54ad580176a8cadb5a1cef8c880372"
+      , "fetch": "https://github.com/catchorg/Catch2/archive/refs/tags/v3.5.3.tar.gz"
+      , "sha256": "8d723b0535c94860ef8cf6231580fa47d67a3416757ecb10639e40d748ab6c71"
+      , "sha512": "57c996f679cbad212cb0fde39e506bade37bd559c0e93e20f407f2a2f029e98b78661e10257f9c8e4cb5fd7d52d0ea1eae3d4a1f989c6d66fcb281e32e1688f6"
+      , "subdir": "Catch2-3.5.3"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.catch2"
@@ -443,11 +441,11 @@
   , "com_github_curl_curl":
     { "repository":
       { "type": "archive"
-      , "content": "23e33f9883e014ced35cc09f66b6b79a0b24e18d"
-      , "fetch": "https://github.com/curl/curl/releases/download/curl-8_2_1/curl-8.2.1.tar.gz"
-      , "sha256": "f98bdb06c0f52bdd19e63c4a77b5eb19b243bcbbd0f5b002b9f3cba7295a3a42"
-      , "sha512": "d0a906f4dff4c485e6dae930d9a7530147f4c0a0cbb46a83cb9be9d7bd6b9c320386c8be5bcdd3749f2d468b0daf39d06e8c581bab1fa792fd26da409a575cbd"
-      , "subdir": "curl-8.2.1"
+      , "content": "7b7ace4d7cc7d4059163bbd789ef7071e5d326e5"
+      , "fetch": "https://github.com/curl/curl/releases/download/curl-8_6_0/curl-8.6.0.tar.gz"
+      , "sha256": "9c6db808160015f30f3c656c0dec125feb9dc00753596bf858a272b5dd8dc398"
+      , "sha512": "43fdb6b81b394f3382d353d5f57673b2b3d26cfe34b25d08a526bc0597f508d5298e5a7088d0736d1f139cad19cd922affa51533c3a5a4bb5f2de68891c2958d"
+      , "subdir": "curl-8.6.0"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.curl"
@@ -461,11 +459,11 @@
   , "com_github_libarchive_libarchive":
     { "repository":
       { "type": "archive"
-      , "content": "922b6c729d391c010ffa6228134c164886bac0f1"
-      , "fetch": "https://github.com/libarchive/libarchive/releases/download/v3.7.1/libarchive-3.7.1.tar.gz"
-      , "sha256": "5d24e40819768f74daf846b99837fc53a3a9dcdf3ce1c2003fe0596db850f0f0"
-      , "sha512": "ccd36fc5e24e5feaad15b08496c4f6373f1bbb6ba657af5dc633b9d1454c98aba9a59ccffc48b41afc1219119d46c15d4db09c5855950422946e4dc058f17b88"
-      , "subdir": "libarchive-3.7.1"
+      , "content": "1293bda3e94bc96d7f9eed01c94b2136477b402a"
+      , "fetch": "https://github.com/libarchive/libarchive/releases/download/v3.7.2/libarchive-3.7.2.tar.gz"
+      , "sha256": "df404eb7222cf30b4f8f93828677890a2986b66ff8bf39dac32a804e96ddf104"
+      , "sha512": "1af253203df3014d1fbf3e99ebdc7aa2a3f036c7c2606d0f0550c49973b0fff99ee7262f4a6e20090c0806c40e964731334360daa3b718bde40108183eacc8a1"
+      , "subdir": "libarchive-3.7.2"
       }
     , "target_root": "import targets"
     , "target_file_name": "TARGETS.archive"

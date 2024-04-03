@@ -151,14 +151,6 @@
     , ["src/utils/cpp", "verify_hash"]
     ]
   }
-, "file_chunker":
-  { "type": ["@", "rules", "CC", "library"]
-  , "name": ["file_chunker"]
-  , "hdrs": ["file_chunker.hpp"]
-  , "srcs": ["file_chunker.cpp"]
-  , "stage": ["src", "buildtool", "execution_api", "execution_service"]
-  , "private-deps": [["@", "gsl", "", "gsl"]]
-  }
 , "cas_utils":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["cas_utils"]
@@ -171,15 +163,9 @@
     , ["src/buildtool/storage", "storage"]
     ]
   , "private-deps":
-    [ "file_chunker"
-    , ["@", "fmt", "", "fmt"]
-    , ["src/buildtool/common", "common"]
+    [ ["@", "fmt", "", "fmt"]
     , ["src/buildtool/compatibility", "compatibility"]
-    , ["src/buildtool/file_system", "git_repo"]
-    , ["src/buildtool/file_system", "object_type"]
     , ["src/buildtool/file_system", "file_system_manager"]
-    , ["src/buildtool/storage", "config"]
-    , ["src/utils/cpp", "hex_string"]
     ]
   }
 }

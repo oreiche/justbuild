@@ -32,7 +32,7 @@
     , ["src/buildtool/serve_api/remote", "config"]
     , ["src/buildtool/serve_api/serve_service", "serve_server_implementation"]
     , ["src/buildtool/common/remote", "retry_parameters"]
-    , ["src/buildtool/execution_api/execution_service", "file_chunker"]
+    , ["src/buildtool/storage", "file_chunker"]
     , "common"
     , "cli"
     , "version"
@@ -119,6 +119,7 @@
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/execution_api/utils", "subobject"]
+    , "archive"
     ]
   }
 , "add_to_cas":
@@ -279,6 +280,22 @@
   , "private-deps":
     [ ["src/buildtool/multithreading", "async_map_utils"]
     , ["src/buildtool/logging", "log_level"]
+    ]
+  }
+, "archive":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["archive"]
+  , "hdrs": ["archive.hpp"]
+  , "srcs": ["archive.cpp"]
+  , "deps":
+    [ ["src/buildtool/common", "common"]
+    , ["src/buildtool/execution_api/common", "common"]
+    ]
+  , "stage": ["src", "buildtool", "main"]
+  , "private-deps":
+    [ ["", "libarchive"]
+    , ["src/buildtool/file_system", "git_repo"]
+    , ["src/utils/cpp", "hex_string"]
     ]
   }
 }

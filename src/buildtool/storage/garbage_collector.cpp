@@ -16,6 +16,7 @@
 
 #include "src/buildtool/storage/garbage_collector.hpp"
 
+#include <cstddef>
 #include <filesystem>
 #include <vector>
 
@@ -65,6 +66,20 @@ auto GarbageCollector::GlobalUplinkBlob(bazel_re::Digest const& digest,
         // from older generations over copies from the companion file/exec CAS.
         if (Storage::Generation(i).CAS().LocalUplinkBlob(
                 latest_cas, digest, is_executable, /*skip_sync=*/true)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+auto GarbageCollector::GlobalUplinkLargeBlob(
+    bazel_re::Digest const& digest) noexcept -> bool {
+    // Try to find large entry in all generations.
+    auto const& latest_cas = Storage::Generation(0).CAS();
+    for (std::size_t i = 0; i < StorageConfig::NumGenerations(); ++i) {
+        if (Storage::Generation(i)
+                .CAS()
+                .LocalUplinkLargeObject<ObjectType::File>(latest_cas, digest)) {
             return true;
         }
     }
