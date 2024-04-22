@@ -118,6 +118,11 @@ output has been generated.
 **`--log-limit`** *`NUM`*  
 Log limit (higher is more verbose) in interval \[0,6\] (Default: 3).
 
+**`--restrict-stderr-log-limit`** *`NUM`*  
+Restrict logging on console to the minimum of the specified **`--log-limit`**
+and the value specified in this option. The default is to not additionally
+restrict the log level at the console.
+
 **`--plain-log`**  
 Do not use ANSI escape sequences to highlight messages.
 
@@ -139,6 +144,20 @@ location for archives, between local CAS (or distdirs) and the network.
 **`-R`**, **`--remote-serve-address`** *`NAME`*:*`PORT`*  
 Address of a **`just`** **`serve`** service. This is used as intermediary fetch
 location for Git commits, between local CAS and the network.
+
+**`--max-attempts`** *`NUM`*  
+If a remote procedure call (rpc) returns `grpc::StatusCode::UNAVAILABLE`, that
+rpc is retried at most *`NUM`* times. (Default: 1, i.e., no retry).
+
+**`--initial-backoff-seconds`** *`NUM`*  
+Before retrying the second time, the client will wait the given amount of
+seconds plus a jitter, to better distribute the workload. (Default: 1).
+
+**`--max-backoff-seconds`** *`NUM`*  
+From the third attempt (included) on, the backoff time is doubled at
+each attempt, until it exceeds the `max-backoff-seconds`
+parameter. From that point, the waiting time is computed as
+`max-backoff-seconds` plus a jitter. (Default: 60)
 
 **`--fetch-absent`**  
 Try to make available all repositories, including those marked as absent.

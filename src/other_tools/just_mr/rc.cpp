@@ -385,6 +385,49 @@ namespace {
                 entry->String());
         }
     }
+    // read the defaults for the retry parameters
+    if (not clargs->retry.max_attempts) {
+        auto max_attempts = rc_config["max attempts"];
+        if (max_attempts.IsNotNull()) {
+            if (not max_attempts->IsNumber()) {
+                Logger::Log(LogLevel::Error,
+                            "Configuration-file provided \"max attempts\" has "
+                            "to be a number, but found {}",
+                            max_attempts->ToString());
+                std::exit(kExitConfigError);
+            }
+            clargs->retry.max_attempts =
+                static_cast<unsigned int>(std::lround(max_attempts->Number()));
+        }
+    }
+    if (not clargs->retry.initial_backoff_seconds) {
+        auto initial_backoff_seconds = rc_config["initial backoff seconds"];
+        if (initial_backoff_seconds.IsNotNull()) {
+            if (not initial_backoff_seconds->IsNumber()) {
+                Logger::Log(LogLevel::Error,
+                            "Configuration-file provided \"initial backoff "
+                            "seconds\" has to be a number, but found {}",
+                            initial_backoff_seconds->ToString());
+                std::exit(kExitConfigError);
+            }
+            clargs->retry.initial_backoff_seconds = static_cast<unsigned int>(
+                std::lround(initial_backoff_seconds->Number()));
+        }
+    }
+    if (not clargs->retry.max_backoff_seconds) {
+        auto max_backoff_seconds = rc_config["max backoff seconds"];
+        if (max_backoff_seconds.IsNotNull()) {
+            if (not max_backoff_seconds->IsNumber()) {
+                Logger::Log(LogLevel::Error,
+                            "Configuration-file provided \"max backoff "
+                            "seconds\" has to be a number, but found {}",
+                            max_backoff_seconds->ToString());
+                std::exit(kExitConfigError);
+            }
+            clargs->retry.max_backoff_seconds = static_cast<unsigned int>(
+                std::lround(max_backoff_seconds->Number()));
+        }
+    }
     // read default for local launcher
     if (not clargs->common.local_launcher) {
         auto launcher = rc_config["local launcher"];
@@ -426,7 +469,21 @@ namespace {
                 std::exit(kExitConfigError);
             }
             clargs->log.log_limit = ToLogLevel(limit->Number());
-            LogConfig::SetLogLimit(*clargs->log.log_limit);
+        }
+    }
+    // Set restrict stderr log limit, if specified and not set on the command
+    // line
+    if (not clargs->log.restrict_stderr_log_limit) {
+        auto limit = rc_config["restrict stderr log limit"];
+        if (limit.IsNotNull()) {
+            if (not limit->IsNumber()) {
+                Logger::Log(LogLevel::Error,
+                            "Configuration-file specified log-limit has to be "
+                            "a number, but found {}",
+                            limit->ToString());
+                std::exit(kExitConfigError);
+            }
+            clargs->log.restrict_stderr_log_limit = ToLogLevel(limit->Number());
         }
     }
     // Add additional log sinks specified in the rc file.
@@ -444,10 +501,6 @@ namespace {
                 ReadLocation(log_file->ToJson(),
                              clargs->common.just_mr_paths->workspace_root);
             if (path) {
-                LogConfig::AddSink(LogSinkFile::CreateFactory(
-                    path->first,
-                    clargs->log.log_append ? LogSinkFile::Mode::Append
-                                           : LogSinkFile::Mode::Overwrite));
                 clargs->log.log_files.emplace_back(path->first);
             }
         }

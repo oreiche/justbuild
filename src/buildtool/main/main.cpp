@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -49,6 +50,7 @@
 #include "src/buildtool/main/diagnose.hpp"
 #include "src/buildtool/main/exit_codes.hpp"
 #include "src/buildtool/main/install_cas.hpp"
+#include "src/buildtool/main/retry.hpp"
 #include "src/buildtool/main/version.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
@@ -63,7 +65,6 @@
 #ifndef BOOTSTRAP_BUILD_TOOL
 #include "fmt/core.h"
 #include "src/buildtool/auth/authentication.hpp"
-#include "src/buildtool/common/remote/retry_parameters.hpp"
 #include "src/buildtool/execution_api/execution_service/operation_cache.hpp"
 #include "src/buildtool/execution_api/execution_service/server_implementation.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
@@ -87,7 +88,8 @@ void SetupDefaultLogging() {
 
 void SetupLogging(LogArguments const& clargs) {
     LogConfig::SetLogLimit(clargs.log_limit);
-    LogConfig::SetSinks({LogSinkCmdLine::CreateFactory(not clargs.plain_log)});
+    LogConfig::SetSinks({LogSinkCmdLine::CreateFactory(
+        not clargs.plain_log, clargs.restrict_stderr_log_limit)});
     for (auto const& log_file : clargs.log_files) {
         LogConfig::AddSink(LogSinkFile::CreateFactory(
             log_file,
@@ -325,29 +327,6 @@ void SetupHashFunction() {
 
 void SetupFileChunker() {
     FileChunker::Initialize();
-}
-
-void SetupRetryConfig(RetryArguments const& args) {
-    if (args.max_attempts) {
-        if (!Retry::SetMaxAttempts(*args.max_attempts)) {
-            Logger::Log(LogLevel::Error, "Invalid value for max-attempts.");
-            std::exit(kExitFailure);
-        }
-    }
-    if (args.initial_backoff_seconds) {
-        if (!Retry::SetInitialBackoffSeconds(*args.initial_backoff_seconds)) {
-            Logger::Log(LogLevel::Error,
-                        "Invalid value for initial-backoff-seconds.");
-            std::exit(kExitFailure);
-        }
-    }
-    if (args.max_backoff_seconds) {
-        if (!Retry::SetMaxBackoffSeconds(*args.max_backoff_seconds)) {
-            Logger::Log(LogLevel::Error,
-                        "Invalid value for max-backoff-seconds.");
-            std::exit(kExitFailure);
-        }
-    }
 }
 
 #endif  // BOOTSTRAP_BUILD_TOOL
@@ -929,7 +908,9 @@ auto main(int argc, char* argv[]) -> int {
         Progress progress{};
 
 #ifndef BOOTSTRAP_BUILD_TOOL
-        SetupRetryConfig(arguments.retry);
+        if (not SetupRetryConfig(arguments.retry)) {
+            std::exit(kExitFailure);
+        }
         GraphTraverser const traverser{
             {jobs,
              std::move(arguments.build),
@@ -1016,14 +997,36 @@ auto main(int argc, char* argv[]) -> int {
                 arguments.common.jobs};
             auto id = ReadConfiguredTarget(
                 main_repo, main_ws_root, &repo_config, arguments.analysis);
-            auto result =
-                AnalyseTarget(id,
-                              &result_map,
-                              &repo_config,
-                              Storage::Instance().TargetCache(),
-                              &stats,
-                              arguments.common.jobs,
-                              arguments.analysis.request_action_input);
+            auto serve_errors = nlohmann::json::array();
+            std::mutex serve_errors_access{};
+            BuildMaps::Target::ServeFailureLogReporter collect_serve_errors =
+                [&serve_errors, &serve_errors_access](auto target, auto blob) {
+                    std::unique_lock lock(serve_errors_access);
+                    auto target_desc = nlohmann::json::array();
+                    target_desc.push_back(target.target.ToJson());
+                    target_desc.push_back(target.config.ToJson());
+                    auto entry = nlohmann::json::array();
+                    entry.push_back(target_desc);
+                    entry.push_back(blob);
+                    serve_errors.push_back(entry);
+                };
+            auto result = AnalyseTarget(id,
+                                        &result_map,
+                                        &repo_config,
+                                        Storage::Instance().TargetCache(),
+                                        &stats,
+                                        arguments.common.jobs,
+                                        arguments.analysis.request_action_input,
+                                        /*logger=*/nullptr,
+                                        &collect_serve_errors);
+            if (arguments.analysis.serve_errors_file) {
+                Logger::Log(
+                    serve_errors.empty() ? LogLevel::Debug : LogLevel::Info,
+                    "Dumping serve-error information to {}",
+                    arguments.analysis.serve_errors_file->string());
+                std::ofstream os(*arguments.analysis.serve_errors_file);
+                os << serve_errors.dump() << std::endl;
+            }
             if (result) {
                 if (arguments.analysis.graph_file) {
                     result_map.ToFile(

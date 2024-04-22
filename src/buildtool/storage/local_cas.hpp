@@ -54,6 +54,26 @@ class LocalCAS {
                           base.string() + "-large-" +
                               (Compatibility::IsCompatible() ? 'f' : 't')} {}
 
+    /// \brief Obtain path to the storage root.
+    /// \param type             Type of the storage to be obtained.
+    /// \param large            True if a large storage is needed.
+    [[nodiscard]] auto StorageRoot(ObjectType type,
+                                   bool large = false) const noexcept
+        -> std::filesystem::path const& {
+        if (large) {
+            return IsTreeObject(type) ? cas_tree_large_.StorageRoot()
+                                      : cas_file_large_.StorageRoot();
+        }
+        switch (type) {
+            case ObjectType::Tree:
+                return cas_tree_.StorageRoot();
+            case ObjectType::Executable:
+                return cas_exec_.StorageRoot();
+            default:
+                return cas_file_.StorageRoot();
+        }
+    }
+
     /// \brief Store blob from file path with x-bit.
     /// \tparam kOwner          Indicates ownership for optimization (hardlink).
     /// \param file_path        The path of the file to store as blob.
@@ -106,6 +126,18 @@ class LocalCAS {
         -> std::optional<std::filesystem::path> {
         auto const path = BlobPathNoSync(digest, is_executable);
         return path ? path : TrySyncBlob(digest, is_executable);
+    }
+
+    /// \brief Obtain blob path from digest with x-bit.
+    /// Synchronization between file/executable CAS is skipped.
+    /// \param digest           Digest of the blob to lookup.
+    /// \param is_executable    Lookup blob with executable permissions.
+    /// \returns Path to the blob if found or nullopt otherwise.
+    [[nodiscard]] auto BlobPathNoSync(bazel_re::Digest const& digest,
+                                      bool is_executable) const noexcept
+        -> std::optional<std::filesystem::path> {
+        return is_executable ? cas_exec_.BlobPath(digest)
+                             : cas_file_.BlobPath(digest);
     }
 
     /// \brief Split a blob into chunks.
@@ -214,13 +246,16 @@ class LocalCAS {
     /// \param digest           The digest of the blob to uplink.
     /// \param is_executable    Uplink blob with executable permissions.
     /// \param skip_sync        Do not sync between file/executable CAS.
+    /// \param splice_result    Create the result of splicing in the latest
+    /// generation.
     /// \returns True if blob was successfully uplinked.
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
     requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkBlob(
         LocalGenerationCAS const& latest,
         bazel_re::Digest const& digest,
         bool is_executable,
-        bool skip_sync = false) const noexcept -> bool;
+        bool skip_sync = false,
+        bool splice_result = false) const noexcept -> bool;
 
     /// \brief Uplink tree from this generation to latest LocalCAS generation.
     /// This function is only available for instances that are used as local GC
@@ -233,11 +268,14 @@ class LocalCAS {
     /// \tparam kIsLocalGeneration  True if this instance is a local generation.
     /// \param latest   The latest LocalCAS generation.
     /// \param digest   The digest of the tree to uplink.
+    /// \param splice_result    Create the result of splicing in the latest
+    /// generation.
     /// \returns True if tree was successfully uplinked.
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
     requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkTree(
         LocalGenerationCAS const& latest,
-        bazel_re::Digest const& digest) const noexcept -> bool;
+        bazel_re::Digest const& digest,
+        bool splice_result = false) const noexcept -> bool;
 
     /// \brief Uplink large entry from this generation to latest LocalCAS
     /// generation. This function is only available for instances that are used
@@ -280,14 +318,6 @@ class LocalCAS {
         return ObjectCAS<kType>::kDefaultExists;
     }
 
-    /// \brief Get blob path without sync between file/executable CAS.
-    [[nodiscard]] auto BlobPathNoSync(bazel_re::Digest const& digest,
-                                      bool is_executable) const noexcept
-        -> std::optional<std::filesystem::path> {
-        return is_executable ? cas_exec_.BlobPath(digest)
-                             : cas_file_.BlobPath(digest);
-    }
-
     /// \brief Try to sync blob between file CAS and executable CAS.
     /// \param digest        Blob digest.
     /// \param to_executable Sync direction.
@@ -305,14 +335,15 @@ class LocalCAS {
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
     requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkGitTree(
         LocalGenerationCAS const& latest,
-        bazel_re::Digest const& digest) const noexcept -> bool;
+        bazel_re::Digest const& digest,
+        bool splice_result = false) const noexcept -> bool;
 
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
     requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkBazelDirectory(
         LocalGenerationCAS const& latest,
         bazel_re::Digest const& digest,
-        gsl::not_null<std::unordered_set<bazel_re::Digest>*> const& seen)
-        const noexcept -> bool;
+        gsl::not_null<std::unordered_set<bazel_re::Digest>*> const& seen,
+        bool splice_result = false) const noexcept -> bool;
 
     template <ObjectType kType, bool kIsLocalGeneration = not kDoGlobalUplink>
     requires(kIsLocalGeneration) [[nodiscard]] auto TrySplice(

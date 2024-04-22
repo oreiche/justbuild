@@ -2,7 +2,7 @@
 [![Tests](../../actions/workflows/tests.yml/badge.svg)](https://github.com/oreiche/justbuild/actions/workflows/tests.yml)
 [![Bootstrap and Deploy](../../actions/workflows/deploy.yml/badge.svg)](../../releases)
 
-Justbuild is a generic build system supporting multi-repository
+*justbuild* is a generic build system supporting multi-repository
 builds. A peculiarity of the tool is the separation between global
 names and physical location on the one hand, and logical paths
 used for actions and installation on the other hand (sometimes referred to as
@@ -19,7 +19,7 @@ taken from user-defined rules described by functional expressions.
 * Tutorial
   - [Getting Started](doc/tutorial/getting-started.md)
   - [Hello World](doc/tutorial/hello-world.md)
-  - [Third party dependencies](doc/tutorial/third-party-software.md)
+  - [Third-party dependencies](doc/tutorial/third-party-software.md)
   - [Tests](doc/tutorial/tests.md)
   - [Targets versus `FILE`, `GLOB`, and `TREE`](doc/tutorial/target-file-glob-tree.md)
   - [Ensuring reproducibility](doc/tutorial/rebuild.md)

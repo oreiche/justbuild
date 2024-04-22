@@ -14,10 +14,12 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <string>
 
 #include "catch2/catch_session.hpp"
 #include "src/buildtool/file_system/git_context.hpp"
 #include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/file_chunker.hpp"
 #include "test/utils/logging/log_config.hpp"
 
 auto main(int argc, char* argv[]) -> int {
@@ -42,6 +44,9 @@ auto main(int argc, char* argv[]) -> int {
     if (not setup_ok) {
         return 1;
     }
+
+    // Initialize random content of the file chunker's map.
+    FileChunker::Initialize();
 
     return Catch::Session().run(argc, argv);
 }

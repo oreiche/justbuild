@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -28,7 +29,9 @@
 #include "src/buildtool/compatibility/native_support.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/buildtool/storage/large_object_cas.hpp"
 #include "src/buildtool/storage/storage.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
@@ -65,8 +68,8 @@ using File = Blob<false>;
 
 class Tree final {
   public:
-    static constexpr auto kLargeId = std::string_view("tree_256");
-    static constexpr auto kLargeSize = std::uintmax_t(256);
+    static constexpr auto kLargeId = std::string_view("tree_4096");
+    static constexpr auto kLargeSize = std::uintmax_t(4096);
 
     static constexpr auto kSmallId = std::string_view("tree_1");
     static constexpr auto kSmallSize = std::uintmax_t(1);
@@ -151,13 +154,6 @@ static void TestLarge() noexcept {
 
         CHECK(FileSystemManager::RemoveFile(path));
         CHECK_FALSE(FileSystemManager::IsFile(path));
-        // For executables the non-executable entry must be also deleted.
-        if constexpr (kIsExec) {
-            auto blob_path = cas.BlobPath(digest, /*is_executable=*/false);
-            REQUIRE(blob_path);
-            CHECK(FileSystemManager::RemoveFile(*blob_path));
-            CHECK_FALSE(FileSystemManager::IsFile(*blob_path));
-        }
 
         SECTION("Split short-circuting") {
             // Check the second call loads the entry from the large CAS:
@@ -309,14 +305,6 @@ static void TestEmpty() noexcept {
         CHECK(FileSystemManager::RemoveFile(path));
         CHECK_FALSE(FileSystemManager::IsFile(path));
 
-        // For executables the non-executable entry must be also deleted.
-        if constexpr (kIsExec) {
-            auto blob_path = cas.BlobPath(digest, /*is_executable=*/false);
-            REQUIRE(blob_path);
-            CHECK(FileSystemManager::RemoveFile(*blob_path));
-            CHECK_FALSE(FileSystemManager::IsFile(*blob_path));
-        }
-
         // Split must not find the large entry:
         auto pack_2 = kIsTree ? cas.SplitTree(digest) : cas.SplitBlob(digest);
         auto* error_2 = std::get_if<LargeObjectError>(&pack_2);
@@ -434,6 +422,67 @@ static void TestExternal() noexcept {
     }
 }
 
+// Test compactification of a storage generation.
+// If there are objects in the storage that have an entry in
+// the large CAS, they must be deleted during compactification.
+// All splitable objects in the generation must be split.
+template <ObjectType kType>
+static void TestCompactification() {
+    SECTION("Compactify") {
+        static constexpr bool kIsTree = IsTreeObject(kType);
+        static constexpr bool kIsExec = IsExecutableObject(kType);
+
+        using TestType = std::conditional_t<kIsTree,
+                                            LargeTestUtils::Tree,
+                                            LargeTestUtils::Blob<kIsExec>>;
+
+        auto const& cas = Storage::Instance().CAS();
+
+        // Create a large object and split it:
+        auto object = TestType::Create(
+            cas, std::string(TestType::kLargeId), TestType::kLargeSize);
+        REQUIRE(object);
+        auto& [digest, path] = *object;
+        auto result = kIsTree ? cas.SplitTree(digest) : cas.SplitBlob(digest);
+        REQUIRE(std::get_if<std::vector<bazel_re::Digest>>(&result) != nullptr);
+
+        // For trees the size must be increased to exceed the internal
+        // compactification threshold:
+        static constexpr auto ExceedThresholdSize =
+            kIsTree ? TestType::kLargeSize * 8 : TestType::kLargeSize;
+
+        // Create a large object that is to be split during compactification:
+        auto object_2 = TestType::Create(
+            cas, std::string(TestType::kLargeId) + "_2", ExceedThresholdSize);
+        REQUIRE(object_2);
+        auto& [digest_2, path_2] = *object_2;
+
+        // Ensure all entries are in the storage:
+        auto get_path = [](auto const& cas, bazel_re::Digest const& digest) {
+            return kIsTree ? cas.TreePath(digest)
+                           : cas.BlobPath(digest, kIsExec);
+        };
+
+        auto const& latest = Storage::Generation(0).CAS();
+        REQUIRE(get_path(latest, digest).has_value());
+        REQUIRE(get_path(latest, digest_2).has_value());
+
+        // Compactify the youngest generation:
+        // Generation rotation is disabled to exclude uplinking.
+        static constexpr bool no_rotation = true;
+        REQUIRE(GarbageCollector::TriggerGarbageCollection(no_rotation));
+
+        // All entries must be deleted during compactification, and for blobs
+        // and executables there are no synchronized entries in the storage:
+        REQUIRE_FALSE(get_path(latest, digest).has_value());
+        REQUIRE_FALSE(get_path(latest, digest_2).has_value());
+
+        // All entries must be implicitly splicable:
+        REQUIRE(get_path(cas, digest).has_value());
+        REQUIRE(get_path(cas, digest_2).has_value());
+    }
+}
+
 TEST_CASE_METHOD(HermeticLocalTestFixture,
                  "LocalCAS: Split-Splice",
                  "[storage]") {
@@ -442,18 +491,21 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
         TestSmall<ObjectType::File>();
         TestEmpty<ObjectType::File>();
         TestExternal<ObjectType::File>();
+        TestCompactification<ObjectType::File>();
     }
     SECTION("Tree") {
         TestLarge<ObjectType::Tree>();
         TestSmall<ObjectType::Tree>();
         TestEmpty<ObjectType::Tree>();
         TestExternal<ObjectType::Tree>();
+        TestCompactification<ObjectType::Tree>();
     }
     SECTION("Executable") {
         TestLarge<ObjectType::Executable>();
         TestSmall<ObjectType::Executable>();
         TestEmpty<ObjectType::Executable>();
         TestExternal<ObjectType::Executable>();
+        TestCompactification<ObjectType::Executable>();
     }
 }
 
@@ -529,11 +581,22 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     auto result_path = cas.TreePath(*large_tree_digest);
     REQUIRE(result_path);
 
-    // The nested tree and all it's large parts must be spliced to the same
-    // locations:
-    CHECK(FileSystemManager::IsFile(*nested_tree_path));
-    CHECK(FileSystemManager::IsFile(*nested_blob_path));
+    // Only the main object must be reconstructed:
     CHECK(FileSystemManager::IsFile(*large_tree_path));
+
+    // It's parts must not be reconstructed by default:
+    CHECK_FALSE(FileSystemManager::IsFile(*nested_tree_path));
+    CHECK_FALSE(FileSystemManager::IsFile(*nested_blob_path));
+
+    auto const& latest_cas = Storage::Generation(0).CAS();
+
+    // However, they might be reconstructed on request because there entries are
+    // in the latest generation:
+    auto split_nested_tree_2 = latest_cas.SplitTree(*nested_tree_digest);
+    REQUIRE_FALSE(std::get_if<LargeObjectError>(&split_nested_tree_2));
+
+    auto split_nested_blob_2 = latest_cas.SplitBlob(*nested_blob_digest);
+    REQUIRE_FALSE(std::get_if<LargeObjectError>(&split_nested_blob_2));
 
     // Check there are no spliced results in old generations:
     for (std::size_t i = 1; i < StorageConfig::NumGenerations(); ++i) {
@@ -543,17 +606,6 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
         REQUIRE_FALSE(generation_cas.BlobPath(*nested_blob_digest,
                                               /*is_executable=*/false));
     }
-
-    // Check large entries are in the latest generation:
-    auto const& latest_cas = Storage::Generation(0).CAS();
-    auto split_nested_tree_2 = latest_cas.SplitTree(*nested_tree_digest);
-    REQUIRE_FALSE(std::get_if<LargeObjectError>(&split_nested_tree_2));
-
-    auto split_nested_blob_2 = latest_cas.SplitBlob(*nested_blob_digest);
-    REQUIRE_FALSE(std::get_if<LargeObjectError>(&split_nested_blob_2));
-
-    auto split_large_tree_2 = latest_cas.SplitTree(*large_tree_digest);
-    REQUIRE_FALSE(std::get_if<LargeObjectError>(&split_large_tree_2));
 }
 namespace {
 

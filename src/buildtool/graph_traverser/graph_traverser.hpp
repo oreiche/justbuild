@@ -393,6 +393,7 @@ class GraphTraverser {
                           dispatch_list_,
                           stats_,
                           progress_,
+                          logger_,
                           clargs_.build.timeout};
         bool traversing{};
         std::atomic<bool> done = false;
@@ -700,7 +701,7 @@ class GraphTraverser {
         std::vector<DependencyGraph::ArtifactNode const*> const& artifacts)
         const {
         if (clargs_.build.print_to_stdout) {
-            for (size_t i = 0; i < paths.size(); i++) {
+            for (std::size_t i = 0; i < paths.size(); i++) {
                 if (paths[i] == *(clargs_.build.print_to_stdout)) {
                     auto info = artifacts[i]->Content().Info();
                     if (info) {
@@ -730,7 +731,7 @@ class GraphTraverser {
                                                 *clargs_.build.print_to_stdout})
                                    .relative_path();
             auto remote = GetRemoteApi();
-            for (size_t i = 0; i < paths.size(); i++) {
+            for (std::size_t i = 0; i < paths.size(); i++) {
                 auto const& path = paths[i];
                 auto relpath = target_path.lexically_relative(path);
                 if ((not relpath.empty()) and *relpath.begin() != "..") {

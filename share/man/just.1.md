@@ -440,6 +440,13 @@ Log limit (higher is more verbose) in interval \[0,6\] (Default: 3).
 Supported by:
 add-to-cas|analyse|build|describe|install|install-cas|rebuild|traverse|gc|execute.
 
+**`--restrict-stderr-log-limit`** *`NUM`*  
+Restrict logging on console to the minimum of the specified **`--log-limit`**
+and the value specified in this option. The default is to not additionally
+restrict the log level at the console.  
+Supported by:
+add-to-cas|analyse|build|describe|install|install-cas|rebuild|traverse|gc|execute.
+
 **`--plain-log`**  
 Do not use ANSI escape sequences to highlight messages.  
 Supported by:
@@ -454,6 +461,17 @@ add-to-cas|analyse|build|describe|install|install-cas|rebuild|traverse|gc|execut
 In error messages, truncate the entries in the enumeration of the active
 environment, as well as the expression to be evaluated, to the specified
 number of characters (default: 320).  
+Supported by: analyse|build|install.
+
+**`--serve-errors-log`** *`PATH`*  
+Path to local file in which **`just`** will write, in machine
+readable form, the references to all errors that occurred on the
+serve side. More precisely, the value will be a JSON array with one
+element per failure, where the element is a pair (array of length
+2) consisting of the configured target (serialized, as usual, as a
+pair of qualified target name an configuration) and a string with
+the hex representation of the blob identifier of the log; the log
+itself is guaranteed to be available on the remote-execution side.
 Supported by: analyse|build|install.
 
 **`-P`**, **`--print-to-stdout`** *`LOGICAL_PATH`*  

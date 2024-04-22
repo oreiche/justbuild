@@ -18,6 +18,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <memory>
 #include <vector>
 
 #include "nlohmann/json.hpp"
@@ -25,12 +26,14 @@
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/compatibility/native_support.hpp"
+#include "src/buildtool/execution_api/common/message_limits.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/compactifier.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
 #include "src/buildtool/storage/target_cache_entry.hpp"
@@ -65,7 +68,11 @@ auto GarbageCollector::GlobalUplinkBlob(bazel_re::Digest const& digest,
         // Note that we uplink with _skip_sync_ as we want to prefer hard links
         // from older generations over copies from the companion file/exec CAS.
         if (Storage::Generation(i).CAS().LocalUplinkBlob(
-                latest_cas, digest, is_executable, /*skip_sync=*/true)) {
+                latest_cas,
+                digest,
+                is_executable,
+                /*skip_sync=*/true,
+                /*splice_result=*/true)) {
             return true;
         }
     }
@@ -91,7 +98,8 @@ auto GarbageCollector::GlobalUplinkTree(bazel_re::Digest const& digest) noexcept
     // Try to find tree in all generations.
     auto const& latest_cas = Storage::Generation(0).CAS();
     for (std::size_t i = 0; i < StorageConfig::NumGenerations(); ++i) {
-        if (Storage::Generation(i).CAS().LocalUplinkTree(latest_cas, digest)) {
+        if (Storage::Generation(i).CAS().LocalUplinkTree(
+                latest_cas, digest, /*splice_result=*/true)) {
             return true;
         }
     }
@@ -231,6 +239,16 @@ auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
                             remove_me_dir.string());
             }
         }
+
+        // Compactification must take place before rotating generations.
+        // Otherwise, an interruption of the process during compactification
+        // would lead to an invalid old generation.
+        if (not GarbageCollector::Compactify(kMaxBatchTransferSize)) {
+            Logger::Log(LogLevel::Error,
+                        "Failed to compactify the youngest generation.");
+            return false;
+        }
+
         // Rotate generations unless told not to do so
         if (not no_rotation) {
             auto remove_me_dir =
@@ -271,6 +289,26 @@ auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
     }
 
     return success;
+}
+
+auto GarbageCollector::Compactify(size_t threshold) noexcept -> bool {
+    const bool mode = Compatibility::IsCompatible();
+
+    // Return to the initial compatibility mode once done:
+    auto scope_guard = std::shared_ptr<void>(nullptr, [mode](void* /*unused*/) {
+        Compatibility::SetCompatible(mode);
+    });
+
+    // Compactification must be done for both native and compatible storages.
+    auto compactify = [threshold](bool compatible) -> bool {
+        auto const storage =
+            ::Generation(StorageConfig::GenerationCacheDir(0, compatible));
+        Compatibility::SetCompatible(compatible);
+
+        return Compactifier::RemoveSpliced(storage.CAS()) and
+               Compactifier::SplitLarge(storage.CAS(), threshold);
+    };
+    return compactify(mode) and compactify(not mode);
 }
 
 #endif  // BOOTSTRAP_BUILD_TOOL

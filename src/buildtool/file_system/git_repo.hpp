@@ -183,6 +183,15 @@ class GitRepo {
                                      anon_logger_ptr const& logger) noexcept
         -> bool;
 
+    /// \brief Ensure given tree is kept alive via a tag. It is expected that
+    /// the tree is part of the repository already.
+    /// Only possible with real repository and thus non-thread-safe.
+    /// Returns success flag.
+    /// It guarantees the logger is called exactly once with fatal if failure.
+    [[nodiscard]] auto KeepTree(std::string const& tree_id,
+                                std::string const& message,
+                                anon_logger_ptr const& logger) noexcept -> bool;
+
     /// \brief Get the tree id of a subtree given the root commit
     /// Calling it from a fake repository allows thread-safe use.
     /// Returns an error + data union, where at index 0 is a flag stating the
@@ -262,6 +271,15 @@ class GitRepo {
     [[nodiscard]] auto TryReadBlob(std::string const& blob_id,
                                    anon_logger_ptr const& logger) noexcept
         -> std::pair<bool, std::optional<std::string>>;
+
+    /// \brief Write given content as a blob into underlying object database.
+    /// Calling it from a fake repository allows thread-safe use.
+    /// \returns Git ID of the written blob, or nullopt on errors.
+    /// It guarantees the logger is called exactly once with fatal if failure.
+    /// Use with care, especially for large objects.
+    [[nodiscard]] auto WriteBlob(std::string const& content,
+                                 anon_logger_ptr const& logger) noexcept
+        -> std::optional<std::string>;
 
     /// \brief Get the object info related to a given path inside a Git tree.
     /// Unlike GetSubtreeFromTree, we here ignore errors and only return a value

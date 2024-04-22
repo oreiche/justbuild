@@ -15,6 +15,7 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_STORAGE_LARGE_OBJECT_CAS_TPP
 #define INCLUDED_SRC_BUILDTOOL_STORAGE_LARGE_OBJECT_CAS_TPP
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -66,14 +67,15 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::ReadEntry(
     try {
         std::ifstream stream(*file_path);
         nlohmann::json j = nlohmann::json::parse(stream);
-        const size_t size = j.at("size").template get<size_t>();
+        const std::size_t size = j.at("size").template get<std::size_t>();
         parts.reserve(size);
 
         auto const& j_parts = j.at("parts");
-        for (size_t i = 0; i < size; ++i) {
+        for (std::size_t i = 0; i < size; ++i) {
             bazel_re::Digest& d = parts.emplace_back();
             d.set_hash(j_parts.at(i).at("hash").template get<std::string>());
-            d.set_size_bytes(j_parts.at(i).at("size").template get<int64_t>());
+            d.set_size_bytes(
+                j_parts.at(i).at("size").template get<std::int64_t>());
         }
     } catch (...) {
         return std::nullopt;
@@ -123,9 +125,18 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::Split(
     }
 
     // Get path to the file:
-    auto file_path = IsTreeObject(kType)
-                         ? local_cas_.TreePath(digest)
-                         : local_cas_.BlobPath(digest, /*is_executable=*/false);
+    std::optional<std::filesystem::path> file_path;
+    if constexpr (IsTreeObject(kType)) {
+        file_path = local_cas_.TreePath(digest);
+    }
+    else {
+        // Avoid synchronization between file/executable storages:
+        static constexpr bool kIsExec = IsExecutableObject(kType);
+        file_path = local_cas_.BlobPathNoSync(digest, kIsExec);
+        file_path = file_path ? file_path
+                              : local_cas_.BlobPathNoSync(digest, not kIsExec);
+    }
+
     if (not file_path) {
         return LargeObjectError{
             LargeObjectErrorCode::FileNotFound,

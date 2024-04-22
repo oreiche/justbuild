@@ -375,6 +375,7 @@ auto SourceTreeService::SyncArchive(std::string const& tree_id,
 auto SourceTreeService::ResolveContentTree(
     std::string const& tree_id,
     std::filesystem::path const& repo_path,
+    bool repo_is_git_cache,
     std::optional<PragmaSpecial> const& resolve_special,
     bool sync_tree,
     ServeArchiveTreeResponse* response) -> ::grpc::Status {
@@ -396,7 +397,26 @@ auto SourceTreeService::ResolveContentTree(
             return SyncArchive(
                 *resolved_tree_id, repo_path, sync_tree, response);
         }
-        // resolve tree
+        // resolve tree; target repository is always the Git cache
+        auto target_cas = GitCAS::Open(StorageConfig::GitRoot());
+        if (not target_cas) {
+            auto str = fmt::format("Failed to open Git ODB at {}",
+                                   StorageConfig::GitRoot().string());
+            logger_->Emit(LogLevel::Error, str);
+            response->set_status(ServeArchiveTreeResponse::INTERNAL_ERROR);
+            return ::grpc::Status::OK;
+        }
+        auto source_cas = target_cas;
+        if (not repo_is_git_cache) {
+            source_cas = GitCAS::Open(repo_path);
+            if (not source_cas) {
+                auto str = fmt::format("Failed to open Git ODB at {}",
+                                       repo_path.string());
+                logger_->Emit(LogLevel::Error, str);
+                response->set_status(ServeArchiveTreeResponse::INTERNAL_ERROR);
+                return ::grpc::Status::OK;
+            }
+        }
         ResolvedGitObject resolved_tree{};
         bool failed{false};
         {
@@ -406,7 +426,9 @@ auto SourceTreeService::ResolveContentTree(
                 {GitObjectToResolve{tree_id,
                                     ".",
                                     *resolve_special,
-                                    /*known_info=*/std::nullopt}},
+                                    /*known_info=*/std::nullopt,
+                                    source_cas,
+                                    target_cas}},
                 [&resolved_tree](auto hashes) { resolved_tree = *hashes[0]; },
                 [logger = logger_, tree_id, &failed](auto const& msg,
                                                      bool fatal) {
@@ -434,7 +456,39 @@ auto SourceTreeService::ResolveContentTree(
             response->set_status(ServeArchiveTreeResponse::RESOLVE_ERROR);
             return ::grpc::Status::OK;
         }
-        // cache the resolved tree
+        // keep tree alive in the Git cache via a tagged commit
+        auto wrapped_logger = std::make_shared<GitRepo::anon_logger_t>(
+            [logger = logger_, resolved_tree](auto const& msg, bool fatal) {
+                if (fatal) {
+                    logger->Emit(LogLevel::Error,
+                                 fmt::format("While keeping tree {} in "
+                                             "repository {}:\n{}",
+                                             resolved_tree.id,
+                                             StorageConfig::GitRoot().string(),
+                                             msg));
+                }
+            });
+        {
+            // this is a non-thread-safe Git operation, so it must be guarded!
+            std::shared_lock slock{mutex_};
+            // open real repository at Git CAS location
+            auto git_repo = GitRepo::Open(StorageConfig::GitRoot());
+            if (not git_repo) {
+                auto str = fmt::format("Failed to open Git CAS repository {}",
+                                       StorageConfig::GitRoot().string());
+                logger_->Emit(LogLevel::Error, str);
+                response->set_status(ServeArchiveTreeResponse::RESOLVE_ERROR);
+                return ::grpc::Status::OK;
+            }
+            // Important: message must be consistent with just-mr!
+            if (not git_repo->KeepTree(resolved_tree.id,
+                                       "Keep referenced tree alive",  // message
+                                       wrapped_logger)) {
+                response->set_status(ServeArchiveTreeResponse::RESOLVE_ERROR);
+                return ::grpc::Status::OK;
+            }
+        }
+        // cache the resolved tree association
         if (not StorageUtils::WriteTreeIDFile(tree_id_file, resolved_tree.id)) {
             auto str =
                 fmt::format("Failed to write resolved tree id to file {}",
@@ -625,6 +679,7 @@ auto SourceTreeService::ArchiveImportToGit(
     }
     return ResolveContentTree(*subtree_id,
                               StorageConfig::GitRoot(),
+                              /*repo_is_git_cache=*/true,
                               resolve_special,
                               sync_tree,
                               response);
@@ -689,6 +744,7 @@ auto SourceTreeService::ServeArchiveTree(
         if (std::holds_alternative<std::string>(res)) {
             return ResolveContentTree(std::get<std::string>(res),  // tree_id
                                       StorageConfig::GitRoot(),
+                                      /*repo_is_git_cache=*/true,
                                       resolve_special,
                                       request->sync_tree(),
                                       response);
@@ -709,6 +765,7 @@ auto SourceTreeService::ServeArchiveTree(
                 return ResolveContentTree(
                     std::get<std::string>(res),  // tree_id
                     path,
+                    /*repo_is_git_cache=*/false,
                     resolve_special,
                     request->sync_tree(),
                     response);

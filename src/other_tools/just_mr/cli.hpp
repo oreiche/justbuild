@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -28,6 +29,7 @@
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/common/clidefaults.hpp"
+#include "src/buildtool/common/retry_cli.hpp"
 #include "src/buildtool/common/user_structs.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
 #include "src/buildtool/logging/log_level.hpp"
@@ -61,6 +63,7 @@ struct MultiRepoCommonArguments {
 struct MultiRepoLogArguments {
     std::vector<std::filesystem::path> log_files{};
     std::optional<LogLevel> log_limit{};
+    std::optional<LogLevel> restrict_stderr_log_limit{};
     bool plain_log{false};
     bool log_append{false};
 };
@@ -112,6 +115,7 @@ enum class SubCommand {
 struct CommandLineArguments {
     SubCommand cmd{SubCommand::kUnknown};
     MultiRepoCommonArguments common;
+    RetryArguments retry;
     MultiRepoLogArguments log;
     MultiRepoSetupArguments setup;
     MultiRepoFetchArguments fetch;
@@ -275,6 +279,14 @@ static inline auto SetupMultiRepoLogArguments(
                        static_cast<int>(kFirstLogLevel),
                        static_cast<int>(kLastLogLevel),
                        static_cast<int>(kDefaultLogLevel)))
+        ->type_name("NUM");
+    app->add_option_function<std::underlying_type_t<LogLevel>>(
+           "--restrict-stderr-log-limit",
+           [clargs](auto const& limit) {
+               clargs->restrict_stderr_log_limit = ToLogLevel(limit);
+           },
+           "Restrict logging on console to the minimum of the specified "
+           "--log-limit and this value")
         ->type_name("NUM");
     app->add_flag("--plain-log",
                   clargs->plain_log,

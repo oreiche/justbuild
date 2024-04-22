@@ -19,8 +19,10 @@
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "CLI/CLI.hpp"
@@ -29,6 +31,7 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/expression/evaluator.hpp"
 #include "src/buildtool/common/clidefaults.hpp"
+#include "src/buildtool/common/retry_cli.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/main/build_utils.hpp"
@@ -47,6 +50,7 @@ struct CommonArguments {
 struct LogArguments {
     std::vector<std::filesystem::path> log_files{};
     LogLevel log_limit{kDefaultLogLevel};
+    std::optional<LogLevel> restrict_stderr_log_limit{};
     bool plain_log{false};
     bool log_append{false};
 };
@@ -66,6 +70,7 @@ struct AnalysisArguments {
     std::optional<std::filesystem::path> expression_root{};
     std::optional<std::filesystem::path> graph_file{};
     std::optional<std::filesystem::path> artifacts_to_build_file{};
+    std::optional<std::filesystem::path> serve_errors_file{};
 };
 
 /// \brief Arguments required for describing targets/rules.
@@ -86,13 +91,6 @@ struct DiagnosticArguments {
     std::optional<std::string> dump_targets_graph{std::nullopt};
     std::optional<std::string> dump_anonymous{std::nullopt};
     std::optional<std::string> dump_nodes{std::nullopt};
-};
-
-/// \brief Arguments required for tuning the retry strategy.
-struct RetryArguments {
-    std::optional<unsigned int> max_attempts{};
-    std::optional<unsigned int> initial_backoff_seconds{};
-    std::optional<unsigned int> max_backoff_seconds{};
 };
 
 /// \brief Arguments required for specifying build endpoint.
@@ -249,6 +247,14 @@ static inline auto SetupLogArguments(
                        static_cast<int>(kLastLogLevel),
                        static_cast<int>(kDefaultLogLevel)))
         ->type_name("NUM");
+    app->add_option_function<std::underlying_type_t<LogLevel>>(
+           "--restrict-stderr-log-limit",
+           [clargs](auto const& limit) {
+               clargs->restrict_stderr_log_limit = ToLogLevel(limit);
+           },
+           "Restrict logging on console to the minimum of the specified "
+           "--log-limit and this value")
+        ->type_name("NUM");
     app->add_flag("--plain-log",
                   clargs->plain_log,
                   "Do not use ANSI escape sequences to highlight messages.");
@@ -319,6 +325,11 @@ static inline auto SetupAnalysisArguments(
     app->add_option("--expression-file-name",
                     clargs->expression_file_name,
                     "Name of the expressions file.");
+    app->add_option("--serve-errors-log",
+                    clargs->serve_errors_file,
+                    "File path for dumping the blob identifiers of serve "
+                    "errors as json.")
+        ->type_name("PATH");
     if (with_graph) {
         app->add_option(
                "--dump-graph",
@@ -438,7 +449,8 @@ static inline auto SetupExecutionPropertiesArguments(
            "option multiple times will accumulate pairs (latest wins).")
         ->type_name("KEY:VAL")
         ->allow_extra_args(false)
-        ->expected(1, 1);
+        ->expected(1)
+        ->take_all();
 }
 
 static inline auto SetupServeEndpointArguments(
@@ -741,27 +753,6 @@ static inline auto SetupServeArguments(
                     serve_args->config,
                     "Configuration file for the subcommand.")
         ->required();
-}
-
-static inline void SetupRetryArguments(
-    gsl::not_null<CLI::App*> const& app,
-    gsl::not_null<RetryArguments*> const& args) {
-    app->add_option(
-        "--max-attempts",
-        args->max_attempts,
-        "Total number of attempts in case of a remote resource becomes "
-        "unavailable. Must be greater than 0. (Default: 1)");
-    app->add_option(
-        "--initial-backoff-seconds",
-        args->initial_backoff_seconds,
-        "Initial amount of time, in seconds, to wait before retrying a rpc "
-        "call. The waiting time is doubled at each attempt. Must be greater "
-        "than 0. (Default: 1)");
-    app->add_option("--max-backoff-seconds",
-                    args->max_backoff_seconds,
-                    "The backoff time cannot be bigger than this parameter. "
-                    "Note that some jitter is still added to avoid to overload "
-                    "the resources that survived the outage. (Default: 60)");
 }
 
 static inline void SetupGcArguments(gsl::not_null<CLI::App*> const& app,

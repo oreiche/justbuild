@@ -23,8 +23,8 @@ namespace {
 
 // Mask values taken from algorithm 2 of the paper
 // https://ieeexplore.ieee.org/document/9055082.
-constexpr std::uint64_t kMaskS{0x0000d9f003530000ULL};  // 15 '1' bits
-constexpr std::uint64_t kMaskL{0x0000d90003530000ULL};  // 11 '1' bits
+constexpr std::uint64_t kMaskS{0x4444d9f003530000ULL};  // 19 '1' bits
+constexpr std::uint64_t kMaskL{0x4444d90003530000ULL};  // 15 '1' bits
 
 // Predefined array of 256 random 64-bit integers, needs to be initialized.
 constexpr std::uint32_t kRandomTableSize{256};
@@ -99,14 +99,14 @@ auto FileChunker::NextChunkBoundary() noexcept -> std::size_t {
     }
     for (; i < normal_size; i++) {
         fp = (fp << 1U) +
-             gsl::at(gear_table, static_cast<uint8_t>(buffer_[pos_ + i]));
+             gsl::at(gear_table, static_cast<std::uint8_t>(buffer_[pos_ + i]));
         if ((fp & kMaskS) == 0) {
             return i;  // if the masked bits are all '0'
         }
     }
     for (; i < n; i++) {
         fp = (fp << 1U) +
-             gsl::at(gear_table, static_cast<uint8_t>(buffer_[pos_ + i]));
+             gsl::at(gear_table, static_cast<std::uint8_t>(buffer_[pos_ + i]));
         if ((fp & kMaskL) == 0) {
             return i;  // if the masked bits are all '0'
         }

@@ -7,6 +7,7 @@
     , ["src/buildtool/build_engine/base_maps", "entity_name_data"]
     , ["src/buildtool/build_engine/expression", "expression"]
     , ["src/utils/cpp", "hash_combine"]
+    , ["src/utils/cpp", "json"]
     ]
   , "stage": ["src", "buildtool", "build_engine", "target_map"]
   }
@@ -66,6 +67,7 @@
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "hash_combine"]
+    , ["src/utils/cpp", "json"]
     , ["src/utils/cpp", "path"]
     , ["src/utils/cpp", "path_hash"]
     , ["src/utils/cpp", "vector"]
@@ -113,6 +115,8 @@
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/serve_api/remote", "serve_api"]
+    , ["src/utils/cpp", "json"]
+    , ["@", "json", "", "json"]
     ]
   }
 }

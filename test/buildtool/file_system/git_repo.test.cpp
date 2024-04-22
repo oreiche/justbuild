@@ -12,15 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <atomic>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
 #include <thread>
+#include <variant>
+#include <vector>
 
 #include "catch2/catch_test_macros.hpp"
+#include "fmt/core.h"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/file_system/git_cas.hpp"
 #include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/atomic.hpp"
+#include "src/utils/cpp/hex_string.hpp"
 #include "test/utils/shell_quoting.hpp"
 
 namespace {
@@ -33,6 +44,9 @@ auto const kRootId = std::string{"18770dacfe14c15d88450c21c16668e13ab0e7f9"};
 auto const kBazId = std::string{"1868f82682c290f0b1db3cacd092727eef1fa57f"};
 auto const kFooId = std::string{"19102815663d23f8b75a47e7a01965dcdc96468c"};
 auto const kBarId = std::string{"ba0e162e1c47469e3fe4b393a8bf8c569f302116"};
+
+auto const kFooBarTreeId =
+    std::string{"27b32561185c2825150893774953906c6daa6798"};
 
 }  // namespace
 
@@ -230,9 +244,210 @@ TEST_CASE("Single-threaded real repository local operations", "[git_repo]") {
         CHECK(repo_fetch_branch->FetchFromPath(
             nullptr, *path_fetch_branch, "master", logger));
     }
+
+    SECTION("Tag tree") {
+        auto repo_tag_path = TestUtils::CreateTestRepo(true);
+        REQUIRE(repo_tag_path);
+        auto repo_tag = GitRepo::Open(*repo_tag_path);
+        REQUIRE(repo_tag);
+        CHECK_FALSE(repo_tag->IsRepoFake());
+
+        // tag tree already root of a commit
+        CHECK(repo_tag->KeepTree(kRootId, "test tag 1", logger));
+
+        // tag tree part of another commit
+        CHECK(repo_tag->KeepTree(kBazId, "test tag 2", logger));
+
+        // tag uncommitted tree
+        auto foo_bar = GitRepo::tree_entries_t{
+            {FromHexString(kFooId).value_or<std::string>({}),
+             {GitRepo::tree_entry_t{"foo", ObjectType::File}}},
+            {FromHexString(kBarId).value_or<std::string>({}),
+             {GitRepo::tree_entry_t{"bar", ObjectType::Executable}}}};
+        auto foo_bar_id = repo_tag->CreateTree(foo_bar);
+        REQUIRE(foo_bar_id);
+        auto tree_id = ToHexString(*foo_bar_id);
+        CHECK(tree_id == kFooBarTreeId);
+        CHECK(repo_tag->KeepTree(tree_id, "test tag 3", logger));
+    }
 }
 
-TEST_CASE("Single-threaded fake repository operations", "[git_repo]") {
+// NOTE: "fake" repo ops tests split into two batches as workaround for
+// CATCH2_INTERNAL_TEST_16 function size/complexity threshold exceeding lint
+// warning
+TEST_CASE("Single-threaded fake repository operations -- batch 1",
+          "[git_repo]") {
+    auto repo_path = TestUtils::CreateTestRepoWithCheckout();
+    REQUIRE(repo_path);
+    auto cas = GitCAS::Open(*repo_path);
+    REQUIRE(cas);
+    auto repo = GitRepo::Open(cas);
+    REQUIRE(repo);
+    REQUIRE(repo->GetGitCAS() == cas);
+    REQUIRE(repo->IsRepoFake());
+
+    // setup dummy logger
+    auto logger = std::make_shared<GitRepo::anon_logger_t>(
+        [](auto const& msg, bool fatal) {
+            Logger::Log(fatal ? LogLevel::Error : LogLevel::Progress,
+                        std::string(msg));
+        });
+
+    SECTION("Check tree exists") {
+        auto res = repo->CheckTreeExists(kRootId, logger);
+        REQUIRE(res);
+        CHECK(*res);
+
+        res = repo->CheckTreeExists(kBazId, logger);
+        REQUIRE(res);
+        CHECK(*res);
+
+        res = repo->CheckTreeExists(kFooId, logger);
+        REQUIRE(res);
+        CHECK_FALSE(*res);
+    }
+
+    SECTION("Check blob exists") {
+        auto res = repo->CheckBlobExists(kFooId, logger);
+        REQUIRE(res);
+        CHECK(*res);
+
+        res = repo->CheckBlobExists(kBarId, logger);
+        REQUIRE(res);
+        CHECK(*res);
+
+        res = repo->CheckBlobExists(kBazId, logger);
+        REQUIRE(res);
+        CHECK_FALSE(*res);
+    }
+
+    SECTION("Write and read blobs") {
+        SECTION("Existing blobs") {
+            auto res = repo->TryReadBlob(kFooId, logger);
+            REQUIRE(res.first);
+            REQUIRE(res.second);
+            CHECK(res.second == "foo");
+
+            res = repo->TryReadBlob(kBarId, logger);
+            REQUIRE(res.first);
+            REQUIRE(res.second);
+            CHECK(res.second == "bar");
+
+            res = repo->TryReadBlob(kBazId, logger);
+            REQUIRE(res.first);       // search succeeded...
+            CHECK_FALSE(res.second);  // ...but blob not found
+        }
+
+        SECTION("New blobs in existing repo") {
+            auto w = repo->WriteBlob("foobar", logger);
+            REQUIRE(w);
+            auto blob_id = w.value();
+
+            auto r = repo->TryReadBlob(blob_id, logger);
+            REQUIRE(r.first);
+            REQUIRE(r.second);
+            CHECK(r.second == "foobar");
+        }
+
+        SECTION("Overwrite blob does not fail") {
+            auto w = repo->WriteBlob("foo", logger);
+            REQUIRE(w);
+            CHECK(w == kFooId);
+        }
+
+        SECTION("New blobs in bare repo") {
+            // make blank repo
+            auto repo_path = TestUtils::GetRepoPath();
+            auto repo = GitRepo::InitAndOpen(repo_path, /*is_bare=*/false);
+            REQUIRE(repo);
+            CHECK_FALSE(repo->IsRepoFake());
+
+            auto w = repo->WriteBlob("foobar", logger);
+            REQUIRE(w);
+            auto blob_id = w.value();
+
+            auto r = repo->TryReadBlob(blob_id, logger);
+            REQUIRE(r.first);
+            REQUIRE(r.second);
+            CHECK(r.second == "foobar");
+        }
+    }
+
+    SECTION("Check if commit exists in repository") {
+        SECTION("Repository containing commit") {
+            auto path_containing = TestUtils::CreateTestRepo();
+            REQUIRE(path_containing);
+            auto cas_containing = GitCAS::Open(*path_containing);
+            REQUIRE(cas_containing);
+            auto repo_containing = GitRepo::Open(cas_containing);
+            REQUIRE(repo_containing);
+
+            auto result_containing =
+                repo_containing->CheckCommitExists(kRootCommit, logger);
+            CHECK(*result_containing);
+        }
+
+        SECTION("Repository not containing commit") {
+            auto path_non_bare = TestUtils::GetRepoPath();
+            {
+                auto repo_tmp =
+                    GitRepo::InitAndOpen(path_non_bare, /*is_bare=*/false);
+                REQUIRE(repo_tmp);
+            }
+            auto cas_non_bare = GitCAS::Open(path_non_bare);
+            REQUIRE(cas_non_bare);
+            auto repo_non_bare = GitRepo::Open(cas_non_bare);
+            REQUIRE(repo_non_bare);
+
+            auto result_non_bare =
+                repo_non_bare->CheckCommitExists(kRootCommit, logger);
+            CHECK_FALSE(*result_non_bare);
+        }
+    }
+
+    SECTION("Fetch from local repository via temporary repository") {
+        SECTION("Fetch all") {
+            // set repo to fetch into
+            auto path_fetch_all = TestUtils::GetRepoPath();
+            auto repo_fetch_all =
+                GitRepo::InitAndOpen(path_fetch_all, /*is_bare=*/true);
+            REQUIRE(repo_fetch_all);
+
+            // check commit is not there before fetch
+            CHECK_FALSE(
+                *repo_fetch_all->CheckCommitExists(kRootCommit, logger));
+
+            // fetch all with base refspecs
+            REQUIRE(repo_fetch_all->LocalFetchViaTmpRepo(
+                *repo_path, std::nullopt, logger));
+
+            // check commit is there after fetch
+            CHECK(*repo_fetch_all->CheckCommitExists(kRootCommit, logger));
+        }
+
+        SECTION("Fetch branch") {
+            // set repo to fetch into
+            auto path_fetch_branch = TestUtils::GetRepoPath();
+            auto repo_fetch_branch =
+                GitRepo::InitAndOpen(path_fetch_branch, /*is_bare=*/true);
+            REQUIRE(repo_fetch_branch);
+
+            // check commit is not there before fetch
+            CHECK_FALSE(
+                *repo_fetch_branch->CheckCommitExists(kRootCommit, logger));
+
+            // fetch branch
+            REQUIRE(repo_fetch_branch->LocalFetchViaTmpRepo(
+                *repo_path, "master", logger));
+
+            // check commit is there after fetch
+            CHECK(*repo_fetch_branch->CheckCommitExists(kRootCommit, logger));
+        }
+    }
+}
+
+TEST_CASE("Single-threaded fake repository operations -- batch 2",
+          "[git_repo]") {
     auto repo_path = TestUtils::CreateTestRepoWithCheckout();
     REQUIRE(repo_path);
     auto cas = GitCAS::Open(*repo_path);
@@ -333,38 +548,6 @@ TEST_CASE("Single-threaded fake repository operations", "[git_repo]") {
         }
     }
 
-    SECTION("Check if commit exists in repository") {
-        SECTION("Repository containing commit") {
-            auto path_containing = TestUtils::CreateTestRepo();
-            REQUIRE(path_containing);
-            auto cas_containing = GitCAS::Open(*path_containing);
-            REQUIRE(cas_containing);
-            auto repo_containing = GitRepo::Open(cas_containing);
-            REQUIRE(repo_containing);
-
-            auto result_containing =
-                repo_containing->CheckCommitExists(kRootCommit, logger);
-            CHECK(*result_containing);
-        }
-
-        SECTION("Repository not containing commit") {
-            auto path_non_bare = TestUtils::GetRepoPath();
-            {
-                auto repo_tmp =
-                    GitRepo::InitAndOpen(path_non_bare, /*is_bare=*/false);
-                REQUIRE(repo_tmp);
-            }
-            auto cas_non_bare = GitCAS::Open(path_non_bare);
-            REQUIRE(cas_non_bare);
-            auto repo_non_bare = GitRepo::Open(cas_non_bare);
-            REQUIRE(repo_non_bare);
-
-            auto result_non_bare =
-                repo_non_bare->CheckCommitExists(kRootCommit, logger);
-            CHECK_FALSE(*result_non_bare);
-        }
-    }
-
     SECTION("Read object from tree by relative path") {
         SECTION("Non-existing") {
             auto obj_info =
@@ -392,46 +575,6 @@ TEST_CASE("Single-threaded fake repository operations", "[git_repo]") {
             CHECK(obj_info->type == ObjectType::Symlink);
             CHECK(obj_info->symlink_content);
             CHECK(*obj_info->symlink_content == "bar");
-        }
-    }
-
-    SECTION("Fetch from local repository via temporary repository") {
-        SECTION("Fetch all") {
-            // set repo to fetch into
-            auto path_fetch_all = TestUtils::GetRepoPath();
-            auto repo_fetch_all =
-                GitRepo::InitAndOpen(path_fetch_all, /*is_bare=*/true);
-            REQUIRE(repo_fetch_all);
-
-            // check commit is not there before fetch
-            CHECK_FALSE(
-                *repo_fetch_all->CheckCommitExists(kRootCommit, logger));
-
-            // fetch all with base refspecs
-            REQUIRE(repo_fetch_all->LocalFetchViaTmpRepo(
-                *repo_path, std::nullopt, logger));
-
-            // check commit is there after fetch
-            CHECK(*repo_fetch_all->CheckCommitExists(kRootCommit, logger));
-        }
-
-        SECTION("Fetch branch") {
-            // set repo to fetch into
-            auto path_fetch_branch = TestUtils::GetRepoPath();
-            auto repo_fetch_branch =
-                GitRepo::InitAndOpen(path_fetch_branch, /*is_bare=*/true);
-            REQUIRE(repo_fetch_branch);
-
-            // check commit is not there before fetch
-            CHECK_FALSE(
-                *repo_fetch_branch->CheckCommitExists(kRootCommit, logger));
-
-            // fetch branch
-            REQUIRE(repo_fetch_branch->LocalFetchViaTmpRepo(
-                *repo_path, "master", logger));
-
-            // check commit is there after fetch
-            CHECK(*repo_fetch_branch->CheckCommitExists(kRootCommit, logger));
         }
     }
 }
@@ -462,7 +605,7 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
     threads.reserve(kNumThreads);
 
     SECTION("Lookups in the same ODB") {
-        constexpr int NUM_CASES = 6;
+        constexpr int NUM_CASES = 10;
         for (int id{}; id < kNumThreads; ++id) {
             threads.emplace_back(
                 [&remote_cas, &remote_repo_path, &logger, &starting_signal](
@@ -507,6 +650,62 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
                             auto remote_repo = GitRepo::Open(remote_cas);
                             REQUIRE(remote_repo);
                             REQUIRE(remote_repo->IsRepoFake());
+                            // Lookup trees
+                            auto res =
+                                remote_repo->CheckTreeExists(kRootId, logger);
+                            REQUIRE(res);
+                            CHECK(*res);
+                            res = remote_repo->CheckTreeExists(kBazId, logger);
+                            REQUIRE(res);
+                            CHECK(*res);
+                        } break;
+                        case 4: {
+                            auto remote_repo = GitRepo::Open(remote_cas);
+                            REQUIRE(remote_repo);
+                            REQUIRE(remote_repo->IsRepoFake());
+                            // Lookup blobs
+                            auto res =
+                                remote_repo->CheckBlobExists(kFooId, logger);
+                            REQUIRE(res);
+                            CHECK(*res);
+                            res = remote_repo->CheckBlobExists(kBarId, logger);
+                            REQUIRE(res);
+                            CHECK(*res);
+                        } break;
+                        // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+                        case 5: {
+                            auto remote_repo = GitRepo::Open(remote_cas);
+                            REQUIRE(remote_repo);
+                            REQUIRE(remote_repo->IsRepoFake());
+                            // Read blobs
+                            auto res = remote_repo->TryReadBlob(kFooId, logger);
+                            REQUIRE(res.first);
+                            REQUIRE(res.second);
+                            CHECK(res.second == "foo");
+                            res = remote_repo->TryReadBlob(kBarId, logger);
+                            REQUIRE(res.first);
+                            REQUIRE(res.second);
+                            CHECK(res.second == "bar");
+                        } break;
+                        // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+                        case 6: {
+                            auto remote_repo = GitRepo::Open(remote_cas);
+                            REQUIRE(remote_repo);
+                            REQUIRE(remote_repo->IsRepoFake());
+                            // Write blobs
+                            auto res = remote_repo->WriteBlob(
+                                std::to_string(tid), logger);
+                            REQUIRE(res);
+                            // ...including existing content
+                            res = remote_repo->WriteBlob("foo", logger);
+                            REQUIRE(res);
+                            CHECK(res == kFooId);
+                        } break;
+                        // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+                        case 7: {
+                            auto remote_repo = GitRepo::Open(remote_cas);
+                            REQUIRE(remote_repo);
+                            REQUIRE(remote_repo->IsRepoFake());
                             // Get subtree entry id from path
                             auto path_baz = *remote_repo_path / "baz";
                             auto entry_baz_p = remote_repo->GetSubtreeFromPath(
@@ -514,7 +713,8 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
                             REQUIRE(entry_baz_p);
                             CHECK(*entry_baz_p == kBazId);
                         } break;
-                        case 4: {
+                        // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+                        case 8: {
                             auto remote_repo = GitRepo::Open(remote_cas);
                             REQUIRE(remote_repo);
                             REQUIRE(remote_repo->IsRepoFake());
@@ -524,7 +724,7 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
                             CHECK(*result_containing);
                         } break;
                         // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
-                        case 5: {
+                        case 9: {
                             auto remote_repo = GitRepo::Open(remote_cas);
                             REQUIRE(remote_repo);
                             REQUIRE(remote_repo->IsRepoFake());

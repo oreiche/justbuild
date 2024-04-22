@@ -50,11 +50,11 @@ namespace Target = BuildMaps::Target;
         }
     }
     else {
-        if (((static_cast<int64_t>(actions.size())) +
-             static_cast<int64_t>(number)) >= 0) {
+        if (((static_cast<std::int64_t>(actions.size())) +
+             static_cast<std::int64_t>(number)) >= 0) {
             return actions[static_cast<std::size_t>(
-                (static_cast<int64_t>(actions.size())) +
-                static_cast<int64_t>(number))];
+                (static_cast<std::int64_t>(actions.size())) +
+                static_cast<std::int64_t>(number))];
         }
     }
     return std::nullopt;
@@ -101,7 +101,9 @@ namespace Target = BuildMaps::Target;
     gsl::not_null<Statistics*> const& stats,
     std::size_t jobs,
     std::optional<std::string> const& request_action_input,
-    Logger const* logger) -> std::optional<AnalysisResult> {
+    Logger const* logger,
+    BuildMaps::Target::ServeFailureLogReporter* serve_log)
+    -> std::optional<AnalysisResult> {
     // create progress tracker for export targets
     Progress exports_progress{};
     // create async maps
@@ -124,7 +126,8 @@ namespace Target = BuildMaps::Target;
                                       repo_config,
                                       stats,
                                       &exports_progress,
-                                      jobs);
+                                      jobs,
+                                      serve_log);
     auto target_map = Target::CreateTargetMap(&source_targets,
                                               &targets_file_map,
                                               &rule_map,

@@ -87,6 +87,10 @@ The just-mrrc is given by a JSON object.
    value for the log limit, that can be overridden by the command-line
    options.
 
+ - The value for the key *`"restrict stderr log limit"`*, if given,
+   sets the default value for the restriction of the log limit on
+   console; this value can be overridden by the command-line option.
+
  - The value *`"log files"`*, if given, has to be a list of location
    objects, specifying additional log files, on top of those specified
    on the command line.
@@ -122,6 +126,21 @@ The just-mrrc is given by a JSON object.
    provided, has to be a list of strings. Each entry is forwarded
    as `--remote-execution-property` to the invocation of the build
    tool, if **`just-mr`** is used as a launcher.
+
+ - The value for the key *`"max attempts"`*, if provided, has
+   to be a number. If a remote procedure call (rpc) returns
+   `grpc::StatusCode::UNAVAILABLE`, that rpc is retried at most
+   this number of times.
+
+ - The value for the key *`"initial backoff seconds"`*, if provided,
+   has to be a number. Before retrying an rpc the second time, the
+   client will wait the given amount of seconds plus a jitter, to
+   better distribute the workload.
+
+ - The value for the key *`"max backoff seconds"`*, if provided,
+   has to be a number. Normally, on subsequent retries, the backoff
+   time is doubled; this number specifies the maximal time between
+   attempts of an rpc, not counting the jitter.
 
  - The value for the key *`"just files"`* is a JSON object. The keys correspond
    to options that some **`just`** subcommands accept and require a file as
@@ -171,7 +190,8 @@ An example just-mrrc file could look like the following:
 , "local build root": {"root": "home", "path": ".cache/just"}
 , "checkout locations": {"root": "home", "path": ".just-local.json"}
 , "local launcher": ["env", "--"]
-, "log limit": 4
+, "log limit": 5
+, "restrict stderr log limit": 4
 , "log files": [{"root": "home", "path": ".log/just/latest-invocation"}]
 , "distdirs": [{"root": "home", "path": ".distfiles"}]
 , "just": {"root": "system", "path": "usr/bin/just"}

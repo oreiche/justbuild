@@ -26,11 +26,10 @@
 #include <optional>
 #include <unordered_set>
 
-#include <fcntl.h>
-
 #ifdef __unix__
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
