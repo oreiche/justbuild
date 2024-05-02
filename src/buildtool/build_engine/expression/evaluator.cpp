@@ -176,6 +176,14 @@ auto LogicalOr(SubExprEvaluator&& eval,
     return ExpressionPtr{false};
 }
 
+// Logical Negation
+auto Not(ExpressionPtr const& expr) -> ExpressionPtr {
+    if (ValueIsTrue(expr)) {
+        return ExpressionPtr{false};
+    }
+    return ExpressionPtr{true};
+}
+
 auto Keys(ExpressionPtr const& d) -> ExpressionPtr {
     auto const& m = d->Map();
     auto result = Expression::list_t{};
@@ -230,6 +238,15 @@ auto Reverse(ExpressionPtr const& expr) -> ExpressionPtr {
     auto reverse_result = Expression::list_t(expr->List());
     std::reverse(reverse_result.begin(), reverse_result.end());
     return ExpressionPtr{reverse_result};
+}
+
+auto Length(ExpressionPtr const& expr) -> ExpressionPtr {
+    if (not expr->IsList()) {
+        throw Evaluator::EvaluationError{fmt::format(
+            "length expects list but instead got: {}.", expr->ToString())};
+    }
+    return ExpressionPtr{
+        static_cast<Expression::number_t>(expr->List().size())};
 }
 
 auto NubRight(ExpressionPtr const& expr) -> ExpressionPtr {
@@ -486,7 +503,7 @@ auto IfExpr(SubExprEvaluator&& eval,
             ExpressionPtr const& expr,
             Configuration const& env) -> ExpressionPtr {
     if (ValueIsTrue(EvalArgument(expr, "cond", eval, env))) {
-        return EvalArgument(expr, "then", eval, env);
+        return eval(expr->Get("then", list_t{}), env);
     }
     return eval(expr->Get("else", list_t{}), env);
 }
@@ -1027,6 +1044,26 @@ auto FailExpr(SubExprEvaluator&& eval,
         msg->ToString(), false, /* user error*/ true);
 }
 
+auto AssertExpr(SubExprEvaluator&& eval,
+                ExpressionPtr const& expr,
+                Configuration const& env) -> ExpressionPtr {
+    auto val = eval(expr["$1"], env);
+    auto const& var = expr->Get("var", "_"s);
+    auto pred = eval(expr["predicate"], env.Update(var->String(), val));
+    if (ValueIsTrue(pred)) {
+        return val;
+    }
+    auto msg_expr = expr->Get("msg", Expression::kNone);
+    std::string msg;
+    try {
+        auto msg_val = eval(msg_expr, env.Update(var->String(), val));
+        msg = msg_val->ToString();
+    } catch (std::exception const&) {
+        msg = "[non evaluating term] " + msg_expr->ToString();
+    }
+    throw Evaluator::EvaluationError(msg, false, /* user error */ true);
+}
+
 auto AssertNonEmptyExpr(SubExprEvaluator&& eval,
                         ExpressionPtr const& expr,
                         Configuration const& env) -> ExpressionPtr {
@@ -1057,11 +1094,13 @@ auto const kBuiltInFunctions =
                           {"case", CaseExpr},
                           {"case*", SeqCaseExpr},
                           {"fail", FailExpr},
+                          {"assert", AssertExpr},
                           {"assert_non_empty", AssertNonEmptyExpr},
                           {"context", ContextExpr},
                           {"==", EqualExpr},
                           {"and", AndExpr},
                           {"or", OrExpr},
+                          {"not", UnaryExpr(Not)},
                           {"++", UnaryExpr(Flatten)},
                           {"+", UnaryExpr(Addition)},
                           {"*", UnaryExpr(Multiplication)},
@@ -1077,6 +1116,7 @@ auto const kBuiltInFunctions =
                           {"enumerate", UnaryExpr(Enumerate)},
                           {"set", UnaryExpr(Set)},
                           {"reverse", UnaryExpr(Reverse)},
+                          {"length", UnaryExpr(Length)},
                           {"values", UnaryExpr(Values)},
                           {"lookup", LookupExpr},
                           {"[]", ArrayAccessExpr},

@@ -107,12 +107,12 @@ expression power. It is equivalent but lot shorter to multiple
 
 ###### Binary conditional: `"if"`
 
-First the key `"cond"` is evaluated. If it evaluates to a
-value that is logically true, then the key `"then"` is
-evaluated and its value is the result of the evaluation.
-Otherwise, the key `"else"` (if present, otherwise `[]` is
-taken as default) is evaluated and the obtained value is the
-result of the evaluation.
+First the key `"cond"` is evaluated. If it evaluates to a value that
+is logically true, then the key `"then"` (if present, otherwise `[]`
+is taken as default) is evaluated and its value is the result of
+the evaluation. Otherwise, the key `"else"` (if present, otherwise
+`[]` is taken as default) is evaluated and the obtained value is
+the result of the evaluation.
 
 ###### Sequential conditional: `"cond"`
 
@@ -213,6 +213,10 @@ those) argument(s) to obtain the final result.
 
 ##### Unary functions
 
+ - `"not"` Return the logical negation of the argument, i.e.,
+   if the argument is logically false, return `true`, and `false`
+   otherwise.
+
  - `"nub_right"` The argument has to be a list. It is an error
    if that list contains (directly or indirectly) a name. The
    result is the input list, except that for all duplicate
@@ -256,6 +260,9 @@ those) argument(s) to obtain the final result.
 - `"reverse"` The argument has to be a list. The result is a new list
   with the entries in reverse order.
 
+- `"length"` The argument has to be a list. The result is the length
+  of the list.
+
  - `"++"` The argument has to be a list of lists. The result is
    the concatenation of those lists.
 
@@ -264,7 +271,7 @@ those) argument(s) to obtain the final result.
    neutral element 0).
 
  - `"*"` The argument has to be a list of numbers. The result
-   is their product (where the producut of the empty list is, of
+   is their product (where the product of the empty list is, of
    course, the neutral element 1).
 
  - `"map_union"` The argument has to be a list of maps. The
@@ -300,7 +307,7 @@ those) argument(s) to obtain the final result.
    default `""`).
 
  - `"escape_chars"` Prefix every in the argument every
-   character occuring in `"chars"` (a string, default `""`) by
+   character occurring in `"chars"` (a string, default `""`) by
    `"escape_prefix"` (a strings, default `"\"`).
 
  - `"to_subdir"` The argument has to be a map (not necessarily
@@ -391,3 +398,12 @@ that evaluation included in the error message presented to the user.
    two (or more) maps contain the same key, but map it to different
    values. It is also an error if the argument is a name-containing
    value.
+
+ - `"assert"` Evaluate the argument (given by the parameter `"$1"`);
+   then evaluate the expression `"predicate"` with the variable given
+   at the key `"var"` (which has to be a string literal if given,
+   default value is `"_"`) bound to that value. If the predicate
+   evaluates to a true value, return the result of evaluating the
+   argument, otherwise fail; in evaluating the failure message
+   `"msg"`, also keep the variable specified by `"var"` bound to
+   the result of evaluating the argument.

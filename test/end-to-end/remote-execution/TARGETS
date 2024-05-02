@@ -23,6 +23,12 @@
   , "test": ["install.sh"]
   , "deps": [["end-to-end", "tool-under-test"]]
   }
+, "execute":
+  { "type": ["end-to-end", "with remote"]
+  , "name": ["execute"]
+  , "test": ["execute.sh"]
+  , "deps": [["end-to-end", "tool-under-test"]]
+  }
 , "install-cas":
   { "type": ["end-to-end", "with remote"]
   , "name": ["install-cas"]
@@ -55,7 +61,10 @@
   , "config":
     { "type": "singleton_map"
     , "key": "TIMEOUT_SCALE"
-    , "value": {"type": "var", "name": "TIMEOUT_SCALE", "default": 10}
+    , "value":
+      { "type": "*"
+      , "$1": [10, {"type": "var", "name": "TIMEOUT_SCALE", "default": 1.0}]
+      }
     }
   }
 , "add-to-cas":
@@ -79,6 +88,7 @@
         , "install-cas"
         , "dispatch"
         , "split-splice"
+        , "execute"
         ]
       , { "type": "if"
         , "cond":

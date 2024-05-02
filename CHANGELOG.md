@@ -38,6 +38,11 @@ A feature release on top of `1.2.0`, backwards compatible.
   enabled whatever the distro considers suitable.
 - The `gc` subcommand supports an option `--no-rotate` to carry out
   only local clean up.
+- The expression language has been extended and, in particular,
+  allows indexed access to an arry (basically using it as a tuple)
+  and a generic form of assertion (to report user errors).
+- The `analyse` subcommand supports a new flag `--dump-result` to dump
+  the analysis result to a file or stdout (if `-` is given).
 
 ### Fixes
 
@@ -71,6 +76,10 @@ A feature release on top of `1.2.0`, backwards compatible.
   `git` for fetching and the URL is passed to `git` unchanged.
 - Improved portability and update of the bundled dependencies.
 - Various minor improvements and typo fixes in the documentation.
+- Fixed a race condition in the task queue that could cause (with
+  probability roughly 1e-5) a premature termination of the queue
+  resulting in spurious analysis failures without explanation (despite
+  "failed to analyse target").
 - Fixed a race condition in an internal cache of `just execute`
   used for keeping track of running operations.
 - The built-in rule `"install"` now properly enforces that the
@@ -90,6 +99,11 @@ A feature release on top of `1.2.0`, backwards compatible.
 - The command line option `"--remote-execution-property"` can be
   repeated multiple times to list all the properties, but only the
   last one was retained. This is fixed now.
+
+## Release `1.3.0~beta1` (2024-05-02)
+
+First beta release for the upcoming `1.3.0` release; see release
+notes there.
 
 ## Release `1.2.0` (2023-08-25)
 

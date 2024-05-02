@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <filesystem>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -478,6 +479,19 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
             CHECK(failure == Expression::FromJson(R"("failure")"_json));
         }
     }
+
+    SECTION("if defaults") {
+        auto expr = Expression::FromJson(R"(
+          { "type": "if"
+          , "cond": {"type": "var", "name": "x"}
+          }
+          )"_json);
+        CHECK(expr.Evaluate(env.Update("x", true), fcts) ==
+              Expression::FromJson(R"([])"_json));
+        CHECK(expr.Evaluate(env.Update("x", false), fcts) ==
+              Expression::FromJson(R"([])"_json));
+    }
+
     SECTION("cond expression") {
         auto expr = Expression::FromJson(R"(
             { "type": "cond"
@@ -631,6 +645,35 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
         REQUIRE(failure);
         REQUIRE(failure->IsBool());
         CHECK(failure == Expression::FromJson("false"_json));
+    }
+
+    SECTION("not expression") {
+        auto expr = Expression::FromJson(R"(
+            { "type": "not"
+            , "$1": {"type": "var", "name": "x" }
+            })"_json);
+        REQUIRE(expr);
+
+        CHECK(expr.Evaluate(env.Update("x", true), fcts) ==
+              Expression::FromJson("false"_json));
+        CHECK(expr.Evaluate(env.Update("x", false), fcts) ==
+              Expression::FromJson("true"_json));
+        CHECK(expr.Evaluate(env.Update("x", Expression::FromJson(R"([])"_json)),
+                            fcts) == Expression::FromJson("true"_json));
+        CHECK(expr.Evaluate(
+                  env.Update("x", Expression::FromJson(R"(["a"])"_json)),
+                  fcts) == Expression::FromJson("false"_json));
+        CHECK(expr.Evaluate(env.Update("x", Expression::FromJson("null"_json)),
+                            fcts) == Expression::FromJson("true"_json));
+        CHECK(expr.Evaluate(env.Update("x", Expression::FromJson("0"_json)),
+                            fcts) == Expression::FromJson("true"_json));
+        CHECK(expr.Evaluate(env.Update("x", Expression::FromJson("1"_json)),
+                            fcts) == Expression::FromJson("false"_json));
+        CHECK(expr.Evaluate(env.Update("x", Expression::FromJson(R"("")"_json)),
+                            fcts) == Expression::FromJson("true"_json));
+        CHECK(expr.Evaluate(
+                  env.Update("x", Expression::FromJson(R"("0")"_json)), fcts) ==
+              Expression::FromJson("false"_json));
     }
 
     SECTION("and expression") {
@@ -1007,6 +1050,19 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
         CHECK(result == Expression::FromJson(R"(
            ["baz", "bar", "foo"]
         )"_json));
+    }
+
+    SECTION("length expression") {
+        auto expr = Expression::FromJson(R"(
+          { "type": "length"
+          , "$1": ["foo", "bar", "baz"]
+          }
+        )"_json);
+        REQUIRE(expr);
+
+        auto result = expr.Evaluate(env, fcts);
+        REQUIRE(result);
+        CHECK(result == Expression::FromJson("3"_json));
     }
 
     SECTION("keys expression") {
@@ -1550,6 +1606,81 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
         REQUIRE(expr_null);
         auto null_result = expr_null.Evaluate(env, fcts);
         CHECK(null_result == Expression::FromJson(R"([])"_json));
+    }
+}
+
+TEST_CASE("Expression Assertions", "[expression]") {
+    using namespace std::string_literals;
+    auto env = Configuration{};
+    auto fcts = FunctionMapPtr{};
+
+    SECTION("fail") {
+        auto expr = Expression::FromJson(R"(
+         { "type": "fail"
+         , "msg": {"type": "join", "$1": ["ErRoR", "mEsSaGe"]}
+         }
+         )"_json);
+        REQUIRE(expr);
+
+        std::stringstream log{};
+        CHECK(not expr.Evaluate(env, fcts, [&](auto msg) { log << msg; }));
+        CHECK(log.str().find("ErRoRmEsSaGe") != std::string::npos);
+    }
+
+    SECTION("assert_non_empty") {
+        auto expr = Expression::FromJson(R"(
+           { "type": "assert_non_empty"
+           , "msg": "Found-Empty!!"
+           , "$1": {"type": "var", "name": "x"}
+           }
+           )"_json);
+        REQUIRE(expr);
+
+        auto list = Expression::FromJson(R"([1, 2, 3])"_json);
+        CHECK(expr.Evaluate(env.Update("x", list), fcts) == list);
+        auto map = Expression::FromJson(R"({"foo": "bar"})"_json);
+        CHECK(expr.Evaluate(env.Update("x", map), fcts) == map);
+
+        auto empty_list = Expression::FromJson(R"([])"_json);
+        std::stringstream log_list{};
+        CHECK(not expr.Evaluate(env.Update("x", empty_list),
+                                fcts,
+                                [&](auto msg) { log_list << msg; }));
+        CHECK(log_list.str().find("Found-Empty!!") != std::string::npos);
+
+        auto empty_map = Expression::FromJson(R"({})"_json);
+        std::stringstream log_map{};
+        CHECK(not expr.Evaluate(env.Update("x", empty_map),
+                                fcts,
+                                [&](auto msg) { log_map << msg; }));
+        CHECK(log_map.str().find("Found-Empty!!") != std::string::npos);
+    }
+
+    SECTION("assert") {
+        auto expr = Expression::FromJson(R"(
+           { "type": "assert"
+           , "predicate": {"type": "[]", "index": 0
+                           , "list": {"type": "var", "name": "_"}}
+           , "msg": ["First entry UNTRUE", {"type": "var", "name": "_"}]
+           , "$1": {"type": "++", "$1": [{"type": "var", "name": "x"}
+                                        , ["b", "c"]]}
+           })"_json);
+        REQUIRE(expr);
+
+        CHECK(expr.Evaluate(
+                  env.Update("x", Expression::FromJson(R"(["a"])"_json)),
+                  fcts) == Expression::FromJson(R"(["a", "b", "c"])"_json));
+
+        std::stringstream log{};
+        CHECK(not expr.Evaluate(
+            env.Update("x", Expression::FromJson(R"([false, "foo"])"_json)),
+            fcts,
+            [&](auto msg) { log << msg; }));
+        // log must contain the canoncial (minimal) repesentation of evaluating
+        // "msg"
+        CHECK(
+            log.str().find(R"(["First entry UNTRUE",[false,"foo","b","c"])"s) !=
+            std::string::npos);
     }
 }
 

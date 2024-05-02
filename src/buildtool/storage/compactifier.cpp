@@ -17,76 +17,222 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <variant>
 #include <vector>
 
 #include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/crypto/hasher.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_cas.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/compactification_task.hpp"
 #include "src/buildtool/storage/local_cas.hpp"
+#include "src/utils/cpp/hex_string.hpp"
 
 namespace {
-/// \brief Remove spliced entries from the kType storage.
+/// \brief Remove invalid entries from the key directory. The directory itself
+/// can be removed too, if it has an invalid name.
+/// A task is keyed by a two-letter directory name and the type of a storage
+/// being checked.
 /// \tparam kType         Type of the storage to inspect.
-/// \param cas            Storage to be inspected.
-/// \return               True if the kType storage doesn't contain spliced
+/// \param task           Owning compactification task.
+/// \param entry          Directory entry.
+/// \return               True if the entry directory doesn't contain invalid
 /// entries.
-template <ObjectType... kType>
-requires(sizeof...(kType) != 0)
-    [[nodiscard]] auto RemoveSpliced(LocalCAS<false> const& cas) noexcept
+template <ObjectType kType>
+[[nodiscard]] auto RemoveInvalid(CompactificationTask const& task,
+                                 std::filesystem::path const& key) noexcept
     -> bool;
 
-/// \brief Split and remove from the kType storage every entry that is larger
-/// than the given threshold. Results of splitting are added to the LocalCAS.
+/// \brief Remove spliced entries from the kType storage.
+/// A task is keyed by a directory name concisting of two letters and kType...
+/// storages need to be checked.
+/// \tparam kLargeType    Type of the large storage to scan.
+/// \tparam kType         Types of the storages to inspect.
+/// \param task           Owning compactification task.
+/// \param entry          Directory entry.
+/// \return               True if the entry directory doesn't contain spliced
+/// entries.
+template <ObjectType kLargeType, ObjectType... kType>
+requires(sizeof...(kType) != 0)
+    [[nodiscard]] auto RemoveSpliced(CompactificationTask const& task,
+                                     std::filesystem::path const& key) noexcept
+    -> bool;
+
+/// \brief Split and remove a key entry from the kType storage. Results of
+/// splitting are added to the LocalCAS.
 /// \tparam kType         Type of the storage to inspect.
-/// \param cas            LocalCAS to store results of splitting.
-/// \param threshold      Minimum size of an entry to be split.
-/// \return               True if the kType storage doesn't contain splitable
-/// entries larger than the compactification threshold afterwards.
+/// \param task           Owning compactification task.
+/// \param entry          File entry.
+/// \return               True if the file was split succesfully.
 template <ObjectType kType>
-[[nodiscard]] auto SplitLarge(LocalCAS<false> const& cas,
-                              size_t threshold) noexcept -> bool;
+[[nodiscard]] auto SplitLarge(CompactificationTask const& task,
+                              std::filesystem::path const& key) noexcept
+    -> bool;
 }  // namespace
 
+auto Compactifier::RemoveInvalid(LocalCAS<false> const& cas) noexcept -> bool {
+    auto logger = [](LogLevel level, std::string const& msg) {
+        Logger::Log(
+            level, "Compactification: Removal of invalid files:\n{}", msg);
+    };
+
+    // Collect directories and remove from the storage files and directories
+    // having invalid names.
+    // In general, the number of files in the storage is not limited, thus
+    // parallelization is done using subdirectories to not run out of memory.
+    CompactificationTask task{.cas = cas,
+                              .large = false,
+                              .logger = logger,
+                              .filter = FileSystemManager::IsDirectory,
+                              .f_task = ::RemoveInvalid<ObjectType::File>,
+                              .x_task = ::RemoveInvalid<ObjectType::Executable>,
+                              .t_task = ::RemoveInvalid<ObjectType::Tree>};
+    return CompactifyConcurrently(task);
+}
+
 auto Compactifier::RemoveSpliced(LocalCAS<false> const& cas) noexcept -> bool {
-    return ::RemoveSpliced<ObjectType::Tree>(cas) and
-           ::RemoveSpliced<ObjectType::File, ObjectType::Executable>(cas);
+    auto logger = [](LogLevel level, std::string const& msg) {
+        Logger::Log(
+            level, "Compactification: Removal of spliced files:\n{}", msg);
+    };
+
+    // Collect directories from large storages and remove from the storage files
+    // having correponding large entries.
+    // In general, the number of files in the storage is not limited, thus
+    // parallelization is done using subdirectories to not run out of memory.
+    CompactificationTask task{
+        .cas = cas,
+        .large = true,
+        .logger = logger,
+        .filter = FileSystemManager::IsDirectory,
+        .f_task = ::RemoveSpliced<ObjectType::File,
+                                  ObjectType::File,
+                                  ObjectType::Executable>,
+        .t_task = ::RemoveSpliced<ObjectType::Tree, ObjectType::Tree>};
+    return CompactifyConcurrently(task);
 }
 
 auto Compactifier::SplitLarge(LocalCAS<false> const& cas,
                               size_t threshold) noexcept -> bool {
-    return ::SplitLarge<ObjectType::File>(cas, threshold) and
-           ::SplitLarge<ObjectType::Executable>(cas, threshold) and
-           ::SplitLarge<ObjectType::Tree>(cas, threshold);
+    auto logger = [](LogLevel level, std::string const& msg) {
+        Logger::Log(level, "Compactification: Splitting:\n{}", msg);
+    };
+
+    // Collect files larger than the threshold and split them.
+    // Concurrently scanning a directory and putting new entries there may cause
+    // the scan to fail. To avoid that, parallelization is done using
+    // files, although this may result in a run out of memory.
+    CompactificationTask task{
+        .cas = cas,
+        .large = false,
+        .logger = logger,
+        .filter =
+            [threshold](std::filesystem::path const& path) {
+                return not FileSystemManager::IsDirectory(path) and
+                       std::filesystem::file_size(path) >= threshold;
+            },
+        .f_task = ::SplitLarge<ObjectType::File>,
+        .x_task = ::SplitLarge<ObjectType::Executable>,
+        .t_task = ::SplitLarge<ObjectType::Tree>};
+    return CompactifyConcurrently(task);
 }
 
 namespace {
-template <ObjectType... kType>
-requires(sizeof...(kType) != 0)
-    [[nodiscard]] auto RemoveSpliced(LocalCAS<false> const& cas) noexcept
+template <ObjectType kType>
+[[nodiscard]] auto RemoveInvalid(CompactificationTask const& task,
+                                 std::filesystem::path const& key) noexcept
     -> bool {
-    // Obtain path to the large CAS:
-    static constexpr std::array types{kType...};
-    auto const& large_storage = cas.StorageRoot(types[0], /*large=*/true);
+    auto const directory = task.cas.StorageRoot(kType) / key;
 
     // Check there are entries to process:
-    if (not FileSystemManager::IsDirectory(large_storage)) {
+    if (not FileSystemManager::IsDirectory(directory)) {
         return true;
     }
 
-    // Obtain paths to object storages.
-    std::array const storage_roots{cas.StorageRoot(kType)...};
+    // Calculate reference hash size:
+    auto const kHashSize = HashFunction::Hasher().GetHashLength();
+    static constexpr size_t kDirNameSize = 2;
+    auto const kFileNameSize = kHashSize - kDirNameSize;
 
-    FileSystemManager::UseDirEntryFunc callback =
-        [&storage_roots](std::filesystem::path const& entry_large,
-                         bool is_tree) -> bool {
-        // Use all folders.
-        if (is_tree) {
+    // Check the directory itself is valid:
+    std::string const d_name = directory.filename();
+    if (d_name.size() != kDirNameSize or not FromHexString(d_name)) {
+        static constexpr bool kRecursively = true;
+        if (FileSystemManager::RemoveDirectory(directory, kRecursively)) {
             return true;
+        }
+
+        task.Log(LogLevel::Error,
+                 "Failed to remove invalid directory {}",
+                 directory.string());
+        return false;
+    }
+
+    FileSystemManager::ReadDirEntryFunc callback =
+        [&task, &directory, kFileNameSize](std::filesystem::path const& file,
+                                           ObjectType type) -> bool {
+        // Directories are unexpected in storage subdirectories
+        if (IsTreeObject(type)) {
+            task.Log(LogLevel::Error,
+                     "There is a directory in a storage subdirectory: {}",
+                     (directory / file).string());
+            return false;
+        }
+
+        // Check file has a hexadecimal name of length kFileNameSize:
+        std::string const f_name = file.filename();
+        if (f_name.size() == kFileNameSize and FromHexString(f_name)) {
+            return true;
+        }
+        auto const path = directory / file;
+        if (not FileSystemManager::RemoveFile(path)) {
+            task.Log(LogLevel::Error,
+                     "Failed to remove invalid entry {}",
+                     path.string());
+            return false;
+        }
+        return true;
+    };
+
+    // Read the key storage directory:
+    if (not FileSystemManager::ReadDirectory(directory, callback)) {
+        task.Log(LogLevel::Error, "Failed to read {}", directory.string());
+        return false;
+    }
+    return true;
+}
+
+template <ObjectType kLargeType, ObjectType... kType>
+requires(sizeof...(kType) != 0)
+    [[nodiscard]] auto RemoveSpliced(CompactificationTask const& task,
+                                     std::filesystem::path const& key) noexcept
+    -> bool {
+    static constexpr bool kLarge = true;
+    auto const directory = task.cas.StorageRoot(kLargeType, kLarge) / key;
+
+    // Check there are entries to process:
+    if (not FileSystemManager::IsDirectory(directory)) {
+        return true;
+    }
+
+    // Obtain paths to the corresponding key directories in the object storages.
+    std::array const storage_roots{task.cas.StorageRoot(kType) / key...};
+
+    FileSystemManager::ReadDirEntryFunc callback =
+        [&storage_roots, &task, &directory](
+            std::filesystem::path const& entry_large, ObjectType type) -> bool {
+        // Directories are unexpected in storage subdirectories
+        if (IsTreeObject(type)) {
+            task.Log(LogLevel::Error,
+                     "There is a directory in a storage subdirectory: {}",
+                     (directory / entry_large).string());
+            return false;
         }
 
         // Pathes to large entries and spliced results are:
@@ -104,64 +250,63 @@ requires(sizeof...(kType) != 0)
         };
         return std::all_of(storage_roots.begin(), storage_roots.end(), check);
     };
-    return FileSystemManager::ReadDirectoryEntriesRecursive(large_storage,
-                                                            callback);
+
+    // Read the key storage directory:
+    if (not FileSystemManager::ReadDirectory(directory, callback)) {
+        task.Log(LogLevel::Error, "Failed to read {}", directory.string());
+        return false;
+    }
+    return true;
 }
 
 template <ObjectType kType>
-[[nodiscard]] auto SplitLarge(LocalCAS<false> const& cas,
-                              size_t threshold) noexcept -> bool {
-    // Obtain path to the storage root:
-    auto const& storage_root = cas.StorageRoot(kType);
-
-    // Check there are entries to process:
-    if (not FileSystemManager::IsDirectory(storage_root)) {
+[[nodiscard]] auto SplitLarge(CompactificationTask const& task,
+                              std::filesystem::path const& key) noexcept
+    -> bool {
+    auto const path = task.cas.StorageRoot(kType) / key;
+    // Check the entry exists:
+    if (not FileSystemManager::IsFile(path)) {
         return true;
     }
 
-    FileSystemManager::UseDirEntryFunc callback =
-        [&](std::filesystem::path const& entry_object, bool is_tree) -> bool {
-        // Use all folders:
-        if (is_tree) {
-            return true;
-        }
+    // Calculate the digest for the entry:
+    auto const digest = ObjectCAS<kType>::CreateDigest(path);
+    if (not digest) {
+        task.Log(LogLevel::Error,
+                 "Failed to calculate digest for {}",
+                 path.string());
+        return false;
+    }
 
-        // Filter files by size:
-        auto const path = storage_root / entry_object;
-        if (std::filesystem::file_size(path) < threshold) {
-            return true;
-        }
+    // Split the entry:
+    auto split_result = IsTreeObject(kType) ? task.cas.SplitTree(*digest)
+                                            : task.cas.SplitBlob(*digest);
+    auto* parts = std::get_if<std::vector<bazel_re::Digest>>(&split_result);
+    if (parts == nullptr) {
+        auto* error = std::get_if<LargeObjectError>(&split_result);
+        auto const error_message = error ? std::move(*error).Message() : "";
+        task.Log(LogLevel::Error,
+                 "Failed to split {}\nDigest: {}\nMessage: {}",
+                 path.string(),
+                 digest->hash(),
+                 error_message);
+        return false;
+    }
 
-        // Calculate the digest for the entry:
-        auto const digest = ObjectCAS<kType>::CreateDigest(path);
-        if (not digest) {
-            Logger::Log(LogLevel::Error,
-                        "Failed to calculate digest for {}",
-                        path.generic_string());
-            return false;
-        }
+    // If the file cannot actually be split (the threshold is too low), the
+    // file must not be deleted.
+    if (parts->size() < 2) {
+        task.Log(LogLevel::Debug,
+                 "{} cannot be compactified. The compactification "
+                 "threshold is too low.",
+                 digest->hash());
+        return true;
+    }
 
-        // Split the entry:
-        auto split_result = IsTreeObject(kType) ? cas.SplitTree(*digest)
-                                                : cas.SplitBlob(*digest);
-        auto* parts = std::get_if<std::vector<bazel_re::Digest>>(&split_result);
-        if (parts == nullptr) {
-            Logger::Log(LogLevel::Error, "Failed to split {}", digest->hash());
-            return false;
-        }
-
-        // If the file cannot actually be split (the threshold is too low), the
-        // file must not be deleted.
-        if (parts->size() < 2) {
-            Logger::Log(LogLevel::Debug,
-                        "{} cannot be compactified. The compactification "
-                        "threshold is too low.",
-                        digest->hash());
-            return true;
-        }
-        return FileSystemManager::RemoveFile(path);
-    };
-    return FileSystemManager::ReadDirectoryEntriesRecursive(storage_root,
-                                                            callback);
+    if (not FileSystemManager::RemoveFile(path)) {
+        task.Log(LogLevel::Error, "Failed to remove {}", path.string());
+        return false;
+    }
+    return true;
 }
 }  // namespace
