@@ -1,4 +1,4 @@
-## Release `1.3.0` (UNRELEASED)
+## Release `1.3.0` (2024-05-08)
 
 A feature release on top of `1.2.0`, backwards compatible.
 
@@ -9,8 +9,8 @@ A feature release on top of `1.2.0`, backwards compatible.
 - `just-mr` is able to back up and retrieve distribution files
   from a remote execution endpoint. This simplifies usage in an
   environment with restricted internet access.
-- `just execute` now supports blob splitting as new RPC call. `just
-  install` uses this call to reduce traffic if the remote-execution
+- `just execute` now supports blob splitting as new RPC call.
+  `just install` uses this call to reduce traffic if the remote-execution
   endpoint supports blob splitting and the `--remember` option is given.
   In this way, traffic from the remote-execution endpoint can be reduced
   when subsequently installing artifacts with only small local
@@ -36,10 +36,14 @@ A feature release on top of `1.2.0`, backwards compatible.
 - Support for fetching archives from FTP and TFTP was added to `just-mr`
   if it was built with bundled curl. For package builds, libcurl has
   enabled whatever the distro considers suitable.
-- The `gc` subcommand supports an option `--no-rotate` to carry out
-  only local clean up.
+- The `gc` subcommand supports an option `--no-rotate` to carry
+  out only local clean up. Part of that local clean up, that is
+  also done as part of a full `gc`, is splitting large files. Note
+  that stable versions before `1.3.0` cannot use those split files.
+  Hence a downgrade after a `gc` with `1.3.0` (or higher) requires
+  cleaning of cache and CAS.
 - The expression language has been extended and, in particular,
-  allows indexed access to an arry (basically using it as a tuple)
+  allows indexed access to an array (basically using it as a tuple)
   and a generic form of assertion (to report user errors).
 - The `analyse` subcommand supports a new flag `--dump-result` to dump
   the analysis result to a file or stdout (if `-` is given).
@@ -99,6 +103,15 @@ A feature release on top of `1.2.0`, backwards compatible.
 - The command line option `"--remote-execution-property"` can be
   repeated multiple times to list all the properties, but only the
   last one was retained. This is fixed now.
+
+### Changes since `1.3.0~beta1`
+
+- The `["CC/pkgconfig", "system_library"]` rule now propagates
+  `ENV` correctly, fixing the build on systems where the default
+  paths pulled in by `env` do not contain `cat`.
+- In case of a build failure, the description of the failing action
+  in the error message is now more verbose, including the environment.
+- Various minor fixes in the documentation.
 
 ## Release `1.3.0~beta1` (2024-05-02)
 
