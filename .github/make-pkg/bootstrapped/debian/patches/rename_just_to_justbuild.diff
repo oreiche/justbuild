@@ -9,7 +9,7 @@ Index: b/share/man/just-deduplicate-repos.1.md
 ===================================================================
 --- a/share/man/just-deduplicate-repos.1.md
 +++ b/share/man/just-deduplicate-repos.1.md
-@@ -24,7 +24,7 @@ repositories cannot be merged into one (
+@@ -24,7 +24,7 @@ repositories cannot be merged into one (as both have to be kept).
  RATIONALE
  =========
  
@@ -31,7 +31,7 @@ Index: b/share/man/just-graph-file.5.md
  
  DESCRIPTION
  ===========
-@@ -124,7 +124,7 @@ ignore those. Implementations writing ac
+@@ -124,7 +124,7 @@ ignore those. Implementations writing action-graph files should be aware
  that a future version of this file format might give a specific meaning
  to those extra keys.
  
@@ -40,7 +40,7 @@ Index: b/share/man/just-graph-file.5.md
  each action. The value is a list of all places where this action was
  requested (so often, but not always, the list has length 1). Each such
  place is described by a JSON object with the following keys.
-@@ -143,4 +143,4 @@ place is described by a JSON object with
+@@ -143,4 +143,4 @@ place is described by a JSON object with the following keys.
  See also
  ========
  
@@ -59,7 +59,7 @@ Index: b/share/man/just-mr-repository-config.5.md
  system, it requires a configuration file describing repositories and
  their dependencies.
  
-@@ -140,7 +140,7 @@ The following fields are supported:
+@@ -163,7 +163,7 @@ The following fields are supported:
  
  It defines as workspace root a directory with the distribution archives
  of the specified repositories. Usually this root is realized as a Git
@@ -68,7 +68,7 @@ Index: b/share/man/just-mr-repository-config.5.md
  
  The following fields are supported:
  
-@@ -159,7 +159,7 @@ supported. If its value is *`true`* then
+@@ -182,7 +182,7 @@ supported. If its value is *`true`* then it indicates that the workspace
  root should be returned as a Git tree. If the root directory is already
  part of a Git repository, its Git tree identifier is used; otherwise,
  the workspace root will be realized as a Git tree in the Git repository
@@ -77,7 +77,7 @@ Index: b/share/man/just-mr-repository-config.5.md
  
  For all workspace roots except *`"distdir"`* the pragma key *`"special"`* is
  supported. If its value is *`"ignore"`* then it indicates that the workspace
-@@ -234,6 +234,6 @@ this format might give specific meanings
+@@ -257,6 +257,6 @@ this format might give specific meanings to these extra keys.
  See also
  ========
  
@@ -98,7 +98,7 @@ Index: b/share/man/just-mr.1.md
  
  The tool performs specific operations, based on the invoked subcommand,
  on repositories described in a configuration file. All subcommands
-@@ -60,7 +60,7 @@ of those repository names to be consider
+@@ -60,7 +60,7 @@ of those repository names to be considered absent.
  
  **`-D`**, **`--defines`** *`JSON`*  
  Defines, via an in-line JSON object, an overlay configuration for
@@ -107,7 +107,7 @@ Index: b/share/man/just-mr.1.md
  **`--defines`**, this defines value is forwarded, otherwise it is
  ignored. If **`-D`** is given several times, the **`-D`** options
  overlay (in the sense of *`map_union`*) in the order they are given on
-@@ -137,7 +137,7 @@ Address of a remote execution service. T
+@@ -142,7 +142,7 @@ Address of a remote execution service. This is used as an intermediary fetch
  location for archives, between local CAS (or distdirs) and the network.
  
  **`-R`**, **`--remote-serve-address`** *`NAME`*:*`PORT`*  
@@ -115,8 +115,8 @@ Index: b/share/man/just-mr.1.md
 +Address of a **`justbuild`** **`serve`** service. This is used as intermediary fetch
  location for Git commits, between local CAS and the network.
  
- **`--fetch-absent`**  
-@@ -150,8 +150,8 @@ execution protocol. If a remote executio
+ **`--max-attempts`** *`NUM`*  
+@@ -169,8 +169,8 @@ execution protocol. If a remote execution service address is provided, this
  option can be used to match the artifacts expected by the remote endpoint.
  
  **`--just`** *`PATH`*  
@@ -127,7 +127,7 @@ Index: b/share/man/just-mr.1.md
  
  **`--rc`** *`PATH`*  
  Path to the just-mrrc file to use. See **`just-mrrc`**(5) for more
-@@ -170,7 +170,7 @@ Authentication options
+@@ -195,7 +195,7 @@ Authentication options
  ----------------------
  
  Only TLS and mutual TLS (mTLS) are supported.
@@ -136,7 +136,7 @@ Index: b/share/man/just-mr.1.md
  
  **`--tls-ca-cert`** *`PATH`*  
  Path to a TLS CA certificate that is trusted to sign the server
-@@ -192,14 +192,14 @@ SUBCOMMANDS
+@@ -217,14 +217,14 @@ SUBCOMMANDS
  
  Print on stdout a JSON object providing version information for this
  tool itself; the **`version`** subcommand calls the **`version`** subcommand of
@@ -154,7 +154,7 @@ Index: b/share/man/just-mr.1.md
  file is stored in CAS and its path is printed to stdout. See
  **`just-repository-config`**(5) for more details on the resulting
  configuration file format.
-@@ -214,7 +214,7 @@ from the input configuration file, use t
+@@ -239,7 +239,7 @@ from the input configuration file, use the **`--all`** flag.
  The behavior of the two subcommands differs only with respect to the
  main repository. In the case of **`setup-env`**, the workspace root of the
  main repository is left out, such that it can be deduced from the
@@ -163,7 +163,7 @@ Index: b/share/man/just-mr.1.md
  checkout of that repository is possible, while having all of its
  dependencies properly set up. In the case of **`setup`**, the workspace root
  of the main repository is taken as-is into the output configuration
-@@ -227,7 +227,7 @@ This subcommand prepares all archive-typ
+@@ -252,7 +252,7 @@ This subcommand prepares all archive-type and **`"git tree"`** workspace roots
  for an offline build by fetching all their required source files from the
  specified locations given in the input configuration file or ensuring the 
  specified tree is present in the Git cache, respectively. Any subsequent
@@ -172,7 +172,7 @@ Index: b/share/man/just-mr.1.md
  **`"git tree"`** workspace roots will thus need no further network connections.
  
  If a main repository is provided in the input configuration or on
-@@ -267,9 +267,9 @@ configuration file.
+@@ -292,9 +292,9 @@ configuration file.
  do
  --
  
@@ -183,9 +183,9 @@ Index: b/share/man/just-mr.1.md
 +arguments and calling **`justbuild`** via **`execvp`**(2). Any subsequent argument
 +is unconditionally forwarded to **`justbuild`**. For *known* subcommands
  (**`version`**, **`describe`**, **`analyse`**, **`build`**, **`install`**, 
- **`install-cas`**, **`rebuild`**, **`gc`**), the
+ **`install-cas`**, **`add-to-cas`**, **`rebuild`**, **`gc`**), the
  **`just-mr setup`** step is performed first for those commands accepting a
-@@ -279,29 +279,29 @@ the configuration or on the command line
+@@ -304,29 +304,29 @@ the configuration or on the command line. If no main repository is
  provided, the lexicographical first repository from the configuration is
  used.
  
@@ -204,7 +204,7 @@ Index: b/share/man/just-mr.1.md
 -**`--remote-serve-address`** arguments are passed to **`just`** as early
 +**`--remote-serve-address`** arguments are passed to **`justbuild`** as early
  arguments for those *known* subcommands that accept them
- (analyse, build, install-cas, install, rebuild, traverse).
+ (analyse, build, install-cas, add-to-cas, install, rebuild, traverse).
  
 -The *authentication options* given to **`just-mr`** are passed to **`just`** as
 +The *authentication options* given to **`just-mr`** are passed to **`justbuild`** as
@@ -212,17 +212,16 @@ Index: b/share/man/just-mr.1.md
 -**`just`**(1).
 +**`justbuild`**(1).
  
- **`version`**|**`describe`**|**`analyse`**|**`build`**|**`install`**|**`install-cas`**|**`rebuild`**|**`gc`**
- -------------------------------------------------------------------------------------------------------------
+ **`version`**|**`describe`**|**`analyse`**|**`build`**|**`install`**|**`install-cas`**|**`add-to-cas`**|**`rebuild`**|**`gc`**
+ ------------------------------------------------------------------------------------------------------------------------------
  
--This subcommand is the explicit way of specifying *known* just
+ This subcommand is the explicit way of specifying *known* just
 -subcommands and calling **`just`** via **`execvp`**(2). The same description
-+This subcommand is the explicit way of specifying *known* justbuild
 +subcommands and calling **`justbuild`** via **`execvp`**(2). The same description
  as for the **`do`** subcommand applies.
  
  EXIT STATUS
-@@ -320,7 +320,7 @@ The exit status of **`just-mr`** is one
+@@ -345,7 +345,7 @@ The exit status of **`just-mr`** is one of the following values:
   - 71: error during setup
  
  Any other exit code that does not have bit 64 set is a status value from
@@ -231,7 +230,7 @@ Index: b/share/man/just-mr.1.md
  details.
  
  See also
-@@ -328,4 +328,4 @@ See also
+@@ -353,4 +353,4 @@ See also
  
  **`just-mr-repository-config`**(5),
  **`just-repository-config`**(5),
@@ -250,8 +249,8 @@ Index: b/share/man/just-mrrc.5.md
     **`just-mr`** is used as a launcher.
  
   - The value for the key *`"git"`* is a single location object,
-@@ -119,16 +119,16 @@ The just-mrrc is given by a JSON object.
-    argument.
+@@ -143,16 +143,16 @@ The just-mrrc is given by a JSON object.
+    attempts of an rpc, not counting the jitter.
  
   - The value for the key *`"just files"`* is a JSON object. The keys correspond
 -   to options that some **`just`** subcommands accept and require a file as
@@ -268,18 +267,18 @@ Index: b/share/man/just-mrrc.5.md
 -   corresponding subcommand, these strings are prefixed to the **`just`**
 +   **`justbuild`** subcommands and its value is a JSON list of strings. For the
 +   corresponding subcommand, these strings are prefixed to the **`justbuild`**
-    argument vector, if **`just-mr`** is used as a launcher.
+    argument vector (after all other options provided through the rc file),
+    if **`just-mr`** is used as a launcher.
  
- EXAMPLE
-@@ -153,7 +153,7 @@ An example just-mrrc file could look lik
- , "log limit": 4
+@@ -194,7 +194,7 @@ An example just-mrrc file could look like the following:
+ , "restrict stderr log limit": 4
  , "log files": [{"root": "home", "path": ".log/just/latest-invocation"}]
  , "distdirs": [{"root": "home", "path": ".distfiles"}]
 -, "just": {"root": "system", "path": "usr/bin/just"}
 +, "just": {"root": "system", "path": "usr/bin/justbuild"}
  , "git": {"root": "system", "path": "usr/bin/git"}
  , "remote execution": {"address": "10.0.0.1:8980"}
- , "just args":
+ , "remote-execution properties": ["image:development-v1.2.3"]
 Index: b/share/man/just-repository-config.5.md
 ===================================================================
 --- a/share/man/just-repository-config.5.md
@@ -299,7 +298,7 @@ Index: b/share/man/just-repository-config.5.md
  serialization describing the same JSON object is equivalent. We assume,
  that in JSON objects, each key occurs at most once; it is implementation
  defined how repetitions of the same key are treated.
-@@ -43,7 +43,7 @@ contains *`file roots`*, file names, and
+@@ -43,7 +43,7 @@ contains *`file roots`*, file names, and bindings to other repositories.
  Specifically the following fields are supported:
  
   - *`"workspace_root"`* contains the *`file root`* where source files
@@ -308,7 +307,7 @@ Index: b/share/man/just-repository-config.5.md
     will perform the normal workspace root resolution starting from the
     current working directory.
  
-@@ -103,6 +103,6 @@ configuration generation, but not necess
+@@ -103,6 +103,6 @@ configuration generation, but not necessarily the only one.
  See also
  ========
  
@@ -331,26 +330,26 @@ Index: b/share/man/just-serve-config.5.md
  
  DESCRIPTION
  ===========
-@@ -24,7 +24,7 @@ The configuration file is given by a JSO
-    be created if it does not exist already. 
+@@ -32,7 +32,7 @@ The configuration file is given by a JSON object.
+    directories. The path will be created if it does not exist already.
  
-  - The value for the key *`"repositories"`* is a list of strings specifying
--   paths to Git repositories for **`just`** **`serve`** to use as additional
-+   paths to Git repositories for **`justbuild`** **`serve`** to use as additional
-    object lookup locations. The paths are to be used in the order given and
-    only if requested objects are not found in the local build root.  
+  - The value for the key *`"repositories"`* is a list of location objects,
+-   specifying paths to Git repositories for **`just`** **`serve`** to use as
++   specifying paths to Git repositories for **`justbuild`** **`serve`** to use as
+    additional object lookup locations. The paths are to be used in the order
+    given and only if requested objects are not found in the local build root.
  
-@@ -42,7 +42,7 @@ The configuration file is given by a JSO
+@@ -50,7 +50,7 @@ The configuration file is given by a JSON object.
     file instead of overwriting existing.
  
    - The value for the key *`"authentication"`* is a JSON object specifying
 -   client-side authentication options for **`just`** **`serve`** when
 +   client-side authentication options for **`justbuild`** **`serve`** when
     communicating with the remote execution endpoint.  
-    For subkey *`"ca cert"`* the value is a string specifying the path to a TLS
-    CA certificate.  
-@@ -52,7 +52,7 @@ The configuration file is given by a JSO
-    TLS client key.  
+    For subkey *`"ca cert"`* the value is a single location object, specifying
+    the path to a TLS CA certificate.  
+@@ -60,7 +60,7 @@ The configuration file is given by a JSON object.
+    specifying the path to a TLS client key.  
  
   - The value for the key *`"remote service"`* is a JSON object specifying the
 -   server arguments for running **`just`** **`serve`** as a service.  
@@ -358,8 +357,8 @@ Index: b/share/man/just-serve-config.5.md
     For subkey *`"interface"`* the value specifies the interface of the service.
     If unset, the loopback device is used.  
     For subkey *`"port"`* the value specifies the port to which the service is to
-@@ -68,7 +68,7 @@ The configuration file is given by a JSO
-    TLS server key.  
+@@ -78,7 +78,7 @@ The configuration file is given by a JSON object.
+    specifying the path to a TLS server key.  
  
   - The value for the key *`"execution endpoint"`* is a JSON object specifying
 -   the arguments of a remote execution endpoint to be used by **`just`**
@@ -367,7 +366,7 @@ Index: b/share/man/just-serve-config.5.md
     **`serve`**.  
     For subkey *`"address"`* the value is a string specifying the remote
     execution address in a NAME:PORT format.  
-@@ -91,7 +91,7 @@ The configuration file is given by a JSO
+@@ -101,7 +101,7 @@ The configuration file is given by a JSON object.
     unset, the number of available cores is used.  
  
   - The value for the key *`"build"`* is a JSON object specifying arguments used
@@ -376,17 +375,17 @@ Index: b/share/man/just-serve-config.5.md
     For subkey *`"build jobs"`* the value specifies the number of jobs to run
     during a remote build. If unset, the same value as for outer key *`"jobs"`*
     is used.  
-@@ -113,4 +113,4 @@ The configuration file is given by a JSO
+@@ -168,4 +168,4 @@ An example serve configuration file could look as follows.
  See also
  ========
  
--**`just`**(1)
-+**`justbuild`**(1)
+-**`just`**(1), **`just-mrrc`**(5)
++**`justbuild`**(1), **`just-mrrc`**(5)
 Index: b/share/man/just.1.md
 ===================================================================
 --- a/share/man/just.1.md
 +++ b/share/man/just.1.md
-@@ -1,23 +1,23 @@
+@@ -1,24 +1,24 @@
 -% JUST(1) | General Commands Manual
 +% JUSTBUILD(1) | General Commands Manual
  
@@ -403,6 +402,7 @@ Index: b/share/man/just.1.md
 -**`just`** {**`analyse`**|**`build`**} \[*`OPTION`*\]... \[\[*`module`*\] *`target`*\]  
 -**`just`** **`install`** \[*`OPTION`*\]... **`-o`** *`OUTPUT_DIR`* \[\[*`module`*\] *`target`*\]  
 -**`just`** **`install-cas`** \[*`OPTION`*\]... *`OBJECT_ID`*  
+-**`just`** **`add-to-cas`** \[*`OPTION`*\]... *`PATH`*  
 -**`just`** **`describe`** \[*`OPTION`*\]... \[\[*`module`*\] *`target`*\]  
 -**`just`** **`rebuild`** \[*`OPTION`*\]... \[\[*`module`*\] *`target`*\]  
 -**`just`** **`traverse`** \[*`OPTION`*\]... **`-o`** *`OUTPUT_DIR`* **`-g`** *`GRAPH_FILE`*  
@@ -413,6 +413,7 @@ Index: b/share/man/just.1.md
 +**`justbuild`** {**`analyse`**|**`build`**} \[*`OPTION`*\]... \[\[*`module`*\] *`target`*\]  
 +**`justbuild`** **`install`** \[*`OPTION`*\]... **`-o`** *`OUTPUT_DIR`* \[\[*`module`*\] *`target`*\]  
 +**`justbuild`** **`install-cas`** \[*`OPTION`*\]... *`OBJECT_ID`*  
++**`justbuild`** **`add-to-cas`** \[*`OPTION`*\]... *`PATH`*  
 +**`justbuild`** **`describe`** \[*`OPTION`*\]... \[\[*`module`*\] *`target`*\]  
 +**`justbuild`** **`rebuild`** \[*`OPTION`*\]... \[\[*`module`*\] *`target`*\]  
 +**`justbuild`** **`traverse`** \[*`OPTION`*\]... **`-o`** *`OUTPUT_DIR`* **`-g`** *`GRAPH_FILE`*  
@@ -422,7 +423,7 @@ Index: b/share/man/just.1.md
  
  DESCRIPTION
  ===========
-@@ -38,7 +38,7 @@ the empty string. Specifying the correct
+@@ -39,7 +39,7 @@ the empty string. Specifying the correct repository, target root,
  module, and target name allows to process that target independently of
  the current working directory.
  
@@ -431,7 +432,7 @@ Index: b/share/man/just.1.md
  module corresponding to the current working directory.
  
  If a target is not specified, the lexicographically-first target,
-@@ -46,7 +46,7 @@ according to native byte order, is used.
+@@ -47,7 +47,7 @@ according to native byte order, is used. So, a target named with an
  empty string will always be the default target for that module.
  
  If a target depends on other targets defined in other modules or
@@ -440,7 +441,7 @@ Index: b/share/man/just.1.md
  modules.
  
  The main repository is the repository containing the target specified on
-@@ -62,8 +62,8 @@ file is used as main.
+@@ -63,8 +63,8 @@ file is used as main.
  The *`workspace_root`* of the main repository is then defined as
  follows. If the option **`--workspace-root`** is provided, then
  *`workspace_root`* is set accordingly. If the option is not provided,
@@ -451,7 +452,7 @@ Index: b/share/man/just.1.md
  starts looking for a marker in the current directory first, then in all
  the parent directories until it finds one. The supported markers are
  
-@@ -72,7 +72,7 @@ the parent directories until it finds on
+@@ -73,7 +73,7 @@ the parent directories until it finds one. The supported markers are
   - *`.git`* (can be either a file - empty or not, content is ignored -
     or the famous directory)
  
@@ -460,7 +461,7 @@ Index: b/share/man/just.1.md
  
  For non-main repositories, the *`workspace_root`* entry must be declared
  in the multi-repository configuration file.
-@@ -156,7 +156,7 @@ described in the *`TARGETS`* file. Since
+@@ -157,7 +157,7 @@ described in the *`TARGETS`* file. Since artifacts are only stored in
  the CAS, the user has to use either the **`install`** or **`install-cas`**
  subcommand to get them.
  
@@ -469,7 +470,7 @@ Index: b/share/man/just.1.md
  used) and remote compilation (i.e., by sending requests over a TCP
  connection, e.g., to a different machine, cluster or cloud
  infrastructure). In case of a remote compilation, artifacts are compiled
-@@ -207,7 +207,7 @@ rules, to make usage simpler.
+@@ -208,7 +208,7 @@ rules, to make usage simpler.
   - If the size is missing (e.g., because the argument contains no
     colon), or cannot be parsed as a number, this is not an error, and
     the value 0 is assumed. While this is almost never the correct size,
@@ -478,7 +479,16 @@ Index: b/share/man/just.1.md
     ignore the size for lookups.
   - From the type, only the first letter (*`f`* for non-executable file,
     *`x`* for executable file, and *`t`* for tree) is significant; the
-@@ -417,7 +417,7 @@ File path for writing the action graph d
+@@ -278,7 +278,7 @@ not referenced since the last call to **`gc`** is purged and the
+ corresponding disk space reclaimed.
+ 
+ Additionally, and before doing generation rotation,
+- - left-over temporary directories (e.g., from interrupted `just`
++ - left-over temporary directories (e.g., from interrupted `justbuild`
+    invocations) are removed, and
+  - large files are split and only the chunks and the information
+    how to assemble the file from the chunks are kept; in this way
+@@ -440,7 +440,7 @@ File path for writing the action graph description to. See
  Supported by: analyse|build|install|rebuild.
  
  **`-f`**, **`--log-file`** *`PATH`*  
@@ -487,9 +497,18 @@ Index: b/share/man/just.1.md
  stderr in the log file along with the thread id and timestamp when the
  output has been generated.  
  Supported by:
-@@ -558,6 +558,23 @@ parameter. From that point, the waiting
+@@ -475,7 +475,7 @@ number of characters (default: 320).
+ Supported by: analyse|build|install.
+ 
+ **`--serve-errors-log`** *`PATH`*  
+-Path to local file in which **`just`** will write, in machine
++Path to local file in which **`justbuild`** will write, in machine
+ readable form, the references to all errors that occurred on the
+ serve side. More precisely, the value will be a JSON array with one
+ element per failure, where the element is a pair (array of length
+@@ -606,6 +606,23 @@ parameter. From that point, the waiting time is computed as
  `max-backoff-seconds` plus a jitter. (Default: 60)  
- Supported by: analyse|build|install|rebuild|traverse.
+ Supported by: analyse|build|describe|install|rebuild|traverse.
  
 +**`--max-attempts`** *`NUM`*  
 +If a remote procedure call (rpc) returns `grpc::StatusCode::UNAVAILABLE`, that
@@ -511,9 +530,9 @@ Index: b/share/man/just.1.md
  Remote serve options
  --------------------
  
-@@ -675,6 +692,14 @@ by a JSON object with their intensional
- dumped JSON is not uniquely readable, but requires an out-of-band
- understanding where artifacts are to be expected.
+@@ -728,6 +745,14 @@ Dump the result of the analysis for the requested target to
+ file. *`-`* is treated as stdout. The output is a JSON object with the
+ keys *`"artifacts"`*, *`"provides"`*, and *`"runfiles"`*.
  
 +**`--dump-provides`** *`PATH`*  
 +Dump the provides map of the given target to file. *`-`* is treated
@@ -526,7 +545,7 @@ Index: b/share/man/just.1.md
  **`rebuild`** specific options
  ------------------------------
  
-@@ -741,7 +766,7 @@ operations will be removed, in a FIFO sc
+@@ -810,7 +835,7 @@ out clean up tasks that do not affect what is stored in the cache.
  EXIT STATUS
  ===========
  
@@ -620,10 +639,10 @@ Index: b/src/other_tools/just_mr/utils.hpp
 ===================================================================
 --- a/src/other_tools/just_mr/utils.hpp
 +++ b/src/other_tools/just_mr/utils.hpp
-@@ -31,7 +31,7 @@
- std::unordered_set<std::string> const kLocationTypes{"workspace",
-                                                      "home",
-                                                      "system"};
+@@ -29,7 +29,7 @@
+ 
+ /* Paths and constants required by just-mr */
+ 
 -auto const kDefaultJustPath = "just";
 +auto const kDefaultJustPath = "/usr/bin/justbuild";
  auto const kDefaultGitPath = "git";
