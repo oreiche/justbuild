@@ -117,9 +117,13 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
   if [ "${PKG}" = "deb" ]; then
     COMPAT_LEVEL=$(dpkg -s debhelper | sed -n 's/^Version:\s\+\([0-9]*\).*/\1/p')
 
+    # remove unused files
+    find ./debian/ -type f -iname '*.ex' -delete
+    rm -f ./debian/{README.source,justbuild-docs.docs}
+
     # copy prepared debian files
     if [ -z "${TARBALL}" ]; then
-      cp -r ${ROOTDIR}/bootstrapped/debian/* ./debian/
+      cp -rP ${ROOTDIR}/bootstrapped/debian/* ./debian/
     else
       cp -r ${ROOTDIR}/prebuilt/debian/* ./debian/
       cp ${TARBALL} ./debian/justbuild.tar.gz
@@ -165,10 +169,6 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
     if [ -n "${RELEASE}" ]; then
       sed -i 's/UNRELEASED\|unstable/'${RELEASE}'/' ./debian/changelog
     fi
-
-    # remove unused files
-    find ./debian/ -type f -iname '*.ex' -delete
-    rm -f ./debian/{README.source,justbuild-docs.docs}
 
     # build source package
     dpkg-buildpackage -S
