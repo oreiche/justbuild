@@ -3,11 +3,11 @@ Upstream-Name: justbuild
 Upstream-Contact: justbuild developers <justbuild@googlegroups.com>
 
 Files: *
-Copyright: 2022, 2023 Huawei Cloud Computing Technology Co., Ltd.
+Copyright: 2022, 2023, 2024 Huawei Cloud Computing Technology Co., Ltd.
 License: Apache-2.0
 
 Files: debian/*
-Copyright: 2023 Oliver Reiche <oliver.reiche@gmail.com>
+Copyright: 2024 Oliver Reiche <oliver.reiche@gmail.com>
 License: Apache-2.0
 
 License: Apache-2.0
