@@ -46,5 +46,5 @@ make -f rpmbuild/justbuild.makefile DESTDIR=$RPM_BUILD_ROOT install
 
 
 %changelog
-* Thu Apr 27 2023 Oliver Reiche <oliver.reiche@gmail.com>
+* Thu May 23 2024 Oliver Reiche <oliver.reiche@gmail.com>
 - Initial release
