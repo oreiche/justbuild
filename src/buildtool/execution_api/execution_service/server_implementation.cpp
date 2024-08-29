@@ -26,7 +26,6 @@
 #include "fmt/core.h"
 #include "grpcpp/grpcpp.h"
 #include "nlohmann/json.hpp"
-#include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/remote/port.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/execution_api/execution_service/ac_server.hpp"
@@ -35,7 +34,6 @@
 #include "src/buildtool/execution_api/execution_service/cas_server.hpp"
 #include "src/buildtool/execution_api/execution_service/execution_server.hpp"
 #include "src/buildtool/execution_api/execution_service/operations_server.hpp"
-#include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
@@ -43,7 +41,7 @@ namespace {
 template <typename T>
 auto TryWrite(std::string const& file, T const& content) noexcept -> bool {
     std::ofstream of{file};
-    if (!of.good()) {
+    if (not of.good()) {
         Logger::Log(LogLevel::Error,
                     "Could not open {}. Make sure to have write permissions",
                     file);
@@ -54,13 +52,44 @@ auto TryWrite(std::string const& file, T const& content) noexcept -> bool {
 }
 }  // namespace
 
-auto ServerImpl::Run() -> bool {
-    ExecutionServiceImpl es{};
-    ActionCacheServiceImpl ac{};
-    CASServiceImpl cas{};
-    BytestreamServiceImpl b{};
+auto ServerImpl::Create(std::optional<std::string> interface,
+                        std::optional<int> port,
+                        std::optional<std::string> info_file,
+                        std::optional<std::string> pid_file) noexcept
+    -> std::optional<ServerImpl> {
+    ServerImpl server;
+    if (interface) {
+        server.interface_ = std::move(*interface);
+    }
+    if (port) {
+        auto parsed_port = ParsePort(*port);
+        if (parsed_port) {
+            server.port_ = static_cast<int>(*parsed_port);
+        }
+        else {
+            Logger::Log(LogLevel::Error, "Invalid port '{}'", *port);
+            return std::nullopt;
+        }
+    }
+    if (info_file) {
+        server.info_file_ = std::move(*info_file);
+    }
+    if (pid_file) {
+        server.pid_file_ = std::move(*pid_file);
+    }
+    return std::move(server);
+}
+
+auto ServerImpl::Run(gsl::not_null<LocalContext const*> const& local_context,
+                     gsl::not_null<RemoteContext const*> const& remote_context,
+                     ApiBundle const& apis,
+                     std::optional<std::uint8_t> op_exponent) -> bool {
+    ExecutionServiceImpl es{local_context, &*apis.local, op_exponent};
+    ActionCacheServiceImpl ac{local_context};
+    CASServiceImpl cas{local_context};
+    BytestreamServiceImpl b{local_context};
     CapabilitiesServiceImpl cap{};
-    OperarationsServiceImpl op{};
+    OperarationsServiceImpl op{&es.GetOpCache()};
 
     grpc::ServerBuilder builder;
 
@@ -71,13 +100,16 @@ auto ServerImpl::Run() -> bool {
         .RegisterService(&cap)
         .RegisterService(&op);
 
+    // check authentication credentials; currently only TLS/SSL is supported
     std::shared_ptr<grpc::ServerCredentials> creds;
-    if (Auth::GetAuthMethod() == AuthMethod::kTLS) {
+    if (const auto* tls_auth =
+            std::get_if<Auth::TLS>(&remote_context->auth->method);
+        tls_auth != nullptr) {
         auto tls_opts = grpc::SslServerCredentialsOptions{};
 
-        tls_opts.pem_root_certs = Auth::TLS::CACert();
+        tls_opts.pem_root_certs = tls_auth->ca_cert;
         grpc::SslServerCredentialsOptions::PemKeyCertPair keycert = {
-            Auth::TLS::ServerKey(), Auth::TLS::ServerCert()};
+            tls_auth->server_key, tls_auth->server_cert};
 
         tls_opts.pem_key_cert_pairs.emplace_back(keycert);
 
@@ -91,7 +123,7 @@ auto ServerImpl::Run() -> bool {
         fmt::format("{}:{}", interface_, port_), creds, &port_);
 
     auto server = builder.BuildAndStart();
-    if (!server) {
+    if (not server) {
         Logger::Log(LogLevel::Error, "Could not start execution service");
         return false;
     }
@@ -101,8 +133,8 @@ auto ServerImpl::Run() -> bool {
     nlohmann::json const& info = {
         {"interface", interface_}, {"port", port_}, {"pid", pid}};
 
-    if (!pid_file_.empty()) {
-        if (!TryWrite(pid_file_, pid)) {
+    if (not pid_file_.empty()) {
+        if (not TryWrite(pid_file_, pid)) {
             server->Shutdown();
             return false;
         }
@@ -114,34 +146,13 @@ auto ServerImpl::Run() -> bool {
                             Compatibility::IsCompatible() ? "compatible " : "",
                             info_str));
 
-    if (!info_file_.empty()) {
-        if (!TryWrite(info_file_, info_str)) {
+    if (not info_file_.empty()) {
+        if (not TryWrite(info_file_, info_str)) {
             server->Shutdown();
             return false;
         }
     }
 
     server->Wait();
-    return true;
-}
-
-[[nodiscard]] auto ServerImpl::SetInfoFile(std::string const& x) noexcept
-    -> bool {
-    Instance().info_file_ = x;
-    return true;
-}
-
-[[nodiscard]] auto ServerImpl::SetPidFile(std::string const& x) noexcept
-    -> bool {
-    Instance().pid_file_ = x;
-    return true;
-}
-
-[[nodiscard]] auto ServerImpl::SetPort(int const x) noexcept -> bool {
-    auto port_num = ParsePort(x);
-    if (!port_num) {
-        return false;
-    }
-    Instance().port_ = static_cast<int>(*port_num);
     return true;
 }

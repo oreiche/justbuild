@@ -20,10 +20,13 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/base_maps/field_reader.hpp"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
+#include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/progress_reporting/progress.hpp"
 #include "src/buildtool/storage/storage.hpp"
+#include "src/buildtool/storage/target_cache.hpp"
 #include "src/utils/cpp/json.hpp"
 #ifndef BOOTSTRAP_BUILD_TOOL
 #include "src/buildtool/serve_api/remote/config.hpp"
@@ -99,16 +102,13 @@ void FinalizeExport(
 }  // namespace
 
 void ExportRule(
+    const gsl::not_null<AnalyseContext*>& context,
     const nlohmann::json& desc_json,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
-    const ActiveTargetCache& target_cache,
-    const gsl::not_null<Statistics*>& stats,
-    const gsl::not_null<Progress*>& exports_progress,
     const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
-    const gsl::not_null<BuildMaps::Target::ResultTargetMap*> result_map) {
+    const gsl::not_null<BuildMaps::Target::ResultTargetMap*>& result_map) {
     auto desc = BuildMaps::Base::FieldReader::CreatePtr(
         desc_json, key.target, "export target", logger);
     auto flexible_vars = desc->ReadStringList("flexible_config");
@@ -127,22 +127,24 @@ void ExportRule(
             logger);
         return;
     }
-    stats->IncrementExportsFoundCounter();
+    context->statistics->IncrementExportsFoundCounter();
     auto const& target_name = key.target.GetNamedTarget();
-    auto repo_key = repo_config->RepositoryKey(target_name.repository);
-    auto target_cache_key =
-        repo_key
-            ? TargetCacheKey::Create(*repo_key, target_name, effective_config)
-            : std::nullopt;
+    auto repo_key = context->repo_config->RepositoryKey(*context->storage,
+                                                        target_name.repository);
+    auto target_cache_key = repo_key
+                                ? context->storage->TargetCache().ComputeKey(
+                                      *repo_key, target_name, effective_config)
+                                : std::nullopt;
 
     if (target_cache_key) {
         // first try to get value from local target cache
-        auto target_cache_value = target_cache.Read(*target_cache_key);
+        auto target_cache_value =
+            context->storage->TargetCache().Read(*target_cache_key);
         bool from_just_serve{false};
 
 #ifndef BOOTSTRAP_BUILD_TOOL
         // if not found locally, try the serve endpoint
-        if (not target_cache_value and RemoteServeConfig::RemoteAddress()) {
+        if (not target_cache_value and context->serve != nullptr) {
             Logger::Log(LogLevel::Debug,
                         "Querying serve endpoint for export target {}",
                         key.target.ToString());
@@ -150,8 +152,9 @@ void ExportRule(
                 fmt::format("[{},{}]",
                             key.target.ToString(),
                             PruneJson(effective_config.ToJson()).dump());
-            exports_progress->TaskTracker().Start(task);
-            auto res = ServeApi::ServeTarget(*target_cache_key, *repo_key);
+            context->progress->TaskTracker().Start(task);
+            auto res =
+                context->serve->ServeTarget(*target_cache_key, *repo_key);
             // process response from serve endpoint
             if (not res) {
                 // target not found: log to performance, and continue
@@ -160,39 +163,52 @@ void ExportRule(
                             key.target.ToString());
             }
             else {
-                if (res->index() == 0) {
-                    // target found but failed to analyse/build: this should be
-                    // a fatal error for the local build too
-                    (*logger)(
-                        fmt::format("Failure to remotely analyse or build "
-                                    "target {}\nDetailed log available on the "
-                                    "remote-execution endpoint as blob {}",
-                                    key.target.ToString(),
-                                    std::get<0>(*res)),
-                        /*fatal=*/true);
-                    return;
-                }
-                if (res->index() == 1) {
-                    // some other failure occurred while querying the serve
-                    // endpoint; log to debug and continue locally
-                    Logger::Log(LogLevel::Debug,
-                                "While querying serve endpoint for export "
-                                "target {}:\n{}",
+                switch (res->index()) {
+                    case 0: {
+                        // target found but failed to analyse/build: this should
+                        // be a fatal error for the local build too
+                        (*logger)(
+                            fmt::format(
+                                "Failure to remotely analyse or build target "
+                                "{}\nDetailed log available on the "
+                                "remote-execution endpoint as blob {}",
                                 key.target.ToString(),
-                                std::get<1>(*res));
-                }
-                else {
-                    // index == 2
-                    target_cache_value = std::get<2>(*res);
-                    from_just_serve = true;
+                                std::get<0>(*res)),
+                            /*fatal=*/true);
+                        return;
+                    }
+                    case 1: {
+                        // internal failure on the serve endpoint, or failures
+                        // on the client side: local build should not continue
+                        (*logger)(fmt::format("While querying serve endpoint "
+                                              "for export target {}:\n{}",
+                                              key.target.ToString(),
+                                              std::get<1>(*res)),
+                                  /*fatal=*/true);
+                        return;
+                    }
+                    case 2: {
+                        // some other failure occurred on the serve endpoint;
+                        // log to debug and continue locally
+                        Logger::Log(LogLevel::Debug,
+                                    "While querying serve endpoint for export "
+                                    "target {}:\n{}",
+                                    key.target.ToString(),
+                                    std::get<2>(*res));
+                    } break;
+                    default: {
+                        // index == 3
+                        target_cache_value = std::get<3>(*res);
+                        from_just_serve = true;
+                    }
                 }
             }
-            exports_progress->TaskTracker().Stop(task);
+            context->progress->TaskTracker().Stop(task);
         }
 #endif  // BOOTSTRAP_BUILD_TOOL
 
         if (not target_cache_value) {
-            stats->IncrementExportsUncachedCounter();
+            context->statistics->IncrementExportsUncachedCounter();
             Logger::Log(LogLevel::Performance,
                         "Export target {} registered for caching: {}",
                         key.target.ToString(),
@@ -235,10 +251,10 @@ void ExportRule(
 
                 (*setter)(std::move(analysis_result));
                 if (from_just_serve) {
-                    stats->IncrementExportsServedCounter();
+                    context->statistics->IncrementExportsServedCounter();
                 }
                 else {
-                    stats->IncrementExportsCachedCounter();
+                    context->statistics->IncrementExportsCachedCounter();
                 }
                 return;
             }
@@ -248,7 +264,7 @@ void ExportRule(
         }
     }
     else {
-        stats->IncrementExportsNotEligibleCounter();
+        context->statistics->IncrementExportsNotEligibleCounter();
         Logger::Log(LogLevel::Performance,
                     "Export target {} is not eligible for target caching",
                     key.target.ToString());
@@ -262,7 +278,7 @@ void ExportRule(
     auto exported_target = BuildMaps::Base::ParseEntityNameFromExpression(
         exported_target_name,
         key.target,
-        repo_config,
+        context->repo_config,
         [&logger, &exported_target_name](std::string const& parse_err) {
             (*logger)(fmt::format("Parsing target name {} failed with:\n{}",
                                   exported_target_name->ToString(),

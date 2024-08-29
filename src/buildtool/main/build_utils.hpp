@@ -27,13 +27,13 @@
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/storage/target_cache_key.hpp"
 #ifndef BOOTSTRAP_BUILD_TOOL
-#include "gsl/gsl"
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
-#include "src/buildtool/storage/storage.hpp"
 #include "src/buildtool/storage/target_cache.hpp"
 #endif  // BOOTSTRAP_BUILD_TOOL
 
@@ -69,11 +69,9 @@ using TargetCacheWriterMap =
     std::unordered_map<ArtifactDescription, Artifact::ObjectInfo> const&
         extra_infos,
     std::size_t jobs,
-    gsl::not_null<IExecutionApi*> const& local_api,
-    gsl::not_null<IExecutionApi*> const& remote_api,
-    TargetCacheWriteStrategy strategy = TargetCacheWriteStrategy::Sync,
-    TargetCache<true> const& tc = Storage::Instance().TargetCache())
-    -> TargetCacheWriterMap;
+    gsl::not_null<ApiBundle const*> const& apis,
+    TargetCacheWriteStrategy strategy,
+    TargetCache<true> const& tc) -> TargetCacheWriterMap;
 
 // use explicit cast to std::function to allow template deduction when used
 static const std::function<std::string(Artifact::ObjectInfo const&)>
@@ -88,12 +86,11 @@ void WriteTargetCacheEntries(
     std::unordered_map<ArtifactDescription, Artifact::ObjectInfo> const&
         extra_infos,
     std::size_t jobs,
-    gsl::not_null<IExecutionApi*> const& local_api,
-    gsl::not_null<IExecutionApi*> const& remote_api,
-    TargetCacheWriteStrategy strategy = TargetCacheWriteStrategy::Sync,
-    TargetCache<true> const& tc = Storage::Instance().TargetCache(),
+    ApiBundle const& apis,
+    TargetCacheWriteStrategy strategy,
+    TargetCache<true> const& tc,
     Logger const* logger = nullptr,
-    bool strict_logging = false);
+    LogLevel log_level = LogLevel::Warning);
 #endif  // BOOTSTRAP_BUILD_TOOL
 
 #endif  // INCLUDED_SRC_BUILDOOL_MAIN_BUILD_UTILS_HPP

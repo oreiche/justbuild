@@ -16,21 +16,22 @@
 
 #ifndef BOOTSTRAP_BUILD_TOOL
 
+#include <filesystem>
 #include <iostream>
+#include <optional>
+#include <string>
 
 #include "src/buildtool/compatibility/native_support.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
-#include "src/buildtool/execution_api/local/local_api.hpp"
+#include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
-#include "src/buildtool/storage/storage.hpp"
 
 auto AddArtifactsToCas(ToAddArguments const& clargs,
-                       gsl::not_null<IExecutionApi*> const& remote_api)
-    -> bool {
-
-    auto const& cas = Storage::Instance().CAS();
+                       Storage const& storage,
+                       ApiBundle const& apis) -> bool {
+    auto const& cas = storage.CAS();
     std::optional<bazel_re::Digest> digest{};
     auto object_location = clargs.location;
 
@@ -75,13 +76,17 @@ auto AddArtifactsToCas(ToAddArguments const& clargs,
                             "Storing of trees only supported in native mode");
                 return false;
             }
-            auto store_blob = [&cas](auto path, auto is_exec) {
-                return cas.StoreBlob(path, is_exec);
+            auto store_blob =
+                [&cas](std::filesystem::path const& path,
+                       auto is_exec) -> std::optional<bazel_re::Digest> {
+                return cas.StoreBlob</*kOwner=*/true>(path, is_exec);
             };
-            auto store_tree = [&cas](auto bytes, auto /*dir*/) {
-                return cas.StoreTree(bytes);
+            auto store_tree = [&cas](std::string const& content)
+                -> std::optional<bazel_re::Digest> {
+                return cas.StoreTree(content);
             };
-            auto store_symlink = [&cas](auto content) {
+            auto store_symlink = [&cas](std::string const& content)
+                -> std::optional<bazel_re::Digest> {
                 return cas.StoreBlob(content);
             };
             digest = BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
@@ -101,7 +106,7 @@ auto AddArtifactsToCas(ToAddArguments const& clargs,
     auto object = std::vector<Artifact::ObjectInfo>{
         Artifact::ObjectInfo{ArtifactDigest(*digest), *object_type, false}};
 
-    if (not LocalApi().RetrieveToCas(object, remote_api)) {
+    if (not apis.local->RetrieveToCas(object, *apis.remote)) {
         Logger::Log(LogLevel::Error,
                     "Failed to upload artifact to remote endpoint");
         return false;

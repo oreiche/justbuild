@@ -31,18 +31,16 @@
 
 #include "fmt/core.h"
 #include "gsl/gsl"
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/cli.hpp"
-#include "src/buildtool/common/remote/remote_common.hpp"
-#include "src/buildtool/common/repository_config.hpp"
-#include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/common/tree.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
-#include "src/buildtool/execution_api/common/create_execution_api.hpp"
-#include "src/buildtool/execution_api/local/local_api.hpp"
-#include "src/buildtool/execution_api/remote/bazel/bazel_api.hpp"
+#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
+#include "src/buildtool/execution_api/common/common_api.hpp"
+#include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/execution_api/utils/subobject.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
+#include "src/buildtool/execution_engine/executor/context.hpp"
 #include "src/buildtool/execution_engine/executor/executor.hpp"
 #include "src/buildtool/execution_engine/traverser/traverser.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
@@ -74,44 +72,11 @@ class GraphTraverser {
 
     explicit GraphTraverser(
         CommandLineArguments clargs,
-        gsl::not_null<RepositoryConfig*> const& repo_config,
-        std::map<std::string, std::string> platform_properties,
-        std::vector<std::pair<std::map<std::string, std::string>,
-                              ServerAddress>> dispatch_list,
-        gsl::not_null<Statistics*> const& stats,
-        gsl::not_null<Progress*> const& progress)
-        : clargs_{std::move(clargs)},
-          repo_config_{repo_config},
-          platform_properties_{std::move(platform_properties)},
-          dispatch_list_{std::move(dispatch_list)},
-          stats_{stats},
-          progress_{progress},
-          local_api_{CreateExecutionApi(std::nullopt,
-                                        std::make_optional(repo_config))},
-          remote_api_{CreateExecutionApi(RemoteExecutionConfig::RemoteAddress(),
-                                         std::make_optional(repo_config))},
-          reporter_{[](auto done, auto cv) {}} {}
-
-    explicit GraphTraverser(
-        CommandLineArguments clargs,
-        gsl::not_null<RepositoryConfig*> const& repo_config,
-        std::map<std::string, std::string> platform_properties,
-        std::vector<std::pair<std::map<std::string, std::string>,
-                              ServerAddress>> dispatch_list,
-        gsl::not_null<Statistics*> const& stats,
-        gsl::not_null<Progress*> const& progress,
+        gsl::not_null<const ExecutionContext*> const& context,
         progress_reporter_t reporter,
         Logger const* logger = nullptr)
         : clargs_{std::move(clargs)},
-          repo_config_{repo_config},
-          platform_properties_{std::move(platform_properties)},
-          dispatch_list_{std::move(dispatch_list)},
-          stats_{stats},
-          progress_{progress},
-          local_api_{CreateExecutionApi(std::nullopt,
-                                        std::make_optional(repo_config))},
-          remote_api_{CreateExecutionApi(RemoteExecutionConfig::RemoteAddress(),
-                                         std::make_optional(repo_config))},
+          context_{*context},
           reporter_{std::move(reporter)},
           logger_{logger} {}
 
@@ -177,8 +142,8 @@ class GraphTraverser {
         }
 
         if (clargs_.stage->remember) {
-            if (not remote_api_->ParallelRetrieveToCas(
-                    *object_infos, GetLocalApi(), clargs_.jobs, true)) {
+            if (not context_.apis->remote->ParallelRetrieveToCas(
+                    *object_infos, *context_.apis->local, clargs_.jobs, true)) {
                 Logger::Log(logger_,
                             LogLevel::Warning,
                             "Failed to copy objects to CAS");
@@ -245,24 +210,9 @@ class GraphTraverser {
             artifact_descriptions, {}, action_descriptions, blobs, trees);
     }
 
-    [[nodiscard]] auto GetLocalApi() const -> gsl::not_null<IExecutionApi*> {
-        return &(*local_api_);
-    }
-
-    [[nodiscard]] auto GetRemoteApi() const -> gsl::not_null<IExecutionApi*> {
-        return &(*remote_api_);
-    }
-
   private:
     CommandLineArguments const clargs_;
-    gsl::not_null<RepositoryConfig*> repo_config_;
-    std::map<std::string, std::string> platform_properties_;
-    std::vector<std::pair<std::map<std::string, std::string>, ServerAddress>>
-        dispatch_list_;
-    gsl::not_null<Statistics*> stats_;
-    gsl::not_null<Progress*> progress_;
-    gsl::not_null<IExecutionApi::Ptr> const local_api_;
-    gsl::not_null<IExecutionApi::Ptr> const remote_api_;
+    ExecutionContext const& context_;
     progress_reporter_t reporter_;
     Logger const* logger_{nullptr};
 
@@ -322,9 +272,10 @@ class GraphTraverser {
     /// \param[in]  blobs   blobs to be uploaded
     [[nodiscard]] auto UploadBlobs(
         std::vector<std::string> const& blobs) const noexcept -> bool {
-        BlobContainer container;
+        ArtifactBlobContainer container;
         for (auto const& blob : blobs) {
-            auto digest = ArtifactDigest::Create<ObjectType::File>(blob);
+            auto digest = ArtifactDigest::Create<ObjectType::File>(
+                context_.apis->hash_function, blob);
             Logger::Log(logger_, LogLevel::Trace, [&]() {
                 return fmt::format(
                     "Uploaded blob {}, its digest has id {} and size {}.",
@@ -332,18 +283,22 @@ class GraphTraverser {
                     digest.hash(),
                     digest.size());
             });
-            try {
-                container.Emplace(
-                    BazelBlob{std::move(digest), blob, /*is_exec=*/false});
-            } catch (std::exception const& ex) {
-                Logger::Log(logger_,
-                            LogLevel::Error,
-                            "failed to create blob with: ",
-                            ex.what());
+            // Store and/or upload blob, taking into account the maximum
+            // transfer size.
+            if (not UpdateContainerAndUpload<ArtifactDigest>(
+                    &container,
+                    ArtifactBlob{std::move(digest), blob, /*is_exec=*/false},
+                    /*exception_is_fatal=*/true,
+                    [&api =
+                         context_.apis->remote](ArtifactBlobContainer&& blobs) {
+                        return api->Upload(std::move(blobs));
+                    },
+                    logger_)) {
                 return false;
             }
         }
-        return remote_api_->Upload(container);
+        // Upload remaining blobs.
+        return context_.apis->remote->Upload(std::move(container));
     }
 
     /// \brief Adds the artifacts to be retrieved to the graph
@@ -386,15 +341,7 @@ class GraphTraverser {
     [[nodiscard]] auto Traverse(
         DependencyGraph const& g,
         std::vector<ArtifactIdentifier> const& artifact_ids) const -> bool {
-        Executor executor{repo_config_,
-                          &(*local_api_),
-                          &(*remote_api_),
-                          platform_properties_,
-                          dispatch_list_,
-                          stats_,
-                          progress_,
-                          logger_,
-                          clargs_.build.timeout};
+        Executor executor{&context_, logger_, clargs_.build.timeout};
         bool traversing{};
         std::atomic<bool> done = false;
         std::atomic<bool> failed = false;
@@ -415,19 +362,7 @@ class GraphTraverser {
     [[nodiscard]] auto TraverseRebuild(
         DependencyGraph const& g,
         std::vector<ArtifactIdentifier> const& artifact_ids) const -> bool {
-        // setup rebuilder with api for cache endpoint
-        auto api_cached =
-            CreateExecutionApi(RemoteExecutionConfig::CacheAddress(),
-                               std::make_optional(repo_config_));
-        Rebuilder executor{repo_config_,
-                           &(*local_api_),
-                           &(*remote_api_),
-                           &(*api_cached),
-                           platform_properties_,
-                           dispatch_list_,
-                           stats_,
-                           progress_,
-                           clargs_.build.timeout};
+        Rebuilder executor{&context_, clargs_.build.timeout};
         bool traversing{false};
         std::atomic<bool> done = false;
         std::atomic<bool> failed = false;
@@ -475,19 +410,20 @@ class GraphTraverser {
     }
 
     void LogStatistics() const noexcept {
+        auto& stats = *context_.statistics;
         if (clargs_.rebuild) {
             std::stringstream ss{};
-            ss << stats_->RebuiltActionComparedCounter()
+            ss << stats.RebuiltActionComparedCounter()
                << " actions compared with cache";
-            if (stats_->ActionsFlakyCounter() > 0) {
-                ss << ", " << stats_->ActionsFlakyCounter()
+            if (stats.ActionsFlakyCounter() > 0) {
+                ss << ", " << stats.ActionsFlakyCounter()
                    << " flaky actions found";
-                ss << " (" << stats_->ActionsFlakyTaintedCounter()
+                ss << " (" << stats.ActionsFlakyTaintedCounter()
                    << " of which tainted)";
             }
-            if (stats_->RebuiltActionMissingCounter() > 0) {
+            if (stats.RebuiltActionMissingCounter() > 0) {
                 ss << ", no cache entry found for "
-                   << stats_->RebuiltActionMissingCounter() << " actions";
+                   << stats.RebuiltActionMissingCounter() << " actions";
             }
             ss << ".";
             Logger::Log(logger_, LogLevel::Info, ss.str());
@@ -496,8 +432,8 @@ class GraphTraverser {
             Logger::Log(logger_,
                         LogLevel::Info,
                         "Processed {} actions, {} cache hits.",
-                        stats_->ActionsQueuedCounter(),
-                        stats_->ActionsCachedCounter());
+                        stats.ActionsQueuedCounter(),
+                        stats.ActionsCachedCounter());
         }
     }
 
@@ -625,8 +561,8 @@ class GraphTraverser {
         auto output_paths = PrepareOutputPaths(rel_paths);
 
         if (not output_paths or
-            not remote_api_->RetrieveToPaths(
-                object_infos, *output_paths, &(*GetLocalApi()))) {
+            not context_.apis->remote->RetrieveToPaths(
+                object_infos, *output_paths, &*context_.apis->local)) {
             Logger::Log(
                 logger_, LogLevel::Error, "Could not retrieve outputs.");
             return std::nullopt;
@@ -675,7 +611,7 @@ class GraphTraverser {
             msg_dbg += fmt::format("\n  {}: {}", path, id);
         }
 
-        if (not clargs_.build.show_runfiles and !runfiles.empty()) {
+        if (not clargs_.build.show_runfiles and not runfiles.empty()) {
             message += fmt::format("\n({} runfiles omitted.)", runfiles.size());
         }
 
@@ -701,14 +637,14 @@ class GraphTraverser {
         std::vector<DependencyGraph::ArtifactNode const*> const& artifacts)
         const {
         if (clargs_.build.print_to_stdout) {
+            auto const& remote = *context_.apis->remote;
             for (std::size_t i = 0; i < paths.size(); i++) {
                 if (paths[i] == *(clargs_.build.print_to_stdout)) {
                     auto info = artifacts[i]->Content().Info();
                     if (info) {
-                        if (not remote_api_->RetrieveToFds(
-                                {*info},
-                                {dup(fileno(stdout))},
-                                /*raw_tree=*/false)) {
+                        if (not remote.RetrieveToFds({*info},
+                                                     {dup(fileno(stdout))},
+                                                     /*raw_tree=*/false)) {
                             Logger::Log(logger_,
                                         LogLevel::Error,
                                         "Failed to retrieve {}",
@@ -730,7 +666,6 @@ class GraphTraverser {
             auto target_path = ToNormalPath(std::filesystem::path{
                                                 *clargs_.build.print_to_stdout})
                                    .relative_path();
-            auto remote = GetRemoteApi();
             for (std::size_t i = 0; i < paths.size(); i++) {
                 auto const& path = paths[i];
                 auto relpath = target_path.lexically_relative(path);
@@ -748,10 +683,9 @@ class GraphTraverser {
                         auto new_info =
                             RetrieveSubPathId(*info, remote, relpath);
                         if (new_info) {
-                            if (not remote_api_->RetrieveToFds(
-                                    {*new_info},
-                                    {dup(fileno(stdout))},
-                                    /*raw_tree=*/false)) {
+                            if (not remote.RetrieveToFds({*new_info},
+                                                         {dup(fileno(stdout))},
+                                                         /*raw_tree=*/false)) {
                                 Logger::Log(logger_,
                                             LogLevel::Error,
                                             "Failed to retrieve artifact {} at "

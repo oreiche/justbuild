@@ -19,13 +19,14 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/uplinker.hpp"
+#include "src/utils/cpp/expected.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
 template <bool>
@@ -69,8 +70,8 @@ class LargeObjectError final {
 /// \brief Stores a temporary directory containing a result of splicing.
 class LargeObject final {
   public:
-    LargeObject() noexcept
-        : directory_(StorageConfig::CreateTypedTmpDir("splice")),
+    explicit LargeObject(StorageConfig const& storage_config) noexcept
+        : directory_(storage_config.CreateTypedTmpDir("splice")),
           path_(directory_ ? directory_->GetPath() / "result" : ".") {}
 
     /// \brief Check whether the large object is valid.
@@ -96,9 +97,16 @@ class LargeObject final {
 template <bool kDoGlobalUplink, ObjectType kType>
 class LargeObjectCAS final {
   public:
-    LargeObjectCAS(LocalCAS<kDoGlobalUplink> const& local_cas,
-                   std::filesystem::path const& store_path) noexcept
-        : local_cas_(local_cas), file_store_(store_path) {}
+    explicit LargeObjectCAS(
+        gsl::not_null<LocalCAS<kDoGlobalUplink> const*> const& local_cas,
+        GenerationConfig const& config,
+        gsl::not_null<Uplinker<kDoGlobalUplink> const*> const&
+            uplinker) noexcept
+        : local_cas_(*local_cas),
+          storage_config_{*config.storage_config},
+          uplinker_{*uplinker},
+          file_store_(IsTreeObject(kType) ? config.cas_large_t
+                                          : config.cas_large_f) {}
 
     LargeObjectCAS(LargeObjectCAS const&) = delete;
     LargeObjectCAS(LargeObjectCAS&&) = delete;
@@ -124,7 +132,7 @@ class LargeObjectCAS final {
     /// \return             A set of chunks the resulting object is composed of
     /// or an error on failure.
     [[nodiscard]] auto Split(bazel_re::Digest const& digest) const noexcept
-        -> std::variant<LargeObjectError, std::vector<bazel_re::Digest>>;
+        -> expected<std::vector<bazel_re::Digest>, LargeObjectError>;
 
     /// \brief Splice an object based on the reconstruction rules from the
     /// storage. This method doesn't check whether the result of splicing is
@@ -133,7 +141,7 @@ class LargeObjectCAS final {
     /// \return             A temporary directory that contains a single file
     /// "result" on success or an error on failure.
     [[nodiscard]] auto TrySplice(bazel_re::Digest const& digest) const noexcept
-        -> std::variant<LargeObjectError, LargeObject>;
+        -> expected<LargeObject, LargeObjectError>;
 
     /// \brief Splice an object from parts. This method doesn't check whether
     /// the result of splicing is already in the CAS.
@@ -143,7 +151,7 @@ class LargeObjectCAS final {
     /// "result" on success or an error on failure.
     [[nodiscard]] auto Splice(bazel_re::Digest const& digest,
                               std::vector<bazel_re::Digest> const& parts)
-        const noexcept -> std::variant<LargeObjectError, LargeObject>;
+        const noexcept -> expected<LargeObject, LargeObjectError>;
 
     /// \brief Uplink large entry from this generation to latest LocalCAS
     /// generation. For the large entry it's parts get promoted first and then
@@ -155,7 +163,8 @@ class LargeObjectCAS final {
     /// \param digest       The digest of the large entry to uplink.
     /// \returns True if the large entry was successfully uplinked.
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
-    requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplink(
+        requires(kIsLocalGeneration)
+    [[nodiscard]] auto LocalUplink(
         LocalCAS<false> const& latest,
         LargeObjectCAS<false, kType> const& latest_large,
         bazel_re::Digest const& digest) const noexcept -> bool;
@@ -167,6 +176,8 @@ class LargeObjectCAS final {
         kDoGlobalUplink ? StoreMode::LastWins : StoreMode::FirstWins;
 
     LocalCAS<kDoGlobalUplink> const& local_cas_;
+    StorageConfig const& storage_config_;
+    Uplinker<kDoGlobalUplink> const& uplinker_;
     FileStorage<ObjectType::File, kStoreMode, /*kSetEpochTime=*/false>
         file_store_;
 

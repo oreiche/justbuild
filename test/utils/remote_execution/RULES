@@ -25,11 +25,12 @@
     , "TEST_ENV"
     , "CC_TEST_LAUNCHER"
     , "TEST_COMPATIBLE_REMOTE"
+    , "LINT"
     ]
   , "implicit":
     { "defaults": [["@", "rules", "CC", "defaults"]]
     , "runner": ["test_runner.py"]
-    , "just": [["@", "src", "", "installed just"]]
+    , "just": [["", "tool-under-test"]]
     }
   , "field_doc":
     { "name":
@@ -58,7 +59,7 @@
       , "Individual directory components are joined with \"/\"."
       ]
     , "pure C":
-      [ "If non-empty, compile as C sources rathter than C++ sources."
+      [ "If non-empty, compile as C sources rather than C++ sources."
       , "In particular, CC is used to compile rather than CXX (or their"
       , "respective defaults)."
       ]
@@ -102,6 +103,7 @@
     , "        the respective file descriptor"
     , "time-start/time-stop: The time (decimally coded) in seconds since the"
     , "        epoch when the test invocation started and ended."
+    , "pwd:    the directory in which the test was carried out"
     ]
   , "runfiles_doc":
     [ "A tree consisting of the artifacts staged at the name of the test."
@@ -114,11 +116,13 @@
     , "runfiles": ["@", "rules", "", "field_runfiles"]
     , "host transition": ["@", "rules", "transitions", "for host"]
     , "stage": ["@", "rules", "", "stage_singleton_field"]
-    , "run_test": ["@", "rules", "CC/test", "run_test"]
+    , "run_test": "run_test"
     }
   , "config_transitions":
     { "defaults": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
     , "private-deps": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
+    , "private-hdrs": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
+    , "srcs": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
     , "data": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
     , "just": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
     , "runner": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
@@ -139,12 +143,16 @@
           , "$1": {"type": "FIELD", "name": "stage"}
           }
         ]
+      , ["host-trans", {"type": "CALL_EXPRESSION", "name": "host transition"}]
       , [ "srcs"
         , { "type": "to_subdir"
           , "subdir": {"type": "var", "name": "stage"}
           , "$1":
             { "type": "let*"
-            , "bindings": [["fieldname", "srcs"]]
+            , "bindings":
+              [ ["fieldname", "srcs"]
+              , ["transition", {"type": "var", "name": "host-trans"}]
+              ]
             , "body": {"type": "CALL_EXPRESSION", "name": "artifacts"}
             }
           }
@@ -154,12 +162,14 @@
           , "subdir": {"type": "var", "name": "stage"}
           , "$1":
             { "type": "let*"
-            , "bindings": [["fieldname", "private-hdrs"]]
+            , "bindings":
+              [ ["fieldname", "private-hdrs"]
+              , ["transition", {"type": "var", "name": "host-trans"}]
+              ]
             , "body": {"type": "CALL_EXPRESSION", "name": "artifacts"}
             }
           }
         ]
-      , ["host-trans", {"type": "CALL_EXPRESSION", "name": "host transition"}]
       , ["defaults-transition", {"type": "var", "name": "host-trans"}]
       , ["deps-transition", {"type": "var", "name": "host-trans"}]
       , ["deps-fieldnames", ["private-deps", "defaults"]]
@@ -187,7 +197,10 @@
         , { "type": "map_union"
           , "$1":
             [ {"type": "var", "name": "compatible-remote"}
-            , {"type": "var", "name": "just"}
+            , { "type": "to_subdir"
+              , "subdir": "staged"
+              , "$1": {"type": "var", "name": "just"}
+              }
             ]
           }
         ]

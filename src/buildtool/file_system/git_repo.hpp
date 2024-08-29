@@ -21,11 +21,14 @@
 #include <string>
 #include <unordered_map>
 #include <utility>  // std::move
-#include <variant>
 #include <vector>
 
+#include "gsl/gsl"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/file_system/git_cas.hpp"
+#include "src/buildtool/file_system/git_types.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 extern "C" {
 struct git_repository;
@@ -105,10 +108,11 @@ class GitRepo {
     /// \param check_symlinks   Function to check non-upwardness condition.
     /// \param is_hex_id  Specify whether `id` is hex string or raw.
     /// \param ignore_special   If set, treat symlinks as absent.
-    [[nodiscard]] auto ReadTree(std::string const& id,
-                                SymlinksCheckFunc const& check_symlinks,
-                                bool is_hex_id = false,
-                                bool ignore_special = false) const noexcept
+    [[nodiscard]] auto ReadTree(
+        std::string const& id,
+        gsl::not_null<SymlinksCheckFunc> const& check_symlinks,
+        bool is_hex_id = false,
+        bool ignore_special = false) const noexcept
         -> std::optional<tree_entries_t>;
 
     /// \brief Create a flat tree from entries and store tree in CAS.
@@ -130,7 +134,7 @@ class GitRepo {
     [[nodiscard]] static auto ReadTreeData(
         std::string const& data,
         std::string const& id,
-        SymlinksCheckFunc const& check_symlinks,
+        gsl::not_null<SymlinksCheckFunc> const& check_symlinks,
         bool is_hex_id = false) noexcept -> std::optional<tree_entries_t>;
 
     /// \brief Create a flat shallow (without objects in db) tree and return it.
@@ -147,21 +151,26 @@ class GitRepo {
     using anon_logger_t = std::function<void(std::string const&, bool)>;
     using anon_logger_ptr = std::shared_ptr<anon_logger_t>;
 
-    /// \brief Stage all in current path and commit with given message.
+    /// \brief Create tree from entries at given directory and commit it with
+    /// given message. The given path need not be a subdirectory of the
+    /// repository root path, but the caller must guarantee its entries are
+    /// readable.
     /// Only possible with real repository and thus non-thread-safe.
-    /// Returns the commit hash, or nullopt if failure.
-    /// It guarantees the logger is called exactly once with fatal if failure.
-    [[nodiscard]] auto StageAndCommitAllAnonymous(
-        std::string const& message,
-        anon_logger_ptr const& logger) noexcept -> std::optional<std::string>;
+    /// \returns The commit hash, or nullopt if failure. It guarantees the
+    /// logger is called exactly once with fatal if failure.
+    [[nodiscard]] auto CommitDirectory(std::filesystem::path const& dir,
+                                       std::string const& message,
+                                       anon_logger_ptr const& logger) noexcept
+        -> std::optional<std::string>;
 
     /// \brief Create annotated tag for given commit.
     /// Only possible with real repository and thus non-thread-safe.
-    /// Returns success flag.
+    /// Returns the tag on success.
     /// It guarantees the logger is called exactly once with fatal if failure.
     [[nodiscard]] auto KeepTag(std::string const& commit,
                                std::string const& message,
-                               anon_logger_ptr const& logger) noexcept -> bool;
+                               anon_logger_ptr const& logger) noexcept
+        -> std::optional<std::string>;
 
     /// \brief Retrieves the commit of the HEAD reference.
     /// Only possible with real repository and thus non-thread-safe.
@@ -186,23 +195,21 @@ class GitRepo {
     /// \brief Ensure given tree is kept alive via a tag. It is expected that
     /// the tree is part of the repository already.
     /// Only possible with real repository and thus non-thread-safe.
-    /// Returns success flag.
+    /// Returns the tag on success.
     /// It guarantees the logger is called exactly once with fatal if failure.
     [[nodiscard]] auto KeepTree(std::string const& tree_id,
                                 std::string const& message,
-                                anon_logger_ptr const& logger) noexcept -> bool;
+                                anon_logger_ptr const& logger) noexcept
+        -> std::optional<std::string>;
 
     /// \brief Get the tree id of a subtree given the root commit
     /// Calling it from a fake repository allows thread-safe use.
-    /// Returns an error + data union, where at index 0 is a flag stating the
-    /// nature of the error on failure (true is fatal, false is non-fatal, i.e.,
-    /// commit not found), and at index 1 is the subtree hash on success.
-    /// It guarantees the logger is called exactly once with fatal if failure.
+    /// Returns the subtree hash on success or an unexpected error.
     [[nodiscard]] auto GetSubtreeFromCommit(
         std::string const& commit,
         std::string const& subdir,
         anon_logger_ptr const& logger) noexcept
-        -> std::variant<bool, std::string>;
+        -> expected<std::string, GitLookupError>;
 
     /// \brief Get the tree id of a subtree given the root tree hash
     /// Calling it from a fake repository allows thread-safe use.
@@ -295,6 +302,7 @@ class GitRepo {
     /// Returns a success flag.
     /// It guarantees the logger is called exactly once with fatal if failure.
     [[nodiscard]] auto LocalFetchViaTmpRepo(
+        StorageConfig const& storage_config,
         std::string const& repo_path,
         std::optional<std::string> const& branch,
         anon_logger_ptr const& logger) noexcept -> bool;
@@ -350,6 +358,25 @@ class GitRepo {
 
     [[nodiscard]] auto GetGitOdb() const noexcept
         -> std::unique_ptr<git_odb, decltype(&odb_closer)> const&;
+
+    using StoreDirEntryFunc =
+        std::function<bool(std::filesystem::path const&, ObjectType type)>;
+
+    /// \brief Helper function to read the entries of a filesystem subdirectory
+    /// and store them to the ODB. It is a modified version of the same-named
+    /// function from FileSystemManager which accepts a subdir and a specific
+    /// logger instead of the default.
+    [[nodiscard]] static auto ReadDirectory(
+        std::filesystem::path const& dir,
+        StoreDirEntryFunc const& read_and_store_entry,
+        anon_logger_ptr const& logger) noexcept -> bool;
+
+    /// \brief Create a tree from the content of a directory by recursively
+    /// adding its entries to the object database.
+    /// \return The raw id of the tree.
+    [[nodiscard]] auto CreateTreeFromDirectory(
+        std::filesystem::path const& dir,
+        anon_logger_ptr const& logger) noexcept -> std::optional<std::string>;
 
     /// \brief Helper function to allocate and populate the char** pointer of a
     /// git_strarray from a vector of standard strings. User MUST use

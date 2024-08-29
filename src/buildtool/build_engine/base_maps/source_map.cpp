@@ -27,8 +27,8 @@ namespace BuildMaps::Base {
 
 namespace {
 
-auto as_target(const BuildMaps::Base::EntityName& key, ExpressionPtr artifact)
-    -> AnalysedTargetPtr {
+auto as_target(const BuildMaps::Base::EntityName& key,
+               ExpressionPtr artifact) -> AnalysedTargetPtr {
     auto stage = ExpressionPtr{
         Expression::map_t{key.GetNamedTarget().name, std::move(artifact)}};
     return std::make_shared<AnalysedTarget const>(
@@ -46,9 +46,10 @@ auto as_target(const BuildMaps::Base::EntityName& key, ExpressionPtr artifact)
 
 }  // namespace
 
-auto CreateSourceTargetMap(const gsl::not_null<DirectoryEntriesMap*>& dirs,
-                           gsl::not_null<RepositoryConfig*> const& repo_config,
-                           std::size_t jobs) -> SourceTargetMap {
+auto CreateSourceTargetMap(
+    const gsl::not_null<DirectoryEntriesMap*>& dirs,
+    gsl::not_null<const RepositoryConfig*> const& repo_config,
+    std::size_t jobs) -> SourceTargetMap {
     auto src_target_reader = [dirs, repo_config](auto ts,
                                                  auto setter,
                                                  auto logger,
@@ -103,8 +104,9 @@ auto CreateSourceTargetMap(const gsl::not_null<DirectoryEntriesMap*>& dirs,
             },
             [logger, dir](auto msg, auto fatal) {
                 (*logger)(
-                    fmt::format(
-                        "While reading contents of {}: {}", dir.string(), msg),
+                    fmt::format("While reading contents of directory {}: {}",
+                                nlohmann::json(dir.string()).dump(),
+                                msg),
                     fatal);
             }
 

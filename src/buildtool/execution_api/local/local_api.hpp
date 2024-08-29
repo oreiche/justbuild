@@ -30,38 +30,47 @@
 #include "fmt/core.h"
 #include "grpcpp/support/status.h"
 #include "gsl/gsl"
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/compatibility/native_support.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob.hpp"
-#include "src/buildtool/execution_api/bazel_msg/blob_tree.hpp"
+#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
+#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
+#include "src/buildtool/execution_api/common/blob_tree.hpp"
+#include "src/buildtool/execution_api/common/common_api.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/execution_api/common/stream_dumper.hpp"
+#include "src/buildtool/execution_api/common/tree_reader.hpp"
 #include "src/buildtool/execution_api/execution_service/cas_utils.hpp"
 #include "src/buildtool/execution_api/git/git_api.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/execution_api/local/local_action.hpp"
+#include "src/buildtool/execution_api/local/local_cas_reader.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
-#include "src/buildtool/storage/storage.hpp"
 
 /// \brief API for local execution.
 class LocalApi final : public IExecutionApi {
   public:
-    explicit LocalApi(std::optional<gsl::not_null<RepositoryConfig*>>
-                          repo_config = std::nullopt)
-        : repo_config_{std::move(repo_config)} {}
+    explicit LocalApi(gsl::not_null<LocalContext const*> const& local_context,
+                      RepositoryConfig const* repo_config = nullptr) noexcept
+        : local_context_{*local_context},
+          git_api_{CreateFallbackApi(repo_config)} {}
 
-    auto CreateAction(
+    [[nodiscard]] auto CreateAction(
         ArtifactDigest const& root_digest,
         std::vector<std::string> const& command,
+        std::string const& cwd,
         std::vector<std::string> const& output_files,
         std::vector<std::string> const& output_dirs,
         std::map<std::string, std::string> const& env_vars,
-        std::map<std::string, std::string> const& properties) noexcept
+        std::map<std::string, std::string> const& properties) const noexcept
         -> IExecutionAction::Ptr final {
-        return IExecutionAction::Ptr{new LocalAction{storage_,
+        return IExecutionAction::Ptr{new LocalAction{&local_context_,
                                                      root_digest,
                                                      command,
+                                                     cwd,
                                                      output_files,
                                                      output_dirs,
                                                      env_vars,
@@ -72,8 +81,8 @@ class LocalApi final : public IExecutionApi {
     [[nodiscard]] auto RetrieveToPaths(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<std::filesystem::path> const& output_paths,
-        std::optional<gsl::not_null<IExecutionApi*>> const& /*alternative*/ =
-            std::nullopt) noexcept -> bool final {
+        IExecutionApi const* /*alternative*/ = nullptr) const noexcept
+        -> bool final {
         if (artifacts_info.size() != output_paths.size()) {
             Logger::Log(LogLevel::Error,
                         "different number of digests and output paths.");
@@ -84,36 +93,26 @@ class LocalApi final : public IExecutionApi {
             auto const& info = artifacts_info[i];
             if (IsTreeObject(info.type)) {
                 // read object infos from sub tree and call retrieve recursively
-                auto const infos = storage_->CAS().RecursivelyReadTreeLeafs(
+                auto reader =
+                    TreeReader<LocalCasReader>{&local_context_.storage->CAS()};
+                auto const result = reader.RecursivelyReadTreeLeafs(
                     info.digest, output_paths[i]);
-                if (not infos) {
-                    if (Compatibility::IsCompatible()) {
-                        // infos not available, and in compatible mode cannot
-                        // fall back to git
-                        return false;
-                    }
-                    if (repo_config_ and
-                        not GitApi(repo_config_.value())
-                                .RetrieveToPaths({info}, {output_paths[i]})) {
+                if (not result) {
+                    if (git_api_ and not git_api_->RetrieveToPaths(
+                                         {info}, {output_paths[i]})) {
                         return false;
                     }
                 }
-                else if (not RetrieveToPaths(infos->second, infos->first)) {
+                else if (not RetrieveToPaths(result->infos, result->paths)) {
                     return false;
                 }
             }
             else {
-                auto const blob_path = storage_->CAS().BlobPath(
+                auto const blob_path = local_context_.storage->CAS().BlobPath(
                     info.digest, IsExecutableObject(info.type));
                 if (not blob_path) {
-                    if (Compatibility::IsCompatible()) {
-                        // infos not available, and in compatible mode cannot
-                        // fall back to git
-                        return false;
-                    }
-                    if (repo_config_ and
-                        not GitApi(repo_config_.value())
-                                .RetrieveToPaths({info}, {output_paths[i]})) {
+                    if (git_api_ and not git_api_->RetrieveToPaths(
+                                         {info}, {output_paths[i]})) {
                         return false;
                     }
                 }
@@ -136,84 +135,57 @@ class LocalApi final : public IExecutionApi {
     [[nodiscard]] auto RetrieveToFds(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<int> const& fds,
-        bool raw_tree) noexcept -> bool final {
-        if (artifacts_info.size() != fds.size()) {
-            Logger::Log(LogLevel::Error,
-                        "different number of digests and file descriptors.");
-            return false;
-        }
-
-        for (std::size_t i{}; i < artifacts_info.size(); ++i) {
-            auto fd = fds[i];
-            auto const& info = artifacts_info[i];
-
-            if (gsl::owner<FILE*> out = fdopen(dup(fd), "wb")) {  // NOLINT
-                auto const success =
-                    storage_->CAS().DumpToStream(info, out, raw_tree);
-                std::fclose(out);
-                if (not success) {
-                    Logger::Log(
-                        LogLevel::Debug,
-                        "dumping {} {} from CAS to file descriptor {} failed.",
-                        IsTreeObject(info.type) ? "tree" : "blob",
-                        info.ToString(),
-                        fd);
-                    if (Compatibility::IsCompatible()) {
-                        // infos not available, and in compatible mode cannot
-                        // fall back to git
-                        return false;
-                    }
-                    if (repo_config_ and
-                        not GitApi(repo_config_.value())
-                                .RetrieveToFds({info}, {fd}, raw_tree)) {
-                        return false;
-                    }
-                }
-            }
-            else {
-                Logger::Log(LogLevel::Error,
-                            "dumping to file descriptor {} failed.",
-                            fd);
-                return false;
-            }
-        }
-        return true;
+        bool raw_tree) const noexcept -> bool final {
+        auto dumper =
+            StreamDumper<LocalCasReader>{&local_context_.storage->CAS()};
+        return CommonRetrieveToFds(
+            artifacts_info,
+            fds,
+            [&dumper, &raw_tree](Artifact::ObjectInfo const& info,
+                                 gsl::not_null<FILE*> const& out) {
+                return dumper.DumpToStream(info, out, raw_tree);
+            },
+            [&git_api = git_api_, &raw_tree](Artifact::ObjectInfo const& info,
+                                             int fd) {
+                return not git_api or
+                       git_api->RetrieveToFds({info}, {fd}, raw_tree);
+            });
     }
 
     // NOLINTNEXTLINE(misc-no-recursion)
     [[nodiscard]] auto RetrieveToCas(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
-        gsl::not_null<IExecutionApi*> const& api) noexcept -> bool final {
-
+        IExecutionApi const& api) const noexcept -> bool final {
         // Return immediately if target CAS is this CAS
-        if (this == api) {
+        if (this == &api) {
             return true;
         }
 
         // Determine missing artifacts in other CAS.
-        std::vector<ArtifactDigest> digests;
-        digests.reserve(artifacts_info.size());
-        std::unordered_map<ArtifactDigest, Artifact::ObjectInfo> info_map;
-        for (auto const& info : artifacts_info) {
-            digests.push_back(info.digest);
-            info_map[info.digest] = info;
-        }
-        auto const& missing_digests = api->IsAvailable(digests);
-        std::vector<Artifact::ObjectInfo> missing_artifacts_info;
-        missing_artifacts_info.reserve(missing_digests.size());
-        for (auto const& digest : missing_digests) {
-            missing_artifacts_info.push_back(info_map[digest]);
+        auto missing_artifacts_info =
+            GetMissingArtifactsInfo<Artifact::ObjectInfo>(
+                api,
+                artifacts_info.begin(),
+                artifacts_info.end(),
+                [](Artifact::ObjectInfo const& info) { return info.digest; });
+        if (not missing_artifacts_info) {
+            Logger::Log(LogLevel::Error,
+                        "LocalApi: Failed to retrieve the missing artifacts");
+            return false;
         }
 
         // Collect blobs of missing artifacts from local CAS. Trees are
         // processed recursively before any blob is uploaded.
-        BlobContainer container{};
-        for (auto const& info : missing_artifacts_info) {
+        ArtifactBlobContainer container{};
+        for (auto const& dgst : missing_artifacts_info->digests) {
+            auto const& info = missing_artifacts_info->back_map[dgst];
             // Recursively process trees.
             if (IsTreeObject(info.type)) {
-                auto const& infos = storage_->CAS().ReadDirectTreeEntries(
+                auto reader =
+                    TreeReader<LocalCasReader>{&local_context_.storage->CAS()};
+                auto const& result = reader.ReadDirectTreeEntries(
                     info.digest, std::filesystem::path{});
-                if (not infos or not RetrieveToCas(infos->second, api)) {
+                if (not result or not RetrieveToCas(result->infos, api)) {
                     return false;
                 }
             }
@@ -221,9 +193,9 @@ class LocalApi final : public IExecutionApi {
             // Determine artifact path.
             auto const& path =
                 IsTreeObject(info.type)
-                    ? storage_->CAS().TreePath(info.digest)
-                    : storage_->CAS().BlobPath(info.digest,
-                                               IsExecutableObject(info.type));
+                    ? local_context_.storage->CAS().TreePath(info.digest)
+                    : local_context_.storage->CAS().BlobPath(
+                          info.digest, IsExecutableObject(info.type));
             if (not path) {
                 return false;
             }
@@ -235,60 +207,67 @@ class LocalApi final : public IExecutionApi {
             }
 
             // Regenerate digest since object infos read by
-            // storage_->ReadTreeInfos() will contain 0 as size.
-            ArtifactDigest digest;
-            if (IsTreeObject(info.type)) {
-                digest = ArtifactDigest::Create<ObjectType::Tree>(*content);
-            }
-            else {
-                digest = ArtifactDigest::Create<ObjectType::File>(*content);
-            }
+            // storage_.ReadTreeInfos() will contain 0 as size.
+            ArtifactDigest digest =
+                IsTreeObject(info.type)
+                    ? ArtifactDigest::Create<ObjectType::Tree>(
+                          local_context_.storage_config->hash_function,
+                          *content)
+                    : ArtifactDigest::Create<ObjectType::File>(
+                          local_context_.storage_config->hash_function,
+                          *content);
 
-            // Collect blob.
-            try {
-                container.Emplace(
-                    BazelBlob{digest, *content, IsExecutableObject(info.type)});
-            } catch (std::exception const& ex) {
-                Logger::Log(
-                    LogLevel::Error, "failed to emplace blob: ", ex.what());
+            // Collect blob and upload to remote CAS if transfer size reached.
+            if (not UpdateContainerAndUpload<ArtifactDigest>(
+                    &container,
+                    ArtifactBlob{std::move(digest),
+                                 *content,
+                                 IsExecutableObject(info.type)},
+                    /*exception_is_fatal=*/true,
+                    [&api](ArtifactBlobContainer&& blobs) {
+                        return api.Upload(std::move(blobs),
+                                          /*skip_find_missing=*/true);
+                    })) {
                 return false;
             }
         }
 
-        // Upload blobs to remote CAS.
-        return api->Upload(container, /*skip_find_missing=*/true);
+        // Upload remaining blobs to remote CAS.
+        return api.Upload(std::move(container), /*skip_find_missing=*/true);
     }
 
     [[nodiscard]] auto RetrieveToMemory(
-        Artifact::ObjectInfo const& artifact_info) noexcept
+        Artifact::ObjectInfo const& artifact_info) const noexcept
         -> std::optional<std::string> override {
         std::optional<std::filesystem::path> location{};
         if (IsTreeObject(artifact_info.type)) {
-            location = storage_->CAS().TreePath(artifact_info.digest);
+            location =
+                local_context_.storage->CAS().TreePath(artifact_info.digest);
         }
         else {
-            location = storage_->CAS().BlobPath(
+            location = local_context_.storage->CAS().BlobPath(
                 artifact_info.digest, IsExecutableObject(artifact_info.type));
         }
         std::optional<std::string> content = std::nullopt;
         if (location) {
             content = FileSystemManager::ReadFile(*location);
         }
-        if ((not content) and repo_config_) {
-            content =
-                GitApi(repo_config_.value()).RetrieveToMemory(artifact_info);
+        if (not content and git_api_) {
+            content = git_api_->RetrieveToMemory(artifact_info);
         }
         return content;
     }
 
-    [[nodiscard]] auto Upload(BlobContainer const& blobs,
-                              bool /*skip_find_missing*/) noexcept
+    [[nodiscard]] auto Upload(ArtifactBlobContainer&& blobs,
+                              bool /*skip_find_missing*/) const noexcept
         -> bool final {
-        for (auto const& blob : blobs) {
-            auto const is_tree = NativeSupport::IsTree(blob.digest.hash());
+        for (auto const& blob : blobs.Blobs()) {
+            auto const is_tree = NativeSupport::IsTree(
+                static_cast<bazel_re::Digest>(blob.digest).hash());
             auto cas_digest =
-                is_tree ? storage_->CAS().StoreTree(blob.data)
-                        : storage_->CAS().StoreBlob(blob.data, blob.is_exec);
+                is_tree ? local_context_.storage->CAS().StoreTree(*blob.data)
+                        : local_context_.storage->CAS().StoreBlob(*blob.data,
+                                                                  blob.is_exec);
             if (not cas_digest or not std::equal_to<bazel_re::Digest>{}(
                                       *cas_digest, blob.digest)) {
                 return false;
@@ -297,81 +276,9 @@ class LocalApi final : public IExecutionApi {
         return true;
     }
 
-    [[nodiscard]] auto UploadFile(std::filesystem::path const& file_path,
-                                  ObjectType type) noexcept -> bool override {
-        Logger::Log(LogLevel::Trace, [&file_path, &type]() {
-            return fmt::format("Storing {} of type {} directly to CAS.",
-                               file_path.string(),
-                               ToChar(type));
-        });
-        switch (type) {
-            case ObjectType::Tree:
-                return storage_->CAS()
-                    .StoreTree</* kOwner= */ true>(file_path)
-                    .has_value();
-            case ObjectType::Symlink:
-            case ObjectType::File:
-                return storage_->CAS()
-                    .StoreBlob</* kOwner= */ true>(file_path,
-                                                   /* is_executable= */ false)
-                    .has_value();
-            case ObjectType::Executable:
-                return storage_->CAS()
-                    .StoreBlob</* kOwner= */ true>(file_path,
-                                                   /* is_executable= */ true)
-                    .has_value();
-        }
-        Ensures(false);  // unreachable
-        return false;
-    }
-
-    /// NOLINTNEXTLINE(misc-no-recursion)
-    [[nodiscard]] auto UploadBlobTree(BlobTreePtr const& blob_tree) noexcept
-        -> bool {
-
-        // Create digest list from blobs for batch availability check.
-        std::vector<ArtifactDigest> digests;
-        digests.reserve(blob_tree->size());
-        std::unordered_map<ArtifactDigest, BlobTreePtr> tree_map;
-        for (auto const& node : *blob_tree) {
-            auto digest = ArtifactDigest{node->Blob().digest};
-            digests.emplace_back(digest);
-            try {
-                tree_map.emplace(std::move(digest), node);
-            } catch (...) {
-                return false;
-            }
-        }
-
-        // Find missing digests.
-        auto missing_digests = IsAvailable(digests);
-
-        // Process missing blobs.
-        BlobContainer container;
-        for (auto const& digest : missing_digests) {
-            if (auto it = tree_map.find(digest); it != tree_map.end()) {
-                auto const& node = it->second;
-                // Process trees.
-                if (node->IsTree()) {
-                    if (not UploadBlobTree(node)) {
-                        return false;
-                    }
-                }
-                // Store blob.
-                try {
-                    container.Emplace(node->Blob());
-                } catch (...) {
-                    return false;
-                }
-            }
-        }
-
-        return Upload(container, /*skip_find_missing=*/true);
-    }
-
     [[nodiscard]] auto UploadTree(
-        std::vector<DependencyGraph::NamedArtifactNodePtr> const&
-            artifacts) noexcept -> std::optional<ArtifactDigest> final {
+        std::vector<DependencyGraph::NamedArtifactNodePtr> const& artifacts)
+        const noexcept -> std::optional<ArtifactDigest> final {
         auto build_root = DirectoryTree::FromNamedArtifacts(artifacts);
         if (not build_root) {
             Logger::Log(LogLevel::Debug,
@@ -380,81 +287,41 @@ class LocalApi final : public IExecutionApi {
         }
 
         if (Compatibility::IsCompatible()) {
-            BlobContainer blobs{};
-            auto const& cas = storage_->CAS();
-            auto digest = BazelMsgFactory::CreateDirectoryDigestFromTree(
+            return CommonUploadTreeCompatible(
+                *this,
                 *build_root,
-                [&cas](std::vector<bazel_re::Digest> const& digests,
-                       std::vector<std::string>* targets) {
+                [&cas = local_context_.storage->CAS()](
+                    std::vector<bazel_re::Digest> const& digests,
+                    std::vector<std::string>* targets) {
                     targets->reserve(digests.size());
                     for (auto const& digest : digests) {
                         auto p = cas.BlobPath(digest, /*is_executable=*/false);
                         auto content = FileSystemManager::ReadFile(*p);
                         targets->emplace_back(*content);
                     }
-                },
-                [&blobs](BazelBlob&& blob) { blobs.Emplace(std::move(blob)); });
-            if (not digest) {
-                Logger::Log(LogLevel::Debug,
-                            "failed to create digest for build root.");
-                return std::nullopt;
-            }
-            Logger::Log(LogLevel::Trace, [&digest]() {
-                std::ostringstream oss{};
-                oss << "upload root directory" << std::endl;
-                oss << fmt::format(" - root digest: {}", digest->hash())
-                    << std::endl;
-                return oss.str();
-            });
-            if (not Upload(blobs, /*skip_find_missing=*/false)) {
-                Logger::Log(LogLevel::Debug,
-                            "failed to upload blobs for build root.");
-                return std::nullopt;
-            }
-            return ArtifactDigest{*digest};
+                });
         }
 
-        auto blob_tree = BlobTree::FromDirectoryTree(*build_root);
-        if (not blob_tree) {
-            Logger::Log(LogLevel::Debug,
-                        "failed to create blob tree for build root.");
-            return std::nullopt;
-        }
-        auto tree_blob = (*blob_tree)->Blob();
-        // Upload blob tree if tree is not available at the remote side (content
-        // first).
-        if (not IsAvailable(ArtifactDigest{tree_blob.digest})) {
-            if (not UploadBlobTree(*blob_tree)) {
-                Logger::Log(LogLevel::Debug,
-                            "failed to upload blob tree for build root.");
-                return std::nullopt;
-            }
-            if (not Upload(BlobContainer{{tree_blob}},
-                           /*skip_find_missing=*/true)) {
-                Logger::Log(LogLevel::Debug,
-                            "failed to upload tree blob for build root.");
-                return std::nullopt;
-            }
-        }
-        return ArtifactDigest{tree_blob.digest};
+        return CommonUploadTreeNative(*this, *build_root);
     }
 
     [[nodiscard]] auto IsAvailable(ArtifactDigest const& digest) const noexcept
         -> bool final {
         return static_cast<bool>(
             NativeSupport::IsTree(static_cast<bazel_re::Digest>(digest).hash())
-                ? storage_->CAS().TreePath(digest)
-                : storage_->CAS().BlobPath(digest, false));
+                ? local_context_.storage->CAS().TreePath(digest)
+                : local_context_.storage->CAS().BlobPath(digest, false));
     }
 
     [[nodiscard]] auto IsAvailable(std::vector<ArtifactDigest> const& digests)
         const noexcept -> std::vector<ArtifactDigest> final {
         std::vector<ArtifactDigest> result;
         for (auto const& digest : digests) {
-            auto const& path = NativeSupport::IsTree(
-                                   static_cast<bazel_re::Digest>(digest).hash())
-                                   ? storage_->CAS().TreePath(digest)
-                                   : storage_->CAS().BlobPath(digest, false);
+            auto const& path =
+                NativeSupport::IsTree(
+                    static_cast<bazel_re::Digest>(digest).hash())
+                    ? local_context_.storage->CAS().TreePath(digest)
+                    : local_context_.storage->CAS().BlobPath(digest, false);
             if (not path) {
                 result.push_back(digest);
             }
@@ -466,20 +333,19 @@ class LocalApi final : public IExecutionApi {
         const noexcept -> std::optional<std::vector<ArtifactDigest>> final {
         Logger::Log(LogLevel::Debug, "SplitBlob({})", blob_digest.hash());
         auto split_result = CASUtils::SplitBlobFastCDC(
-            static_cast<bazel_re::Digest>(blob_digest), *storage_);
-        if (std::holds_alternative<grpc::Status>(split_result)) {
-            auto* status = std::get_if<grpc::Status>(&split_result);
-            Logger::Log(LogLevel::Error, status->error_message());
+            static_cast<bazel_re::Digest>(blob_digest),
+            *local_context_.storage);
+        if (not split_result) {
+            Logger::Log(LogLevel::Error, split_result.error().error_message());
             return std::nullopt;
         }
-        auto* chunk_digests =
-            std::get_if<std::vector<bazel_re::Digest>>(&split_result);
+        auto const& chunk_digests = *split_result;
         Logger::Log(LogLevel::Debug, [&blob_digest, &chunk_digests]() {
             std::stringstream ss{};
             ss << "Split blob " << blob_digest.hash() << ":"
-               << blob_digest.size() << " into " << chunk_digests->size()
+               << blob_digest.size() << " into " << chunk_digests.size()
                << " chunks: [ ";
-            for (auto const& chunk_digest : *chunk_digests) {
+            for (auto const& chunk_digest : chunk_digests) {
                 ss << chunk_digest.hash() << ":" << chunk_digest.size_bytes()
                    << " ";
             }
@@ -487,10 +353,10 @@ class LocalApi final : public IExecutionApi {
             return ss.str();
         });
         auto artifact_digests = std::vector<ArtifactDigest>{};
-        artifact_digests.reserve(chunk_digests->size());
+        artifact_digests.reserve(chunk_digests.size());
         std::transform(
-            chunk_digests->cbegin(),
-            chunk_digests->cend(),
+            chunk_digests.cbegin(),
+            chunk_digests.cend(),
             std::back_inserter(artifact_digests),
             [](auto const& digest) { return ArtifactDigest{digest}; });
         return artifact_digests;
@@ -517,15 +383,15 @@ class LocalApi final : public IExecutionApi {
             [](auto const& artifact_digest) {
                 return static_cast<bazel_re::Digest>(artifact_digest);
             });
-        auto splice_result = CASUtils::SpliceBlob(
-            static_cast<bazel_re::Digest>(blob_digest), digests, *storage_);
-        if (std::holds_alternative<grpc::Status>(splice_result)) {
-            auto* status = std::get_if<grpc::Status>(&splice_result);
-            Logger::Log(LogLevel::Error, status->error_message());
+        auto splice_result =
+            CASUtils::SpliceBlob(static_cast<bazel_re::Digest>(blob_digest),
+                                 digests,
+                                 *local_context_.storage);
+        if (not splice_result) {
+            Logger::Log(LogLevel::Error, splice_result.error().error_message());
             return std::nullopt;
         }
-        auto* digest = std::get_if<bazel_re::Digest>(&splice_result);
-        return ArtifactDigest{*digest};
+        return ArtifactDigest{*std::move(splice_result)};
     }
 
     [[nodiscard]] auto BlobSpliceSupport() const noexcept -> bool final {
@@ -533,8 +399,16 @@ class LocalApi final : public IExecutionApi {
     }
 
   private:
-    std::optional<gsl::not_null<RepositoryConfig*>> repo_config_{};
-    gsl::not_null<Storage const*> storage_ = &Storage::Instance();
+    LocalContext const& local_context_;
+    std::optional<GitApi> const git_api_;
+
+    [[nodiscard]] static auto CreateFallbackApi(
+        RepositoryConfig const* repo_config) noexcept -> std::optional<GitApi> {
+        if (repo_config == nullptr or Compatibility::IsCompatible()) {
+            return std::nullopt;
+        }
+        return GitApi{repo_config};
+    }
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_LOCAL_LOCAL_API_HPP

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef BOOTSTRAP_BUILD_TOOL
+
 #include "src/buildtool/serve_api/remote/source_tree_client.hpp"
 
 #include "src/buildtool/common/remote/client_common.hpp"
@@ -57,15 +59,18 @@ auto PragmaSpecialToSymlinksResolve(
 
 }  // namespace
 
-SourceTreeClient::SourceTreeClient(std::string const& server,
-                                   Port port) noexcept {
-    stub_ = justbuild::just_serve::SourceTree::NewStub(
-        CreateChannelWithCredentials(server, port));
+SourceTreeClient::SourceTreeClient(
+    ServerAddress const& address,
+    gsl::not_null<RemoteContext const*> const& remote_context) noexcept {
+    stub_ =
+        justbuild::just_serve::SourceTree::NewStub(CreateChannelWithCredentials(
+            address.host, address.port, remote_context->auth));
 }
 
 auto SourceTreeClient::ServeCommitTree(std::string const& commit_id,
                                        std::string const& subdir,
-                                       bool sync_tree) noexcept -> result_t {
+                                       bool sync_tree) const noexcept
+    -> result_t {
     justbuild::just_serve::ServeCommitTreeRequest request{};
     request.set_commit(commit_id);
     request.set_subdir(subdir);
@@ -77,16 +82,18 @@ auto SourceTreeClient::ServeCommitTree(std::string const& commit_id,
 
     if (not status.ok()) {
         LogStatus(&logger_, LogLevel::Debug, status);
-        return true;  // fatal failure
+        return unexpected{GitLookupError::Fatal};
     }
     if (response.status() !=
         ::justbuild::just_serve::ServeCommitTreeResponse::OK) {
         logger_.Emit(LogLevel::Debug,
                      "ServeCommitTree response returned with {}",
                      static_cast<int>(response.status()));
-        return /*fatal = */ (
+        return unexpected{
             response.status() !=
-            ::justbuild::just_serve::ServeCommitTreeResponse::NOT_FOUND);
+                    ::justbuild::just_serve::ServeCommitTreeResponse::NOT_FOUND
+                ? GitLookupError::Fatal
+                : GitLookupError::NotFound};
     }
     return response.tree();  // success
 }
@@ -96,7 +103,7 @@ auto SourceTreeClient::ServeArchiveTree(
     std::string const& archive_type,
     std::string const& subdir,
     std::optional<PragmaSpecial> const& resolve_symlinks,
-    bool sync_tree) noexcept -> result_t {
+    bool sync_tree) const noexcept -> result_t {
     justbuild::just_serve::ServeArchiveTreeRequest request{};
     request.set_content(content);
     request.set_archive_type(StringToArchiveType(archive_type));
@@ -111,16 +118,18 @@ auto SourceTreeClient::ServeArchiveTree(
 
     if (not status.ok()) {
         LogStatus(&logger_, LogLevel::Debug, status);
-        return true;  // fatal failure
+        return unexpected{GitLookupError::Fatal};
     }
     if (response.status() !=
         ::justbuild::just_serve::ServeArchiveTreeResponse::OK) {
         logger_.Emit(LogLevel::Debug,
                      "ServeArchiveTree response returned with {}",
                      static_cast<int>(response.status()));
-        return /*fatal = */ (
+        return unexpected{
             response.status() !=
-            ::justbuild::just_serve::ServeArchiveTreeResponse::NOT_FOUND);
+                    ::justbuild::just_serve::ServeArchiveTreeResponse::NOT_FOUND
+                ? GitLookupError::Fatal
+                : GitLookupError::NotFound};
     }
     return response.tree();  // success
 }
@@ -128,7 +137,7 @@ auto SourceTreeClient::ServeArchiveTree(
 auto SourceTreeClient::ServeDistdirTree(
     std::shared_ptr<std::unordered_map<std::string, std::string>> const&
         distfiles,
-    bool sync_tree) noexcept -> result_t {
+    bool sync_tree) const noexcept -> result_t {
     justbuild::just_serve::ServeDistdirTreeRequest request{};
     for (auto const& [k, v] : *distfiles) {
         auto* distfile = request.add_distfiles();
@@ -144,23 +153,25 @@ auto SourceTreeClient::ServeDistdirTree(
 
     if (not status.ok()) {
         LogStatus(&logger_, LogLevel::Debug, status);
-        return true;  // fatal failure
+        return unexpected{GitLookupError::Fatal};
     }
     if (response.status() !=
         ::justbuild::just_serve::ServeDistdirTreeResponse::OK) {
         logger_.Emit(LogLevel::Debug,
                      "ServeDistdirTree response returned with {}",
                      static_cast<int>(response.status()));
-        return /*fatal = */ (
+        return unexpected{
             response.status() !=
-            ::justbuild::just_serve::ServeDistdirTreeResponse::NOT_FOUND);
+                    ::justbuild::just_serve::ServeDistdirTreeResponse::NOT_FOUND
+                ? GitLookupError::Fatal
+                : GitLookupError::NotFound};
     }
     return response.tree();  // success
 }
 
 auto SourceTreeClient::ServeForeignFileTree(const std::string& content,
                                             const std::string& name,
-                                            bool executable) noexcept
+                                            bool executable) const noexcept
     -> result_t {
     justbuild::just_serve::ServeDistdirTreeRequest request{};
     auto* distfile = request.add_distfiles();
@@ -174,7 +185,7 @@ auto SourceTreeClient::ServeForeignFileTree(const std::string& content,
 
     if (not status.ok()) {
         LogStatus(&logger_, LogLevel::Debug, status);
-        return true;  // fatal failure
+        return unexpected{GitLookupError::Fatal};
     }
     if (response.status() !=
         ::justbuild::just_serve::ServeDistdirTreeResponse::OK) {
@@ -182,14 +193,16 @@ auto SourceTreeClient::ServeForeignFileTree(const std::string& content,
                      "ServeDistdirTree called for foreign file response "
                      "returned with {}",
                      static_cast<int>(response.status()));
-        return /*fatal = */ (
+        return unexpected{
             response.status() !=
-            ::justbuild::just_serve::ServeDistdirTreeResponse::NOT_FOUND);
+                    ::justbuild::just_serve::ServeDistdirTreeResponse::NOT_FOUND
+                ? GitLookupError::Fatal
+                : GitLookupError::NotFound};
     }
     return response.tree();  // success
 }
 
-auto SourceTreeClient::ServeContent(std::string const& content) noexcept
+auto SourceTreeClient::ServeContent(std::string const& content) const noexcept
     -> bool {
     justbuild::just_serve::ServeContentRequest request{};
     request.set_content(content);
@@ -212,7 +225,8 @@ auto SourceTreeClient::ServeContent(std::string const& content) noexcept
     return true;
 }
 
-auto SourceTreeClient::ServeTree(std::string const& tree_id) noexcept -> bool {
+auto SourceTreeClient::ServeTree(std::string const& tree_id) const noexcept
+    -> bool {
     justbuild::just_serve::ServeTreeRequest request{};
     request.set_tree(tree_id);
 
@@ -233,7 +247,7 @@ auto SourceTreeClient::ServeTree(std::string const& tree_id) noexcept -> bool {
     return true;
 }
 
-auto SourceTreeClient::CheckRootTree(std::string const& tree_id) noexcept
+auto SourceTreeClient::CheckRootTree(std::string const& tree_id) const noexcept
     -> std::optional<bool> {
     justbuild::just_serve::CheckRootTreeRequest request{};
     request.set_tree(tree_id);
@@ -260,7 +274,7 @@ auto SourceTreeClient::CheckRootTree(std::string const& tree_id) noexcept
     return true;  // tree found
 }
 
-auto SourceTreeClient::GetRemoteTree(std::string const& tree_id) noexcept
+auto SourceTreeClient::GetRemoteTree(std::string const& tree_id) const noexcept
     -> bool {
     justbuild::just_serve::GetRemoteTreeRequest request{};
     request.set_tree(tree_id);
@@ -283,3 +297,5 @@ auto SourceTreeClient::GetRemoteTree(std::string const& tree_id) noexcept
     // success!
     return true;
 }
+
+#endif  // BOOTSTRAP_BUILD_TOOL

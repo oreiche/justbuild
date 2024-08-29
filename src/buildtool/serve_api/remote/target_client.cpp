@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef BOOTSTRAP_BUILD_TOOL
+
 #include "src/buildtool/serve_api/remote/target_client.hpp"
 
 #include <exception>
@@ -23,26 +25,33 @@
 #include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 
-TargetClient::TargetClient(std::string const& server, Port port) noexcept {
-    stub_ = justbuild::just_serve::Target::NewStub(
-        CreateChannelWithCredentials(server, port));
+TargetClient::TargetClient(
+    ServerAddress const& address,
+    gsl::not_null<Storage const*> const& storage,
+    gsl::not_null<RemoteContext const*> const& remote_context,
+    gsl::not_null<ApiBundle const*> const& apis) noexcept
+    : storage_{*storage},
+      exec_config_{*remote_context->exec_config},
+      apis_{*apis} {
+    stub_ = justbuild::just_serve::Target::NewStub(CreateChannelWithCredentials(
+        address.host, address.port, remote_context->auth));
 }
 
 auto TargetClient::ServeTarget(const TargetCacheKey& key,
-                               const std::string& repo_key) noexcept
+                               const std::string& repo_key) const noexcept
     -> std::optional<serve_target_result_t> {
     // make sure the blob containing the key is in the remote cas
-    if (!local_api_->RetrieveToCas({key.Id()}, &*remote_api_)) {
+    if (not apis_.local->RetrieveToCas({key.Id()}, *apis_.remote)) {
         return serve_target_result_t{
             std::in_place_index<1>,
             fmt::format("Failed to retrieve to remote cas ObjectInfo {}",
                         key.Id().ToString())};
     }
     // make sure the repository configuration blob is in the remote cas
-    if (!local_api_->RetrieveToCas(
+    if (not apis_.local->RetrieveToCas(
             {Artifact::ObjectInfo{.digest = ArtifactDigest{repo_key, 0, false},
                                   .type = ObjectType::File}},
-            &*remote_api_)) {
+            *apis_.remote)) {
         return serve_target_result_t{
             std::in_place_index<1>,
             fmt::format("Failed to retrieve to remote cas blob {}", repo_key)};
@@ -54,7 +63,7 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
     request.mutable_target_cache_key_id()->CopyFrom(key_dgst);
 
     // add execution properties to request
-    for (auto const& [k, v] : RemoteExecutionConfig::PlatformProperties()) {
+    for (auto const& [k, v] : exec_config_.platform_properties) {
         auto* prop = request.add_execution_properties();
         prop->set_name(k);
         prop->set_value(v);
@@ -64,8 +73,7 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
     // to remote cas
     auto dispatch_list = nlohmann::json::array();
     try {
-        for (auto const& [props, endpoint] :
-             RemoteExecutionConfig::DispatchList()) {
+        for (auto const& [props, endpoint] : exec_config_.dispatch) {
             auto entry = nlohmann::json::array();
             entry.push_back(nlohmann::json(props));
             entry.push_back(endpoint.ToJson());
@@ -78,8 +86,7 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
                         ex.what())};
     }
 
-    auto dispatch_dgst =
-        Storage::Instance().CAS().StoreBlob(dispatch_list.dump(2));
+    auto dispatch_dgst = storage_.CAS().StoreBlob(dispatch_list.dump(2));
     if (not dispatch_dgst) {
         return serve_target_result_t{
             std::in_place_index<1>,
@@ -88,7 +95,7 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
     }
     auto const& dispatch_info = Artifact::ObjectInfo{
         .digest = ArtifactDigest{*dispatch_dgst}, .type = ObjectType::File};
-    if (!local_api_->RetrieveToCas({dispatch_info}, &*remote_api_)) {
+    if (not apis_.local->RetrieveToCas({dispatch_info}, *apis_.remote)) {
         return serve_target_result_t{
             std::in_place_index<1>,
             fmt::format("Failed to upload blob {} to remote cas",
@@ -100,10 +107,6 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
     grpc::ClientContext context;
     justbuild::just_serve::ServeTargetResponse response;
     auto const& status = stub_->ServeTarget(&context, request, &response);
-    if (!status.ok()) {
-        return serve_target_result_t{std::in_place_index<1>,
-                                     StatusString(status)};
-    }
 
     // differentiate status codes
     switch (status.error_code()) {
@@ -124,8 +127,8 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
                 ArtifactDigest{response.target_value()};
             auto const& obj_info = Artifact::ObjectInfo{
                 .digest = target_value_dgst, .type = ObjectType::File};
-            if (!local_api_->IsAvailable(target_value_dgst)) {
-                if (!remote_api_->RetrieveToCas({obj_info}, &*local_api_)) {
+            if (not apis_.local->IsAvailable(target_value_dgst)) {
+                if (not apis_.remote->RetrieveToCas({obj_info}, *apis_.local)) {
                     return serve_target_result_t{
                         std::in_place_index<1>,
                         fmt::format(
@@ -134,8 +137,8 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
                 }
             }
             auto const& target_value_str =
-                local_api_->RetrieveToMemory(obj_info);
-            if (!target_value_str) {
+                apis_.local->RetrieveToMemory(obj_info);
+            if (not target_value_str) {
                 return serve_target_result_t{
                     std::in_place_index<1>,
                     fmt::format("Failed to retrieve blob {} from local cas",
@@ -145,7 +148,7 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
                 auto const& result = TargetCacheEntry::FromJson(
                     nlohmann::json::parse(*target_value_str));
                 // return the target cache value information
-                return serve_target_result_t{std::in_place_index<2>,
+                return serve_target_result_t{std::in_place_index<3>,
                                              std::make_pair(result, obj_info)};
             } catch (std::exception const& ex) {
                 return serve_target_result_t{
@@ -154,20 +157,27 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
                                 ex.what())};
             }
         }
+        case grpc::StatusCode::INTERNAL: {
+            return serve_target_result_t{
+                std::in_place_index<1>,
+                fmt::format(
+                    "Serve endpoint reported the fatal internal error:\n{}",
+                    status.error_message())};
+        }
         case grpc::StatusCode::NOT_FOUND: {
             return std::nullopt;  // this might allow a local build to continue
         }
         default:;  // fallthrough
     }
     return serve_target_result_t{
-        std::in_place_index<1>,
+        std::in_place_index<2>,
         fmt::format("Serve endpoint failed with:\n{}", status.error_message())};
 }
 
 auto TargetClient::ServeTargetVariables(std::string const& target_root_id,
                                         std::string const& target_file,
-                                        std::string const& target) noexcept
-    -> std::optional<std::vector<std::string>> {
+                                        std::string const& target)
+    const noexcept -> std::optional<std::vector<std::string>> {
     justbuild::just_serve::ServeTargetVariablesRequest request{};
     request.set_root_tree(target_root_id);
     request.set_target_file(target_file);
@@ -194,10 +204,10 @@ auto TargetClient::ServeTargetVariables(std::string const& target_root_id,
     return res;
 }
 
-auto TargetClient::ServeTargetDescription(std::string const& target_root_id,
-                                          std::string const& target_file,
-                                          std::string const& target) noexcept
-    -> std::optional<ArtifactDigest> {
+auto TargetClient::ServeTargetDescription(
+    std::string const& target_root_id,
+    std::string const& target_file,
+    std::string const& target) const noexcept -> std::optional<ArtifactDigest> {
     justbuild::just_serve::ServeTargetDescriptionRequest request{};
     request.set_root_tree(target_root_id);
     request.set_target_file(target_file);
@@ -214,3 +224,5 @@ auto TargetClient::ServeTargetDescription(std::string const& target_root_id,
     }
     return ArtifactDigest{response.description_id()};
 }
+
+#endif  // BOOTSTRAP_BUILD_TOOL

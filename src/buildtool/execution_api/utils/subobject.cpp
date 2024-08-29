@@ -16,15 +16,16 @@
 #ifndef BOOTSTRAP_BUILD_TOOL
 
 #include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
+#include "src/buildtool/execution_api/common/tree_reader_utils.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
 auto RetrieveSubPathId(Artifact::ObjectInfo object_info,
-                       gsl::not_null<IExecutionApi*> const& api,
+                       IExecutionApi const& api,
                        const std::filesystem::path& sub_path)
     -> std::optional<Artifact::ObjectInfo> {
-
     std::filesystem::path sofar{};
     for (auto const& segment : sub_path) {
         if (object_info.type != ObjectType::Tree) {
@@ -34,7 +35,7 @@ auto RetrieveSubPathId(Artifact::ObjectInfo object_info,
                         segment.string());
             break;
         }
-        auto data = api->RetrieveToMemory(object_info);
+        auto data = api.RetrieveToMemory(object_info);
         if (not data) {
             Logger::Log(LogLevel::Error,
                         "Failed to retrieve artifact {} at path '{}'",
@@ -52,7 +53,7 @@ auto RetrieveSubPathId(Artifact::ObjectInfo object_info,
                 break;
             }
             std::optional<Artifact::ObjectInfo> new_object_info{};
-            if (not BazelMsgFactory::ReadObjectInfosFromDirectory(
+            if (not TreeReaderUtils::ReadObjectInfos(
                     *directory,
                     [&new_object_info, &segment](auto path, auto info) {
                         if (path == segment) {
@@ -75,9 +76,12 @@ auto RetrieveSubPathId(Artifact::ObjectInfo object_info,
             object_info = *new_object_info;
         }
         else {
+            auto const hash = HashFunction{HashFunction::Type::GitSHA1}
+                                  .HashTreeData(*data)
+                                  .Bytes();
             auto entries = GitRepo::ReadTreeData(
                 *data,
-                HashFunction::ComputeTreeHash(*data).Bytes(),
+                hash,
                 [](auto const& /*unused*/) { return true; },
                 /*is_hex_id=*/false);
             if (not entries) {
@@ -88,7 +92,7 @@ auto RetrieveSubPathId(Artifact::ObjectInfo object_info,
                 break;
             }
             std::optional<Artifact::ObjectInfo> new_object_info{};
-            if (not BazelMsgFactory::ReadObjectInfosFromGitTree(
+            if (not TreeReaderUtils::ReadObjectInfos(
                     *entries,
                     [&new_object_info, &segment](auto path, auto info) {
                         if (path == segment) {

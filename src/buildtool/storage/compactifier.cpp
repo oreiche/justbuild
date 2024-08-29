@@ -19,15 +19,14 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
-#include <variant>
 #include <vector>
 
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/crypto/hasher.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
-#include "src/buildtool/file_system/object_cas.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -60,9 +59,9 @@ template <ObjectType kType>
 /// \return               True if the entry directory doesn't contain spliced
 /// entries.
 template <ObjectType kLargeType, ObjectType... kType>
-requires(sizeof...(kType) != 0)
-    [[nodiscard]] auto RemoveSpliced(CompactificationTask const& task,
-                                     std::filesystem::path const& key) noexcept
+    requires(sizeof...(kType) != 0)
+[[nodiscard]] auto RemoveSpliced(CompactificationTask const& task,
+                                 std::filesystem::path const& key) noexcept
     -> bool;
 
 /// \brief Split and remove a key entry from the kType storage. Results of
@@ -157,7 +156,8 @@ template <ObjectType kType>
     }
 
     // Calculate reference hash size:
-    auto const kHashSize = HashFunction::Hasher().GetHashLength();
+    auto const kHashSize =
+        task.cas.GetHashFunction().MakeHasher().GetHashLength();
     auto const kFileNameSize =
         kHashSize - FileStorageData::kDirectoryNameLength;
 
@@ -211,9 +211,9 @@ template <ObjectType kType>
 }
 
 template <ObjectType kLargeType, ObjectType... kType>
-requires(sizeof...(kType) != 0)
-    [[nodiscard]] auto RemoveSpliced(CompactificationTask const& task,
-                                     std::filesystem::path const& key) noexcept
+    requires(sizeof...(kType) != 0)
+[[nodiscard]] auto RemoveSpliced(CompactificationTask const& task,
+                                 std::filesystem::path const& key) noexcept
     -> bool {
     static constexpr bool kLarge = true;
     auto const directory = task.cas.StorageRoot(kLargeType, kLarge) / key;
@@ -272,7 +272,8 @@ template <ObjectType kType>
     }
 
     // Calculate the digest for the entry:
-    auto const digest = ObjectCAS<kType>::CreateDigest(path);
+    auto const digest =
+        ArtifactDigest::CreateFromFile<kType>(task.cas.GetHashFunction(), path);
     if (not digest) {
         task.Log(LogLevel::Error,
                  "Failed to calculate digest for {}",
@@ -283,21 +284,18 @@ template <ObjectType kType>
     // Split the entry:
     auto split_result = IsTreeObject(kType) ? task.cas.SplitTree(*digest)
                                             : task.cas.SplitBlob(*digest);
-    auto* parts = std::get_if<std::vector<bazel_re::Digest>>(&split_result);
-    if (parts == nullptr) {
-        auto* error = std::get_if<LargeObjectError>(&split_result);
-        auto const error_message = error ? std::move(*error).Message() : "";
+    if (not split_result) {
         task.Log(LogLevel::Error,
                  "Failed to split {}\nDigest: {}\nMessage: {}",
                  path.string(),
                  digest->hash(),
-                 error_message);
+                 std::move(split_result).error().Message());
         return false;
     }
 
     // If the file cannot actually be split (the threshold is too low), the
     // file must not be deleted.
-    if (parts->size() < 2) {
+    if (split_result->size() < 2) {
         task.Log(LogLevel::Debug,
                  "{} cannot be compactified. The compactification "
                  "threshold is too low.",

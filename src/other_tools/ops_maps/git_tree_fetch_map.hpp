@@ -16,6 +16,7 @@
 #define INCLUDED_SRC_OTHER_TOOLS_OPS_MAPS_GIT_TREE_FETCH_MAP_HPP
 
 #include <cstddef>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -23,6 +24,9 @@
 
 #include "gsl/gsl"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/ops_maps/critical_git_op_map.hpp"
 #include "src/other_tools/ops_maps/import_to_git_map.hpp"
 
@@ -59,10 +63,17 @@ using GitTreeFetchMap = AsyncMapConsumer<GitTreeInfo, bool>;
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     std::string const& git_bin,
     std::vector<std::string> const& launcher,
-    bool serve_api_exists,
-    gsl::not_null<IExecutionApi*> const& local_api,
-    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
+    ServeApi const* serve,
+    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<IExecutionApi const*> const& local_api,
+    IExecutionApi const* remote_api,
     bool backup_to_remote,
+    gsl::not_null<JustMRProgress*> const& progress,
     std::size_t jobs) -> GitTreeFetchMap;
+
+// use explicit cast to std::function to allow template deduction when used
+static const std::function<std::string(GitTreeInfo const&)>
+    kGitTreeInfoPrinter =
+        [](GitTreeInfo const& x) -> std::string { return x.hash; };
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_OPS_MAPS_GIT_TREE_FETCH_MAP_HPP

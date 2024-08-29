@@ -21,6 +21,8 @@
 
 #include "src/buildtool/common/user_structs.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
 
 /* Utilities related to CAS and paths therein */
 
@@ -28,37 +30,48 @@ namespace StorageUtils {
 
 /// \brief Get location of Git repository. Defaults to the Git cache root when
 /// no better location is found.
-[[nodiscard]] auto GetGitRoot(LocalPathsPtr const& just_mr_paths,
+[[nodiscard]] auto GetGitRoot(StorageConfig const& storage_config,
+                              LocalPathsPtr const& just_mr_paths,
                               std::string const& repo_url) noexcept
     -> std::filesystem::path;
 
 /// \brief Get the path to the file storing the tree id associated with
 /// a given commit.
-[[nodiscard]] auto GetCommitTreeIDFile(std::string const& commit) noexcept
+[[nodiscard]] auto GetCommitTreeIDFile(StorageConfig const& storage_config,
+                                       std::string const& commit,
+                                       std::size_t generation = 0) noexcept
     -> std::filesystem::path;
 
 /// \brief Get the path to the file storing the tree id of an archive
 /// content.
-[[nodiscard]] auto GetArchiveTreeIDFile(std::string const& repo_type,
-                                        std::string const& content) noexcept
+[[nodiscard]] auto GetArchiveTreeIDFile(StorageConfig const& storage_config,
+                                        std::string const& repo_type,
+                                        std::string const& content,
+                                        std::size_t generation = 0) noexcept
     -> std::filesystem::path;
 
 /// \brief Get the path to the file storing the tree id of an archive
 /// content.
-[[nodiscard]] auto GetForeignFileTreeIDFile(std::string const& content,
+[[nodiscard]] auto GetForeignFileTreeIDFile(StorageConfig const& storage_config,
+                                            std::string const& content,
                                             std::string const& name,
-                                            bool executable) noexcept
+                                            bool executable,
+                                            std::size_t generation = 0) noexcept
     -> std::filesystem::path;
 
 /// \brief Get the path to the file storing the tree id of a distdir list
 /// content.
-[[nodiscard]] auto GetDistdirTreeIDFile(std::string const& content) noexcept
+[[nodiscard]] auto GetDistdirTreeIDFile(StorageConfig const& storage_config,
+                                        std::string const& content,
+                                        std::size_t generation = 0) noexcept
     -> std::filesystem::path;
 
 /// \brief Get the path to the file storing a resolved tree hash.
-[[nodiscard]] auto GetResolvedTreeIDFile(
-    std::string const& tree_hash,
-    PragmaSpecial const& pragma_special) noexcept -> std::filesystem::path;
+[[nodiscard]] auto GetResolvedTreeIDFile(StorageConfig const& storage_config,
+                                         std::string const& tree_hash,
+                                         PragmaSpecial const& pragma_special,
+                                         std::size_t generation = 0) noexcept
+    -> std::filesystem::path;
 
 /// \brief Write a tree id to file. The parent folder of the file must exist!
 [[nodiscard]] auto WriteTreeIDFile(std::filesystem::path const& tree_id_file,
@@ -66,11 +79,13 @@ namespace StorageUtils {
 
 /// \brief Add data to file CAS.
 /// Returns the path to the file added to CAS, or nullopt if not added.
-[[nodiscard]] auto AddToCAS(std::string const& data) noexcept
+[[nodiscard]] auto AddToCAS(Storage const& storage,
+                            std::string const& data) noexcept
     -> std::optional<std::filesystem::path>;
 
 /// \brief Try to add distfile to CAS.
-void AddDistfileToCAS(std::filesystem::path const& distfile,
+void AddDistfileToCAS(Storage const& storage,
+                      std::filesystem::path const& distfile,
                       LocalPathsPtr const& just_mr_paths) noexcept;
 
 }  // namespace StorageUtils

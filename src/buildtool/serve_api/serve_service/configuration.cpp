@@ -12,19 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef BOOTSTRAP_BUILD_TOOL
+
 #include "src/buildtool/serve_api/serve_service/configuration.hpp"
 
-#include <optional>
-
 #include "src/buildtool/compatibility/compatibility.hpp"
-#include "src/buildtool/execution_api/remote/config.hpp"
 
 auto ConfigurationService::RemoteExecutionEndpoint(
     ::grpc::ServerContext* /*context*/,
     const ::justbuild::just_serve::RemoteExecutionEndpointRequest* /*request*/,
     ::justbuild::just_serve::RemoteExecutionEndpointResponse* response)
     -> ::grpc::Status {
-    auto address = RemoteExecutionConfig::RemoteAddress();
+    auto address = remote_config_.remote_address;
     response->set_address(address ? address->ToJson().dump() : std::string());
     return ::grpc::Status::OK;
 }
@@ -37,3 +36,5 @@ auto ConfigurationService::Compatibility(
     response->set_compatible(Compatibility::IsCompatible());
     return ::grpc::Status::OK;
 }
+
+#endif  // BOOTSTRAP_BUILD_TOOL

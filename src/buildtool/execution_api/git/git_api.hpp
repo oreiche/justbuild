@@ -23,8 +23,12 @@
 #include <vector>
 
 #include "gsl/gsl"
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/repository_config.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
+#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
+#include "src/buildtool/execution_api/common/common_api.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -33,15 +37,16 @@
 class GitApi final : public IExecutionApi {
   public:
     GitApi() = delete;
-    explicit GitApi(gsl::not_null<RepositoryConfig*> const& repo_config)
+    explicit GitApi(gsl::not_null<const RepositoryConfig*> const& repo_config)
         : repo_config_{repo_config} {}
-    auto CreateAction(
+    [[nodiscard]] auto CreateAction(
         ArtifactDigest const& /*root_digest*/,
         std::vector<std::string> const& /*command*/,
+        std::string const& /*cwd*/,
         std::vector<std::string> const& /*output_files*/,
         std::vector<std::string> const& /*output_dirs*/,
         std::map<std::string, std::string> const& /*env_vars*/,
-        std::map<std::string, std::string> const& /*properties*/) noexcept
+        std::map<std::string, std::string> const& /*properties*/) const noexcept
         -> IExecutionAction::Ptr final {
         // Execution not supported from git cas
         return nullptr;
@@ -51,8 +56,8 @@ class GitApi final : public IExecutionApi {
     [[nodiscard]] auto RetrieveToPaths(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<std::filesystem::path> const& output_paths,
-        std::optional<gsl::not_null<IExecutionApi*>> const& /*alternative*/ =
-            std::nullopt) noexcept -> bool override {
+        IExecutionApi const* /*alternative*/ = nullptr) const noexcept
+        -> bool override {
         if (artifacts_info.size() != output_paths.size()) {
             Logger::Log(LogLevel::Error,
                         "different number of digests and output paths.");
@@ -103,7 +108,7 @@ class GitApi final : public IExecutionApi {
     [[nodiscard]] auto RetrieveToFds(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<int> const& fds,
-        bool raw_tree) noexcept -> bool override {
+        bool raw_tree) const noexcept -> bool override {
         if (artifacts_info.size() != fds.size()) {
             Logger::Log(LogLevel::Error,
                         "different number of digests and file descriptors.");
@@ -172,31 +177,33 @@ class GitApi final : public IExecutionApi {
     // NOLINTNEXTLINE(misc-no-recursion)
     [[nodiscard]] auto RetrieveToCas(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
-        gsl::not_null<IExecutionApi*> const& api) noexcept -> bool override {
+        IExecutionApi const& api) const noexcept -> bool override {
         // Return immediately if target CAS is this CAS
-        if (this == api) {
+        if (this == &api) {
             return true;
         }
 
         // Determine missing artifacts in other CAS.
-        std::vector<ArtifactDigest> digests;
-        digests.reserve(artifacts_info.size());
-        std::unordered_map<ArtifactDigest, Artifact::ObjectInfo> info_map;
-        for (auto const& info : artifacts_info) {
-            digests.emplace_back(info.digest);
-            info_map[info.digest] = info;
+        auto missing_artifacts_info =
+            GetMissingArtifactsInfo<Artifact::ObjectInfo>(
+                api,
+                artifacts_info.begin(),
+                artifacts_info.end(),
+                [](Artifact::ObjectInfo const& info) { return info.digest; });
+        if (not missing_artifacts_info) {
+            Logger::Log(LogLevel::Error,
+                        "GitApi: Failed to retrieve the missing artifacts");
+            return false;
         }
-        auto const& missing_digests = api->IsAvailable(digests);
-        std::vector<Artifact::ObjectInfo> missing_artifacts_info;
-        missing_artifacts_info.reserve(missing_digests.size());
-        for (auto const& digest : missing_digests) {
-            missing_artifacts_info.emplace_back(info_map[digest]);
-        }
+
+        // GitApi works in the native mode only.
+        HashFunction const hash_function{HashFunction::Type::GitSHA1};
 
         // Collect blobs of missing artifacts from local CAS. Trees are
         // processed recursively before any blob is uploaded.
-        BlobContainer container{};
-        for (auto const& info : missing_artifacts_info) {
+        ArtifactBlobContainer container{};
+        for (auto const& dgst : missing_artifacts_info->digests) {
+            auto const& info = missing_artifacts_info->back_map[dgst];
             std::optional<std::string> content;
             // Recursively process trees.
             if (IsTreeObject(info.type)) {
@@ -205,7 +212,7 @@ class GitApi final : public IExecutionApi {
                 if (not tree) {
                     return false;
                 }
-                BlobContainer tree_deps_only_blobs{};
+                ArtifactBlobContainer tree_deps_only_blobs{};
                 for (auto const& [path, entry] : *tree) {
                     if (entry->IsTree()) {
                         if (not RetrieveToCas(
@@ -220,26 +227,29 @@ class GitApi final : public IExecutionApi {
                         }
                     }
                     else {
-                        content = entry->RawData();
-                        if (not content) {
+                        auto const& entry_content = entry->RawData();
+                        if (not entry_content) {
                             return false;
                         }
-                        auto digest =
-                            ArtifactDigest::Create<ObjectType::File>(*content);
-                        try {
-                            tree_deps_only_blobs.Emplace(
-                                BazelBlob{digest,
-                                          *content,
-                                          IsExecutableObject(entry->Type())});
-                        } catch (std::exception const& ex) {
-                            Logger::Log(LogLevel::Error,
-                                        "failed to emplace blob: ",
-                                        ex.what());
+                        auto digest = ArtifactDigest::Create<ObjectType::File>(
+                            hash_function, *entry_content);
+                        // Collect blob and upload to remote CAS if transfer
+                        // size reached.
+                        if (not UpdateContainerAndUpload<ArtifactDigest>(
+                                &tree_deps_only_blobs,
+                                ArtifactBlob{std::move(digest),
+                                             *entry_content,
+                                             IsExecutableObject(entry->Type())},
+                                /*exception_is_fatal=*/true,
+                                [&api](ArtifactBlobContainer&& blobs) -> bool {
+                                    return api.Upload(std::move(blobs));
+                                })) {
                             return false;
                         }
                     }
                 }
-                if (not api->Upload(tree_deps_only_blobs)) {
+                // Upload remaining blobs.
+                if (not api.Upload(std::move(tree_deps_only_blobs))) {
                     return false;
                 }
                 content = tree->RawData();
@@ -251,37 +261,41 @@ class GitApi final : public IExecutionApi {
                 return false;
             }
 
-            ArtifactDigest digest;
-            if (IsTreeObject(info.type)) {
-                digest = ArtifactDigest::Create<ObjectType::Tree>(*content);
-            }
-            else {
-                digest = ArtifactDigest::Create<ObjectType::File>(*content);
-            }
+            ArtifactDigest digest =
+                IsTreeObject(info.type)
+                    ? ArtifactDigest::Create<ObjectType::Tree>(hash_function,
+                                                               *content)
+                    : ArtifactDigest::Create<ObjectType::File>(hash_function,
+                                                               *content);
 
-            try {
-                container.Emplace(
-                    BazelBlob{digest, *content, IsExecutableObject(info.type)});
-            } catch (std::exception const& ex) {
-                Logger::Log(
-                    LogLevel::Error, "failed to emplace blob: ", ex.what());
+            // Collect blob and upload to remote CAS if transfer size reached.
+            if (not UpdateContainerAndUpload<ArtifactDigest>(
+                    &container,
+                    ArtifactBlob{std::move(digest),
+                                 std::move(*content),
+                                 IsExecutableObject(info.type)},
+                    /*exception_is_fatal=*/true,
+                    [&api](ArtifactBlobContainer&& blobs) {
+                        return api.Upload(std::move(blobs),
+                                          /*skip_find_missing=*/true);
+                    })) {
                 return false;
             }
         }
 
-        // Upload blobs to remote CAS.
-        return api->Upload(container, /*skip_find_missing=*/true);
+        // Upload remaining blobs to remote CAS.
+        return api.Upload(std::move(container), /*skip_find_missing=*/true);
     }
 
     [[nodiscard]] auto RetrieveToMemory(
-        Artifact::ObjectInfo const& artifact_info) noexcept
+        Artifact::ObjectInfo const& artifact_info) const noexcept
         -> std::optional<std::string> override {
         return repo_config_->ReadBlobFromGitCAS(artifact_info.digest.hash());
     }
 
     /// NOLINTNEXTLINE(google-default-arguments)
-    [[nodiscard]] auto Upload(BlobContainer const& /*blobs*/,
-                              bool /*skip_find_missing*/ = false) noexcept
+    [[nodiscard]] auto Upload(ArtifactBlobContainer&& /*blobs*/,
+                              bool /*skip_find_missing*/ = false) const noexcept
         -> bool override {
         // Upload to git cas not supported
         return false;
@@ -289,7 +303,8 @@ class GitApi final : public IExecutionApi {
 
     [[nodiscard]] auto UploadTree(
         std::vector<DependencyGraph::NamedArtifactNodePtr> const&
-        /*artifacts*/) noexcept -> std::optional<ArtifactDigest> override {
+        /*artifacts*/) const noexcept
+        -> std::optional<ArtifactDigest> override {
         // Upload to git cas not supported
         return std::nullopt;
     }
@@ -311,7 +326,7 @@ class GitApi final : public IExecutionApi {
     }
 
   private:
-    gsl::not_null<RepositoryConfig*> repo_config_;
+    gsl::not_null<const RepositoryConfig*> repo_config_;
 };
 
 #endif

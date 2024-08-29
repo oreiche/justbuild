@@ -1,7 +1,34 @@
-{ "script":
+{ "summarizer":
+  { "doc":
+    ["Specify a test summarizer together with the required additional fields"]
+  , "target_fields": ["summarizer"]
+  , "string_fields": ["artifacts"]
+  , "imports": {"stage": ["./", "../..", "stage_singleton_field"]}
+  , "field_doc":
+    { "summarizer": ["The single artifact acting as summarizer"]
+    , "artifacts":
+      [ "Any additional artifacts, besides \"result\", the summaries needs from"
+      , "the individual test results"
+      ]
+    }
+  , "expression":
+    { "type": "RESULT"
+    , "artifacts":
+      { "type": "let*"
+      , "bindings": [["fieldname", "summarizer"], ["location", "summarizer"]]
+      , "body": {"type": "CALL_EXPRESSION", "name": "stage"}
+      }
+    , "provides":
+      { "type": "singleton_map"
+      , "key": "artifacts"
+      , "value": {"type": "FIELD", "name": "artifacts"}
+      }
+    }
+  }
+, "script":
   { "doc": ["Shell test, given by a test script"]
   , "target_fields": ["deps", "test"]
-  , "string_fields": ["keep", "name"]
+  , "string_fields": ["keep", "keep-dirs", "name"]
   , "config_vars":
     [ "ARCH"
     , "HOST_ARCH"
@@ -10,6 +37,8 @@
     , "TIMEOUT_SCALE"
     , "TARGET_ARCH"
     , "ARCH_DISPATCH"
+    , "TEST_SUMMARY_EXECUTION_PROPERTIES"
+    , "LINT"
     ]
   , "field_doc":
     { "test":
@@ -35,6 +64,11 @@
       , "the test might generate that should be kept as part of the output."
       , "This might be useful for further analysis of the test"
       ]
+    , "keep-dirs":
+      [ "List of names (relative to the test working directory) of directories"
+      , "that the test might generate that should be kept as part of the"
+      , "output. This might be useful for further analysis of the test"
+      ]
     , "deps":
       [ "Any targets that should be staged (with artifacts and runfiles) into"
       , "the tests working directory"
@@ -47,8 +81,10 @@
       ]
     , "summarizer":
       [ "Tool to aggregate the results of individual test runs (for flakyness"
-      , "detection) to an overall test result."
+      , "detection) to an overall test result. If more fields than the result"
+      , "itself is needed, those can be specified using the \"summarizer\" rule."
       ]
+    , "defaults": ["The shell toolcahin to use."]
     }
   , "config_doc":
     { "RUNS_PER_TEST":
@@ -77,6 +113,10 @@
       , "the specified execution properties (i.e., on the target architecture);"
       , "all building will be done on the host architecture."
       ]
+    , "TEST_SUMMARY_EXECUTION_PROPERTIES":
+      [ "Additional remote-execution properties for the test-summarizing action"
+      , "in case RUNS_PER_TEST is set; defaults to the empty map."
+      ]
     }
   , "tainted": ["test"]
   , "artifacts_doc":
@@ -84,22 +124,29 @@
     , "        generating test reports."
     , "stdout/stderr: Any output the invocation of the test binary produced on"
     , "        the respective file descriptor"
-    , "work:   In this directory, all the files specified to \"keep\" are staged"
+    , "work:   In this directory, all the files specified to \"keep\" and"
+    , "        \"keep-dirs\" are staged"
     , "time-start/time-stop: The time (decimally coded) in seconds since the"
     , "        epoch when the test invocation started and ended."
+    , "pwd:    the directory in which the test was carried out"
     ]
   , "runfiles_doc":
     [ "A tree consisting of the artifacts staged at the name of the test."
     , "As the built-in \"install\" rule only takes the runfiles of its \"deps\""
     , "argument, this gives an easy way of defining test suites."
     ]
-  , "implicit": {"runner": ["runner"], "summarizer": ["summarizer"]}
+  , "implicit":
+    { "runner": ["runner"]
+    , "summarizer": ["summarizer"]
+    , "defaults": [["./", "..", "defaults"]]
+    }
   , "imports":
     { "test-result": "test-result"
     , "action": "test-action"
     , "stage": ["./", "../..", "stage_singleton_field"]
     , "host transition": ["transitions", "maybe for host"]
     , "target properties": ["transitions", "target properties"]
+    , "field_list": ["", "field_list_provider"]
     }
   , "config_transitions":
     { "deps": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
@@ -131,6 +178,7 @@
           }
         ]
       , ["keep", {"type": "FIELD", "name": "keep"}]
+      , ["keep-dirs", {"type": "FIELD", "name": "keep-dirs"}]
       , ["runner", {"type": "FIELD", "name": "runner"}]
       , ["deps-fieldname", "deps"]
       , [ "deps-transition"
@@ -138,6 +186,20 @@
         ]
       , [ "target properties"
         , {"type": "CALL_EXPRESSION", "name": "target properties"}
+        ]
+      , [ "lint"
+        , { "type": "if"
+          , "cond": {"type": "var", "name": "LINT"}
+          , "then":
+            { "type": "let*"
+            , "bindings":
+              [ ["fieldname", "deps"]
+              , ["provider", "lint"]
+              , ["transition", {"type": "var", "name": "deps-transition"}]
+              ]
+            , "body": {"type": "CALL_EXPRESSION", "name": "field_list"}
+            }
+          }
         ]
       ]
     , "body":
@@ -147,7 +209,7 @@
       , "then":
         { "type": "let*"
         , "bindings":
-          [ [ "attempts"
+          [ [ "attempts (plain)"
             , { "type": "map_union"
               , "$1":
                 { "type": "foreach"
@@ -159,36 +221,55 @@
                 , "body":
                   { "type": "singleton_map"
                   , "key": {"type": "var", "name": "ATTEMPT"}
-                  , "value":
-                    { "type": "TREE"
-                    , "$1": {"type": "CALL_EXPRESSION", "name": "action"}
-                    }
+                  , "value": {"type": "CALL_EXPRESSION", "name": "action"}
                   }
                 }
               }
             ]
           , [ "summarizer"
+            , { "type": "let*"
+              , "bindings":
+                [["fieldname", "summarizer"], ["location", "summarizer"]]
+              , "body": {"type": "CALL_EXPRESSION", "name": "stage"}
+              }
+            ]
+          , [ "summary artifacts"
+            , { "type": "++"
+              , "$1":
+                [ ["result"]
+                , { "type": "let*"
+                  , "bindings":
+                    [["provider", "artifacts"], ["fieldname", "summarizer"]]
+                  , "body": {"type": "CALL_EXPRESSION", "name": "field_list"}
+                  }
+                ]
+              }
+            ]
+          , [ "attempts (for summary)"
             , { "type": "map_union"
               , "$1":
-                { "type": "foreach"
-                , "var": "x"
-                , "range": {"type": "FIELD", "name": "summarizer"}
+                { "type": "foreach_map"
+                , "range": {"type": "var", "name": "attempts (plain)"}
                 , "body":
-                  { "type": "map_union"
-                  , "$1":
-                    { "type": "foreach"
-                    , "var": "x"
-                    , "range":
-                      { "type": "values"
+                  { "type": "singleton_map"
+                  , "key": {"type": "var", "name": "_"}
+                  , "value":
+                    { "type": "TREE"
+                    , "$1":
+                      { "type": "map_union"
                       , "$1":
-                        { "type": "DEP_ARTIFACTS"
-                        , "dep": {"type": "var", "name": "x"}
+                        { "type": "foreach"
+                        , "range": {"type": "var", "name": "summary artifacts"}
+                        , "body":
+                          { "type": "singleton_map"
+                          , "key": {"type": "var", "name": "_"}
+                          , "value":
+                            { "type": "lookup"
+                            , "map": {"type": "var", "name": "$_"}
+                            , "key": {"type": "var", "name": "_"}
+                            }
+                          }
                         }
-                      }
-                    , "body":
-                      { "type": "singleton_map"
-                      , "key": "summarizer"
-                      , "value": {"type": "var", "name": "x"}
                       }
                     }
                   }
@@ -200,19 +281,42 @@
               , "inputs":
                 { "type": "map_union"
                 , "$1":
-                  [ {"type": "var", "name": "attempts"}
+                  [ {"type": "var", "name": "attempts (for summary)"}
                   , {"type": "var", "name": "summarizer"}
                   ]
                 }
               , "outs":
                 ["stdout", "stderr", "result", "time-start", "time-stop"]
               , "cmd": ["./summarizer"]
+              , "execution properties":
+                { "type": "var"
+                , "name": "TEST_SUMMARY_EXECUTION_PROPERTIES"
+                , "default": {"type": "empty_map"}
+                }
+              }
+            ]
+          , [ "attempts"
+            , { "type": "map_union"
+              , "$1":
+                { "type": "foreach_map"
+                , "range": {"type": "var", "name": "attempts (plain)"}
+                , "body":
+                  { "type": "singleton_map"
+                  , "key": {"type": "var", "name": "_"}
+                  , "value":
+                    {"type": "TREE", "$1": {"type": "var", "name": "$_"}}
+                  }
+                }
               }
             ]
           , [ "artifacts"
             , { "type": "map_union"
               , "$1":
-                [ {"type": "var", "name": "summary"}
+                [ { "type": "singleton_map"
+                  , "key": "pwd"
+                  , "value": {"type": "BLOB", "data": "/summary"}
+                  }
+                , {"type": "var", "name": "summary"}
                 , { "type": "singleton_map"
                   , "key": "work"
                   , "value":
@@ -233,6 +337,7 @@
           { "type": "RESULT"
           , "artifacts": {"type": "var", "name": "artifacts"}
           , "runfiles": {"type": "var", "name": "runfiles"}
+          , "provides": {"type": "env", "vars": ["lint"]}
           }
         }
       }

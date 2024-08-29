@@ -15,45 +15,52 @@
 #ifndef SERVE_SERVER_IMPLEMENTATION_HPP
 #define SERVE_SERVER_IMPLEMENTATION_HPP
 
+#include <cstdint>
+#include <optional>
 #include <string>
 
+#include "gsl/gsl"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/serve_api/remote/config.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
 
-class ServeServerImpl {
+class ServeServerImpl final {
   public:
-    ServeServerImpl() noexcept = default;
-    [[nodiscard]] static auto Instance() noexcept -> ServeServerImpl& {
-        static ServeServerImpl x;
-        return x;
-    }
+    [[nodiscard]] static auto Create(
+        std::optional<std::string> interface,
+        std::optional<int> port,
+        std::optional<std::string> info_file,
+        std::optional<std::string> pid_file) noexcept
+        -> std::optional<ServeServerImpl>;
 
-    [[nodiscard]] static auto SetInterface(std::string const& x) noexcept
-        -> bool {
-        Instance().interface_ = x;
-        return true;
-    }
-
-    [[nodiscard]] static auto SetPidFile(std::string const& x) noexcept -> bool;
-
-    [[nodiscard]] static auto SetPort(int x) noexcept -> bool;
-
-    [[nodiscard]] static auto SetInfoFile(std::string const& x) noexcept
-        -> bool;
+    ~ServeServerImpl() noexcept = default;
 
     ServeServerImpl(ServeServerImpl const&) = delete;
-    auto operator=(ServeServerImpl const&) noexcept
-        -> ServeServerImpl& = delete;
+    auto operator=(ServeServerImpl const&) -> ServeServerImpl& = delete;
 
-    ServeServerImpl(ServeServerImpl&&) noexcept = delete;
-    auto operator=(ServeServerImpl&&) noexcept -> ServeServerImpl& = delete;
+    ServeServerImpl(ServeServerImpl&&) noexcept = default;
+    auto operator=(ServeServerImpl&&) noexcept -> ServeServerImpl& = default;
 
     /// \brief Start the serve service.
+    /// \param serve_config     RemoteServeConfig to be used.
+    /// \param local_context    Aggregate of storage and local configs to use.
+    /// \param serve            ServeApi to be used.
     /// \param with_execute Flag specifying if just serve should act also as
     /// just execute (i.e., start remote execution services with same interface)
-    auto Run(bool with_execute) -> bool;
-    ~ServeServerImpl() = default;
+    auto Run(RemoteServeConfig const& serve_config,
+             gsl::not_null<LocalContext const*> const& local_context,
+             gsl::not_null<RemoteContext const*> const& remote_context,
+             std::optional<ServeApi> const& serve,
+             ApiBundle const& apis,
+             std::optional<std::uint8_t> op_exponent,
+             bool with_execute) -> bool;
 
   private:
+    ServeServerImpl() noexcept = default;
+
     std::string interface_{"127.0.0.1"};
     int port_{0};
     std::string info_file_{};

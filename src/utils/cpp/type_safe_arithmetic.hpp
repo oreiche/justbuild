@@ -70,10 +70,10 @@ class type_safe_arithmetic {
 
     type_safe_arithmetic(type_safe_arithmetic const&) = default;
     type_safe_arithmetic(type_safe_arithmetic&&) noexcept = default;
-    auto operator=(type_safe_arithmetic const&)
-        -> type_safe_arithmetic& = default;
-    auto operator=(type_safe_arithmetic&&) noexcept
-        -> type_safe_arithmetic& = default;
+    auto operator=(type_safe_arithmetic const&) -> type_safe_arithmetic& =
+                                                       default;
+    auto operator=(type_safe_arithmetic&&) noexcept -> type_safe_arithmetic& =
+                                                           default;
     ~type_safe_arithmetic() = default;
 
     auto operator=(value_t value) -> type_safe_arithmetic& {
@@ -87,7 +87,7 @@ class type_safe_arithmetic {
     constexpr auto get() const -> value_t { return m_value; }
 
     constexpr void set(value_t value) {
-        Expects(value >= min_value && value <= max_value &&
+        Expects(value >= min_value and value <= max_value and
                 "value output of range");
         m_value = value;
     }
@@ -138,8 +138,8 @@ class type_safe_arithmetic {
 // }
 
 template <typename TAG>
-auto operator+=(type_safe_arithmetic<TAG>& lhs, type_safe_arithmetic<TAG> rhs)
-    -> type_safe_arithmetic<TAG>& {
+auto operator+=(type_safe_arithmetic<TAG>& lhs,
+                type_safe_arithmetic<TAG> rhs) -> type_safe_arithmetic<TAG>& {
     lhs.set(lhs.get() + rhs.get());
     return lhs;
 }
@@ -189,8 +189,8 @@ auto operator+=(type_safe_arithmetic<TAG>& lhs, type_safe_arithmetic<TAG> rhs)
 // }
 
 template <typename TAG>
-auto operator++(type_safe_arithmetic<TAG>& a, int)
-    -> type_safe_arithmetic<TAG> {
+auto operator++(type_safe_arithmetic<TAG>& a,
+                int) -> type_safe_arithmetic<TAG> {
     auto r = a;
     a += type_safe_arithmetic<TAG>{1};
     return r;

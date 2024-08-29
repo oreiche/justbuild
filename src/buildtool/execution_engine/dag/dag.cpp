@@ -22,7 +22,7 @@ auto DependencyGraph::CreateOutputArtifactNodes(
     -> std::pair<std::vector<DependencyGraph::NamedArtifactNodePtr>,
                  std::vector<DependencyGraph::NamedArtifactNodePtr>> {
     if (is_tree_action) {  // create tree artifact
-        auto artifact = ArtifactDescription{action_id}.ToArtifact();
+        auto artifact = ArtifactDescription::CreateTree(action_id).ToArtifact();
         auto const node_id = AddArtifact(std::move(artifact));
         return std::make_pair(std::vector<NamedArtifactNodePtr>{},
                               std::vector<NamedArtifactNodePtr>{
@@ -32,10 +32,9 @@ auto DependencyGraph::CreateOutputArtifactNodes(
     // create action artifacts
     auto node_creator = [this, &action_id](auto* nodes, auto const& paths) {
         for (auto const& artifact_path : paths) {
-            auto artifact =
-                ArtifactDescription{action_id,
-                                    std::filesystem::path{artifact_path}}
-                    .ToArtifact();
+            auto artifact = ArtifactDescription::CreateAction(
+                                action_id, std::filesystem::path{artifact_path})
+                                .ToArtifact();
             auto const node_id = AddArtifact(std::move(artifact));
             nodes->emplace_back(NamedArtifactNodePtr{
                 artifact_path, &(*artifact_nodes_[node_id])});
@@ -81,21 +80,21 @@ auto DependencyGraph::LinkNodePointers(
     gsl::not_null<ActionNode*> const& action_node,
     std::vector<NamedArtifactNodePtr> const& input_nodes) noexcept -> bool {
     for (auto const& named_file : output_files) {
-        if (!named_file.node->AddBuilderActionNode(action_node) ||
-            !action_node->AddOutputFile(named_file)) {
+        if (not named_file.node->AddBuilderActionNode(action_node) or
+            not action_node->AddOutputFile(named_file)) {
             return false;
         }
     }
     for (auto const& named_dir : output_dirs) {
-        if (!named_dir.node->AddBuilderActionNode(action_node) ||
-            !action_node->AddOutputDir(named_dir)) {
+        if (not named_dir.node->AddBuilderActionNode(action_node) or
+            not action_node->AddOutputDir(named_dir)) {
             return false;
         }
     }
 
     for (auto const& named_node : input_nodes) {
-        if (!named_node.node->AddConsumerActionNode(action_node) ||
-            !action_node->AddDependency(named_node)) {
+        if (not named_node.node->AddConsumerActionNode(action_node) or
+            not action_node->AddDependency(named_node)) {
             return false;
         }
     }
@@ -226,55 +225,4 @@ auto DependencyGraph::ActionNodeWithId(ActionIdentifier const& id)
         return nullptr;
     }
     return &(*action_nodes_[it_to_action->second]);
-}
-
-auto DependencyGraph::ActionNodeOfArtifactWithId(ArtifactIdentifier const& id)
-    const noexcept -> DependencyGraph::ActionNode const* {
-    auto const* node = ArtifactNodeWithId(id);
-    if (node != nullptr) {
-        auto const& children = node->Children();
-        if (children.empty()) {
-            return nullptr;
-        }
-        return children[0];
-    }
-    return nullptr;
-}
-
-auto DependencyGraph::ArtifactWithId(
-    ArtifactIdentifier const& id) const noexcept -> std::optional<Artifact> {
-    auto const* node = ArtifactNodeWithId(id);
-    if (node != nullptr) {
-        return node->Content();
-    }
-    return std::nullopt;
-}
-
-[[nodiscard]] auto DependencyGraph::ActionWithId(
-    ActionIdentifier const& id) const noexcept -> std::optional<Action> {
-    auto const* node = ActionNodeWithId(id);
-    if (node != nullptr) {
-        return node->Content();
-    }
-    return std::nullopt;
-}
-
-auto DependencyGraph::ActionOfArtifactWithId(
-    ArtifactIdentifier const& artifact_id) const noexcept
-    -> std::optional<Action> {
-    auto const* node = ActionNodeOfArtifactWithId(artifact_id);
-    if (node != nullptr) {
-        return node->Content();
-    }
-    return std::nullopt;
-}
-
-auto DependencyGraph::ActionIdOfArtifactWithId(
-    ArtifactIdentifier const& artifact_id) const noexcept
-    -> std::optional<ActionIdentifier> {
-    auto const& action = ActionOfArtifactWithId(artifact_id);
-    if (action) {
-        return action->Id();
-    }
-    return std::nullopt;
 }

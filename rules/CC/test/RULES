@@ -27,6 +27,8 @@
     , "CC_TEST_LAUNCHER"
     , "RUNS_PER_TEST"
     , "ARCH_DISPATCH"
+    , "TEST_SUMMARY_EXECUTION_PROPERTIES"
+    , "LINT"
     ]
   , "implicit":
     { "defaults": [["./", "..", "defaults"]]
@@ -50,7 +52,7 @@
       , ""
       , "This running of the test is carried out by the implicit dependency"
       , "on the target \"runner\". By setting this target in the target layer"
-      , "of this rues repository (instead of letting it default to the"
+      , "of this rules repository (instead of letting it default to the"
       , "respective file), the C/C++ test environment can be modified globally."
       ]
     , "private-hdrs":
@@ -80,7 +82,8 @@
       ]
     , "summarizer":
       [ "Tool to aggregate the results of individual test runs (for flakyness"
-      , "detection) to an overall test result."
+      , "detection) to an overall test result. If more fields than the result"
+      , "itself is needed, those can be specified using the \"summarizer\" rule."
       ]
     }
   , "config_doc":
@@ -130,6 +133,15 @@
       , "the specified execution properties (i.e., on the target architecture);"
       , "all building will be done on the host architecture."
       ]
+    , "TEST_SUMMARY_EXECUTION_PROPERTIES":
+      [ "Additional remote-execution properties for the test-summarizing action"
+      , "in case RUNS_PER_TEST is set; defaults to the empty map."
+      ]
+    , "LINT":
+      [ "Also provide nodes describing compile actions and header files;"
+      , "those can be used by lint rules (doing also the config transition)"
+      , "for additional checks."
+      ]
     }
   , "artifacts_doc":
     [ "result: the result of this test (\"PASS\" or \"FAIL\"); useful for"
@@ -138,6 +150,7 @@
     , "        the respective file descriptor"
     , "time-start/time-stop: The time (decimally coded) in seconds since the"
     , "        epoch when the test invocation started and ended."
+    , "pwd:     the directory in which the test was carried out"
     ]
   , "runfiles_doc":
     [ "A tree consisting of the artifacts staged at the name of the test."
@@ -151,10 +164,13 @@
     , "host transition": ["transitions", "maybe for host"]
     , "stage": ["./", "../..", "stage_singleton_field"]
     , "run_test": "run_test"
+    , "field_list": ["", "field_list_provider"]
     }
   , "config_transitions":
     { "defaults": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
     , "private-deps": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
+    , "private-hdrs": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
+    , "srcs": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
     , "data": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
     , "runner": [{"type": "CALL_EXPRESSION", "name": "host transition"}]
     }
@@ -174,12 +190,16 @@
           , "$1": {"type": "FIELD", "name": "stage"}
           }
         ]
+      , ["host-trans", {"type": "CALL_EXPRESSION", "name": "host transition"}]
       , [ "srcs"
         , { "type": "to_subdir"
           , "subdir": {"type": "var", "name": "stage"}
           , "$1":
             { "type": "let*"
-            , "bindings": [["fieldname", "srcs"]]
+            , "bindings":
+              [ ["fieldname", "srcs"]
+              , ["transition", {"type": "var", "name": "host-trans"}]
+              ]
             , "body": {"type": "CALL_EXPRESSION", "name": "artifacts"}
             }
           }
@@ -189,12 +209,14 @@
           , "subdir": {"type": "var", "name": "stage"}
           , "$1":
             { "type": "let*"
-            , "bindings": [["fieldname", "private-hdrs"]]
+            , "bindings":
+              [ ["fieldname", "private-hdrs"]
+              , ["transition", {"type": "var", "name": "host-trans"}]
+              ]
             , "body": {"type": "CALL_EXPRESSION", "name": "artifacts"}
             }
           }
         ]
-      , ["host-trans", {"type": "CALL_EXPRESSION", "name": "host transition"}]
       , ["defaults-transition", {"type": "var", "name": "host-trans"}]
       , ["deps-transition", {"type": "var", "name": "host-trans"}]
       , ["deps-fieldnames", ["private-deps", "defaults"]]
@@ -229,6 +251,18 @@
           , "bindings":
             [["fieldname", "summarizer"], ["location", "summarizer"]]
           , "body": {"type": "CALL_EXPRESSION", "name": "stage"}
+          }
+        ]
+      , [ "summary artifacts"
+        , { "type": "++"
+          , "$1":
+            [ ["result"]
+            , { "type": "let*"
+              , "bindings":
+                [["provider", "artifacts"], ["fieldname", "summarizer"]]
+              , "body": {"type": "CALL_EXPRESSION", "name": "field_list"}
+              }
+            ]
           }
         ]
       ]

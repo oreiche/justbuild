@@ -74,6 +74,32 @@ the value `null` is taken as default for `"default"`) and
 evaluated. The value obtained this way is the result of the
 evaluation.
 
+##### Quoting: `"'"`
+
+The value is the value of the key `"$1"` uninterpreted, if present,
+and `null` otherwise.
+
+##### Quasi-Quoting: ``"`"``
+
+The value is the value of the key `"$1"` uninterpreted but replacing
+all outermost maps having a key `"type"` with the value either
+`","` or `",@"` in the following way.
+ - If the value for the key `"type"` is `","`, the value for the
+   key `"$1"` (or `null` if there is no key `"$1"`) is evaluated
+   and the map is replaced by the value of that evaluation.
+ - If the value for the key `"type"` is `",@"` it is an error if
+   that map is not an entry of a literal list. The value for the
+   key `"$1"` (or `[]` if there is no key `"$1"`) is evaluated;
+   the result of that evaluation has to be a list. The entries of
+   that list (i.e., the list obtained by evaluating the value for
+   `"$1"`) are inserted (not the list itself) into the surrounding
+   list replacing that map.
+For example, ``{"type": "`", "$1": [1, 2, {"type": ",@", "$1": [3, 4]}]}``
+evaluates to `[1, 2, 3, 4]` while
+``{"type": "`", "$1": [1, 2, {"type": ",", "$1": [3, 4]}]}``
+evaluates to `[1, 2, [3, 4]]`.
+
+
 ##### Sequential binding: `"let*"`
 
 The key `"bindings"` (default `[]`) has to be (syntactically) a
@@ -222,6 +248,11 @@ those) argument(s) to obtain the final result.
    result is the input list, except that for all duplicate
    values, all but the rightmost occurrence is removed.
 
+ - `"nub_list"` The argument has to be a list. It is an error
+   if that list contains (directly or indirectly) a name. The
+   result is the input list, except that for all duplicate
+   values, all but the leftmost occurrence is removed.
+
  - `"basename"` The argument has to be a string. This string is
    interpreted as a path, and the file name thereof is
    returned.
@@ -326,6 +357,17 @@ those) argument(s) to obtain the final result.
    `"./foo.txt"`), and are assigned different values. It also
    is an error if the values for keys in conflicting positions
    are name-containing.
+
+ - `"from_subdir"` The argument has to be a map (not necessarily of
+   artifacts). The keys of this map, as well as the value of keyword
+   argument `"subdir"` (string, default `"."`) are interpreted as
+   paths; only those key-value pairs of the argument map are kept
+   where the key refers to an entry in the specified `"subdir"`,
+   and for those the path relative to the subdir is taken as new
+   key. Those paths relative to the subdir are taken in canonical
+   form; it is an error if non-trivial conflicts arise that way,
+   i.e., if two keys that are kept normalize to the same relative
+   path while the repsective values are different.
 
 ##### Binary functions
 

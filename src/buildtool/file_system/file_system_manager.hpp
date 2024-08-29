@@ -16,29 +16,38 @@
 #define INCLUDED_SRC_BUILDTOOL_FILE_SYSTEM_FILE_SYSTEM_MANAGER_HPP
 
 #include <array>
+#include <cerrno>  // for errno
 #include <chrono>
 #include <cstddef>
-#include <cstdio>  // for std::fopen
+#include <cstdio>   // for std::fopen
+#include <cstdlib>  // std::exit, std::getenv
 #include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <system_error>
 #include <unordered_set>
+#include <variant>
 
 #ifdef __unix__
 #include <fcntl.h>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#else
+#error "Non-unix is not supported yet"
 #endif
 
 #include "gsl/gsl"
+#include "nlohmann/json.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/system/system.hpp"
+#include "src/utils/cpp/expected.hpp"
 #include "src/utils/cpp/path.hpp"
 
 namespace detail {
@@ -69,7 +78,7 @@ class FileSystemManager {
         auto operator=(DirectoryAnchor const&) -> DirectoryAnchor& = delete;
         auto operator=(DirectoryAnchor&&) -> DirectoryAnchor& = delete;
         ~DirectoryAnchor() noexcept {
-            if (!kRestorePath.empty()) {
+            if (not kRestorePath.empty()) {
                 try {
                     std::filesystem::current_path(kRestorePath);
                 } catch (std::exception const& e) {
@@ -139,6 +148,26 @@ class FileSystemManager {
         return CreateFileImpl(file) == CreationStatus::Created;
     }
 
+    /// \brief Determine user home directory
+    [[nodiscard]] static auto GetUserHome() noexcept -> std::filesystem::path {
+        char const* root{nullptr};
+
+#ifdef __unix__
+        root = std::getenv("HOME");
+        if (root == nullptr) {
+            root = getpwuid(getuid())->pw_dir;
+        }
+#endif
+
+        if (root == nullptr) {
+            Logger::Log(LogLevel::Error,
+                        "Cannot determine user home directory.");
+            std::exit(EXIT_FAILURE);
+        }
+
+        return root;
+    }
+
     /// \brief We are POSIX-compliant, therefore we only care about the string
     /// value the symlinks points to, whether it exists or not, not the target
     /// type. As such, we don't distinguish directory or file targets. However,
@@ -192,29 +221,36 @@ class FileSystemManager {
         return false;
     }
 
+    /// \brief Try to create a hard link; return unit on success and a
+    /// std::error_condition describing the failure.
     [[nodiscard]] static auto CreateFileHardlink(
         std::filesystem::path const& file_path,
         std::filesystem::path const& link_path,
-        LogLevel log_failure_at = LogLevel::Error) noexcept -> bool {
-        try {
-            std::filesystem::create_hard_link(file_path, link_path);
-            return std::filesystem::is_regular_file(link_path);
-        } catch (std::exception const& e) {
-            Logger::Log(log_failure_at,
-                        "hard linking {} to {}\n{}",
-                        file_path.string(),
-                        link_path.string(),
-                        e.what());
-            return false;
+        LogLevel log_failure_at = LogLevel::Error) noexcept
+        -> expected<std::monostate, std::error_code> {
+        std::error_code ec{};
+        std::filesystem::create_hard_link(file_path, link_path, ec);
+        if (not ec) {
+            if (std::filesystem::is_regular_file(link_path)) {
+                return std::monostate{};
+            }
+            return unexpected(std::error_code{});
         }
+        Logger::Log(log_failure_at,
+                    "failed hard linking {} to {}: {}, {}",
+                    nlohmann::json(file_path.string()).dump(),
+                    nlohmann::json(link_path.string()).dump(),
+                    ec.value(),
+                    ec.message());
+        return unexpected(ec);
     }
 
     template <ObjectType kType, bool kSetEpochTime = false>
-    requires(IsFileObject(kType))
-        [[nodiscard]] static auto CreateFileHardlinkAs(
-            std::filesystem::path const& file_path,
-            std::filesystem::path const& link_path,
-            LogLevel log_failure_at = LogLevel::Error) noexcept -> bool {
+        requires(IsFileObject(kType))
+    [[nodiscard]] static auto CreateFileHardlinkAs(
+        std::filesystem::path const& file_path,
+        std::filesystem::path const& link_path,
+        LogLevel log_failure_at = LogLevel::Error) noexcept -> bool {
         // Set permissions first (permissions are a property of the file) so
         // that the created link has the correct permissions as soon as the link
         // creation is finished.
@@ -318,7 +354,8 @@ class FileSystemManager {
     template <ObjectType kType,
               bool kSetEpochTime = false,
               bool kSetWritable = false>
-    requires(IsFileObject(kType)) [[nodiscard]] static auto CopyFileAs(
+        requires(IsFileObject(kType))
+    [[nodiscard]] static auto CopyFileAs(
         std::filesystem::path const& src,
         std::filesystem::path const& dst,
         bool fd_less = false,
@@ -381,11 +418,11 @@ class FileSystemManager {
                             dst.string());
                 return false;
             }
-            std::filesystem::copy(src,
-                                  dst,
-                                  recursively
-                                      ? std::filesystem::copy_options::recursive
-                                      : std::filesystem::copy_options::none);
+            auto const opts =
+                std::filesystem::copy_options::copy_symlinks |
+                (recursively ? std::filesystem::copy_options::recursive
+                             : std::filesystem::copy_options::none);
+            std::filesystem::copy(src, dst, opts);
             return true;
         } catch (std::exception const& e) {
             Logger::Log(LogLevel::Error,
@@ -447,11 +484,11 @@ class FileSystemManager {
         std::filesystem::path const& file) noexcept -> bool {
         try {
             auto status = std::filesystem::symlink_status(file);
-            if (!std::filesystem::exists(status)) {
+            if (not std::filesystem::exists(status)) {
                 return true;
             }
-            if (!std::filesystem::is_regular_file(status) and
-                !std::filesystem::is_symlink(status)) {
+            if (not std::filesystem::is_regular_file(status) and
+                not std::filesystem::is_symlink(status)) {
                 return false;
             }
             return std::filesystem::remove(file);
@@ -469,10 +506,10 @@ class FileSystemManager {
         -> bool {
         try {
             auto status = std::filesystem::symlink_status(dir);
-            if (!std::filesystem::exists(status)) {
+            if (not std::filesystem::exists(status)) {
                 return true;
             }
-            if (!std::filesystem::is_directory(status)) {
+            if (not std::filesystem::is_directory(status)) {
                 return false;
             }
             if (recursively) {
@@ -546,7 +583,7 @@ class FileSystemManager {
         -> bool {
         try {
             auto const status = std::filesystem::symlink_status(file);
-            if (!std::filesystem::is_regular_file(status)) {
+            if (not std::filesystem::is_regular_file(status)) {
                 return false;
             }
         } catch (std::exception const& e) {
@@ -893,10 +930,10 @@ class FileSystemManager {
     template <ObjectType kType,
               bool kSetEpochTime = false,
               bool kSetWritable = false>
-    requires(IsFileObject(kType))
-        [[nodiscard]] static auto WriteFileAs(std::string const& content,
-                                              std::filesystem::path const& file,
-                                              bool fd_less = false) noexcept
+        requires(IsFileObject(kType))
+    [[nodiscard]] static auto WriteFileAs(std::string const& content,
+                                          std::filesystem::path const& file,
+                                          bool fd_less = false) noexcept
         -> bool {
         return WriteFile(content, file, fd_less) and
                SetFilePermissions<kSetWritable>(file,
@@ -1044,7 +1081,7 @@ class FileSystemManager {
         }
         try {
             std::ofstream writer{file};
-            if (!writer.is_open()) {
+            if (not writer.is_open()) {
                 Logger::Log(
                     LogLevel::Error, "can not open file {}", file.string());
                 return false;
@@ -1184,7 +1221,7 @@ class FileSystemManager {
             while ((len = read(in.fd, buf.data(), buf.size())) > 0) {
                 ssize_t wlen{};
                 ssize_t written_len{};
-                while (written_len < len &&
+                while (written_len < len and
                        (wlen = write(out.fd,
                                      buf.data() + written_len,  // NOLINT
                                      len - written_len)) > 0) {
@@ -1300,6 +1337,6 @@ class FileSystemManager {
         }
 
     };  // class LowLevel
-};      // class FileSystemManager
+};  // class FileSystemManager
 
 #endif  // INCLUDED_SRC_BUILDTOOL_FILE_SYSTEM_FILE_SYSTEM_MANAGER_HPP

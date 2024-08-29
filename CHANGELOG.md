@@ -1,3 +1,70 @@
+## Release `1.4.0` (UNRELEASED)
+
+A feature release on top of `1.3.0`, backwards compatible.
+
+### New features
+
+- User-defined rules, as well as the built-in rule `"generic"` can
+  now specify a subdirectory in which an action is to be executed.
+- `just-mr` now supports garbage collection for repository roots
+  via the `gc-repo` subcommand. This follows the same two-generation
+  approach as garbage collection for the cache-CAS pair; in
+  other words, everything is cleaned up that was not used since
+  the last call to `gc-repo`. To accommodate this, the layout in
+  the local build root had to be changed. The directory `git` as
+  well as `*-map` directories are now located in the subdirectory
+  `repositories/generation-0`. On upgrade those have to be manually
+  moved there if they should be continued to be used; removing the
+  whole local build root is, of course, also a valid upgrade path,
+  however losing the whole cache. Not doing anything on upgrade
+  will not lead to an inconsistent state; however, the directories
+  at the old location will not be used anymore while still using
+  disk space.
+- The expression language has been extended to contain quote and
+  quasi-quote expressions, as well as new built-in functions
+  `"from_subdir"`, `"nub_left"`.
+
+### Fixes
+
+- The built-in rule `"generic"` now properly enforces that the
+  obtained outputs form a well-formed artifact stage; a conflicting
+  arrangement of artifacts was possilbe beforehand.
+- A bug was fixed that cased `just serve` to fail with an internal
+  error when building against ignore-special roots.
+- `just` now accurately reports internal errors that occurred on
+  the serve endpoint.
+- Target-level cache entries are only written if all export targets
+  depended upon are also written to or found in cache; previously,
+  it was assumed that all export targets not analysed locally
+  were local cache hits, an assumption that no longer holds in
+  the presence of serve end points. This fixes a cache consistency
+  problem if the same remote-execution endpoint is used both, with
+  and without a serve endpoint.
+- A race condition in reconstructing executables from large CAS has
+  been removed that could lead to an open file descriptor being kept
+  alive for too long, resulting EBUSY failures of actions using this
+  binary.
+- Internal code clean up, reducing memory footprint, in particular
+  for simultaneous upload of a large number of blobs.
+- Avoidence of duplicate requests and performance improvements when
+  synchronizing artifacts with another CAS.
+- Dependencies have been updated to also build with gcc 14.
+- Portability improvements of the code by not relying on implementation
+  details of the compiler.
+- Local execution no longer has the requirement that there exist no
+  more files with identical content than the hardlink limit of the
+  underlying file system.
+- The size of large object entries has been reduced. The cache and
+  CAS must be cleaned up since stable versions before `1.4.0` cannot use
+  the new format.
+- The way of storing intermediate keys of the action cache has been changed. 
+  The cache must be cleaned up since stable versions before `1.4.0` cannot 
+  use the new format.
+- Various improvements to the tests: dispatching of the summary
+  action is now possible, tests are independent of a .just-mrrc
+  file the user might have in their home directory
+- Various improvements of the documentation.
+
 ## Release `1.3.0` (2024-05-08)
 
 A feature release on top of `1.2.0`, backwards compatible.

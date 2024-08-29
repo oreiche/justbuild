@@ -5,13 +5,15 @@
   , "private-deps":
     [ ["@", "catch2", "", "catch2"]
     , ["", "catch-main"]
+    , ["@", "gsl", "", "gsl"]
     , ["utils", "container_matchers"]
     , ["@", "src", "src/buildtool/common", "action_description"]
-    , ["@", "src", "src/buildtool/common", "artifact_factory"]
+    , ["@", "src", "src/buildtool/common", "artifact_description"]
     , ["@", "src", "src/buildtool/common", "common"]
     , ["@", "src", "src/buildtool/execution_engine/dag", "dag"]
     ]
   , "stage": ["test", "buildtool", "execution_engine", "dag"]
   }
-, "TESTS": {"type": "install", "tainted": ["test"], "deps": ["dag"]}
+, "TESTS":
+  {"type": ["@", "rules", "test", "suite"], "stage": ["dag"], "deps": ["dag"]}
 }

@@ -21,7 +21,6 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "gsl/gsl"
@@ -29,14 +28,31 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/remote/remote_common.hpp"
-#include "src/buildtool/execution_api/common/create_execution_api.hpp"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/serve_api/remote/config.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 // The target-level cache service.
 class TargetService final : public justbuild::just_serve::Target::Service {
   public:
+    explicit TargetService(
+        gsl::not_null<RemoteServeConfig const*> const& serve_config,
+        gsl::not_null<LocalContext const*> const& local_context,
+        gsl::not_null<RemoteContext const*> const& remote_context,
+        gsl::not_null<ApiBundle const*> const& apis,
+        ServeApi const* serve = nullptr) noexcept
+        : serve_config_{*serve_config},
+          local_context_{*local_context},
+          remote_context_{*remote_context},
+          apis_{*apis},
+          serve_{serve} {}
+
     // Given a target-level caching key, returns the computed value. In doing
     // so, it can build on the associated endpoint passing the
     // RemoteExecutionProperties contained in the ServeTargetRequest.
@@ -113,28 +129,20 @@ class TargetService final : public justbuild::just_serve::Target::Service {
         -> ::grpc::Status override;
 
   private:
+    RemoteServeConfig const& serve_config_;
+    LocalContext const& local_context_;
+    RemoteContext const& remote_context_;
+    ApiBundle const& apis_;
+    ServeApi const* const serve_ = nullptr;
     std::shared_ptr<Logger> logger_{std::make_shared<Logger>("target-service")};
-
-    // type of dispatch list; reduces verbosity
-    using dispatch_t = std::vector<
-        std::pair<std::map<std::string, std::string>, ServerAddress>>;
-
-    // remote execution endpoint used for remote building
-    gsl::not_null<IExecutionApi::Ptr> const remote_api_{
-        CreateExecutionApi(RemoteExecutionConfig::RemoteAddress(),
-                           std::nullopt,
-                           "serve-remote-execution")};
-    // used for storing and retrieving target-level cache entries
-    gsl::not_null<IExecutionApi::Ptr> const local_api_{
-        CreateExecutionApi(std::nullopt)};
 
     /// \brief Get from remote and parse the endpoint configuration. The method
     /// also ensures the content has the expected format.
-    /// \returns An error + data union, with a pair of grpc status at index 0
-    /// and the dispatch list stored as a JSON object at index 1.
+    /// \returns The dispatch list stored as JSON object on success or an
+    /// unexpected error as grpc::Status.
     [[nodiscard]] auto GetDispatchList(
         ArtifactDigest const& dispatch_digest) noexcept
-        -> std::variant<::grpc::Status, dispatch_t>;
+        -> expected<std::vector<DispatchEndpoint>, ::grpc::Status>;
 
     /// \brief Handles the processing of the log after a failed analysis or
     /// build. Will populate the response as needed and set the status to be
@@ -146,6 +154,14 @@ class TargetService final : public justbuild::just_serve::Target::Service {
         std::string const& failure_scope,
         ::justbuild::just_serve::ServeTargetResponse* response) noexcept
         -> ::grpc::Status;
+
+    /// \brief Create the execution configuration needed to shard the target
+    /// cache and dispatch the build to the remote endpoint.
+    /// \returns A set up RemoteExecutionConfig or an unexpected error as
+    /// grpc::Status.
+    [[nodiscard]] auto CreateRemoteExecutionConfig(
+        const ::justbuild::just_serve::ServeTargetRequest* request) noexcept
+        -> expected<RemoteExecutionConfig, ::grpc::Status>;
 };
 
 #endif  // INCLUDED_SRC_BUILD_SERVE_API_SERVE_SERVICE_TARGET_HPP

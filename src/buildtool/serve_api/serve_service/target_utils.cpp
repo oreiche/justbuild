@@ -25,9 +25,6 @@
 #include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
-#include "src/buildtool/serve_api/remote/config.hpp"
-#include "src/buildtool/storage/config.hpp"
-#include "src/buildtool/storage/storage.hpp"
 
 auto IsTreeInRepo(std::string const& tree_id,
                   std::filesystem::path const& repo_path,
@@ -38,13 +35,12 @@ auto IsTreeInRepo(std::string const& tree_id,
             auto wrapped_logger = std::make_shared<GitRepo::anon_logger_t>(
                 [logger, repo_path, tree_id](auto const& msg, bool fatal) {
                     if (fatal) {
-                        auto err = fmt::format(
-                            "ServeTarget: While checking existence of tree {} "
-                            "in repository {}:\n{}",
-                            tree_id,
-                            repo_path.string(),
-                            msg);
-                        logger->Emit(LogLevel::Info, err);
+                        logger->Emit(LogLevel::Info,
+                                     "ServeTarget: While checking existence of "
+                                     "tree {} in repository {}:\n{}",
+                                     tree_id,
+                                     repo_path.string(),
+                                     msg);
                     }
                 });
             if (auto res = repo->CheckTreeExists(tree_id, wrapped_logger)) {
@@ -55,15 +51,17 @@ auto IsTreeInRepo(std::string const& tree_id,
     return false;  // tree not found
 }
 
-auto GetServingRepository(std::string const& tree_id,
+auto GetServingRepository(RemoteServeConfig const& serve_config,
+                          StorageConfig const& storage_config,
+                          std::string const& tree_id,
                           std::shared_ptr<Logger> const& logger)
     -> std::optional<std::filesystem::path> {
     // try the Git cache repository
-    if (IsTreeInRepo(tree_id, StorageConfig::GitRoot(), logger)) {
-        return StorageConfig::GitRoot();
+    if (IsTreeInRepo(tree_id, storage_config.GitRoot(), logger)) {
+        return storage_config.GitRoot();
     }
     // check the known repositories
-    for (auto const& path : RemoteServeConfig::KnownRepositories()) {
+    for (auto const& path : serve_config.known_repositories) {
         if (IsTreeInRepo(tree_id, path, logger)) {
             return path;
         }
@@ -71,7 +69,9 @@ auto GetServingRepository(std::string const& tree_id,
     return std::nullopt;  // tree cannot be served
 }
 
-auto DetermineRoots(std::string const& main_repo,
+auto DetermineRoots(RemoteServeConfig const& serve_config,
+                    StorageConfig const& storage_config,
+                    std::string const& main_repo,
                     std::filesystem::path const& repo_config_path,
                     gsl::not_null<RepositoryConfig*> const& repository_config,
                     std::shared_ptr<Logger> const& logger)
@@ -102,8 +102,12 @@ auto DetermineRoots(std::string const& main_repo,
     for (auto const& [repo, desc] : repos.items()) {
         // root parser
         auto parse_keyword_root =
-            [&desc = desc, &repo = repo, &error_msg = error_msg, logger](
-                std::string const& keyword) -> std::optional<FileRoot> {
+            [&serve_config,
+             &storage_config,
+             &desc = desc,
+             &repo = repo,
+             &error_msg = error_msg,
+             logger](std::string const& keyword) -> std::optional<FileRoot> {
             auto it = desc.find(keyword);
             if (it != desc.end()) {
                 if (auto parsed_root =
@@ -119,7 +123,8 @@ auto DetermineRoots(std::string const& main_repo,
                     }
                     // find the serving repository for the root tree
                     auto tree_id = *parsed_root->first.GetAbsentTreeId();
-                    auto repo_path = GetServingRepository(tree_id, logger);
+                    auto repo_path = GetServingRepository(
+                        serve_config, storage_config, tree_id, logger);
                     if (not repo_path) {
                         error_msg = fmt::format(
                             "{} tree {} is not known", keyword, tree_id);
@@ -238,13 +243,12 @@ auto GetBlobContent(std::filesystem::path const& repo_path,
             auto wrapped_logger = std::make_shared<GitRepo::anon_logger_t>(
                 [logger, repo_path, tree_id](auto const& msg, bool fatal) {
                     if (fatal) {
-                        auto err = fmt::format(
-                            "ServeTargetVariables: While checking if tree {} "
-                            "exists in repository {}:\n{}",
-                            tree_id,
-                            repo_path.string(),
-                            msg);
-                        logger->Emit(LogLevel::Debug, err);
+                        logger->Emit(LogLevel::Debug,
+                                     "ServeTargetVariables: While checking if "
+                                     "tree {} exists in repository {}:\n{}",
+                                     tree_id,
+                                     repo_path.string(),
+                                     msg);
                     }
                 });
             if (repo->CheckTreeExists(tree_id, wrapped_logger) == true) {
@@ -255,26 +259,25 @@ auto GetBlobContent(std::filesystem::path const& repo_path,
                         [logger, repo_path, blob_id = entry_info->id](
                             auto const& msg, bool fatal) {
                             if (fatal) {
-                                auto err = fmt::format(
+                                logger->Emit(
+                                    LogLevel::Debug,
                                     "ServeTargetVariables: While retrieving "
                                     "blob {} from repository {}:\n{}",
                                     blob_id,
                                     repo_path.string(),
                                     msg);
-                                logger->Emit(LogLevel::Debug, err);
                             }
                         });
                     // get blob content
                     return repo->TryReadBlob(entry_info->id, wrapped_logger);
                 }
                 // trace failure to get entry
-                auto err = fmt::format(
-                    "ServeTargetVariables: Failed to retrieve entry {} in "
-                    "tree {} from repository {}",
-                    rel_path,
-                    tree_id,
-                    repo_path.string());
-                logger->Emit(LogLevel::Debug, err);
+                logger->Emit(LogLevel::Debug,
+                             "ServeTargetVariables: Failed to retrieve entry "
+                             "{} in tree {} from repository {}",
+                             rel_path,
+                             tree_id,
+                             repo_path.string());
                 return std::pair(false, std::nullopt);  // could not read blob
             }
         }

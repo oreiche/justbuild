@@ -17,112 +17,167 @@
 
 #include <chrono>
 #include <cstddef>
+#include <exception>
 #include <filesystem>
 #include <iterator>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
+#include "fmt/core.h"
 #include "src/buildtool/common/remote/remote_common.hpp"
 #include "src/buildtool/main/build_utils.hpp"
+#include "src/utils/cpp/expected.hpp"
 
-class RemoteServeConfig {
+struct RemoteServeConfig final {
+    class Builder;
+
+    // Server address of remote execution.
+    std::optional<ServerAddress> const remote_address{};
+
+    // Known Git repositories to serve server.
+    std::vector<std::filesystem::path> const known_repositories{};
+
+    // Number of jobs
+    std::size_t const jobs = 0;
+
+    // Number of build jobs
+    std::size_t const build_jobs = 0;
+
+    // Action timeout
+    std::chrono::milliseconds const action_timeout{};
+
+    // Strategy for synchronizing target-level cache
+    TargetCacheWriteStrategy const tc_strategy{TargetCacheWriteStrategy::Sync};
+};
+
+class RemoteServeConfig::Builder final {
   public:
-    // Obtain global instance
-    [[nodiscard]] static auto Instance() noexcept -> RemoteServeConfig& {
-        static RemoteServeConfig config;
-        return config;
-    }
-
     // Set remote execution and cache address, unsets if parsing `address` fails
-    [[nodiscard]] static auto SetRemoteAddress(
-        std::string const& address) noexcept -> bool {
-        auto& inst = Instance();
-        return static_cast<bool>(inst.remote_address_ = ParseAddress(address));
+    auto SetRemoteAddress(std::optional<std::string> value) noexcept
+        -> Builder& {
+        remote_address_ = std::move(value);
+        return *this;
     }
 
     // Set the list of known repositories
-    [[nodiscard]] static auto SetKnownRepositories(
-        std::vector<std::filesystem::path> const& repos) noexcept -> bool {
-        auto& inst = Instance();
-        inst.repositories_ = std::vector<std::filesystem::path>(
-            std::make_move_iterator(repos.begin()),
-            std::make_move_iterator(repos.end()));
-        return repos.size() == inst.repositories_.size();
+    auto SetKnownRepositories(std::vector<std::filesystem::path> value) noexcept
+        -> Builder& {
+        known_repositories_ = std::move(value);
+        return *this;
     }
 
     // Set the number of jobs
-    [[nodiscard]] static auto SetJobs(std::size_t jobs) noexcept -> bool {
-        return static_cast<bool>(Instance().jobs_ = jobs);
+    auto SetJobs(std::size_t value) noexcept -> Builder& {
+        jobs_ = value;
+        return *this;
     }
 
     // Set the number of build jobs
-    [[nodiscard]] static auto SetBuildJobs(std::size_t build_jobs) noexcept
-        -> bool {
-        return static_cast<bool>(Instance().build_jobs_ = build_jobs);
+    auto SetBuildJobs(std::size_t value) noexcept -> Builder& {
+        build_jobs_ = value;
+        return *this;
     }
 
     // Set the action timeout
-    [[nodiscard]] static auto SetActionTimeout(
-        std::chrono::milliseconds const& timeout) noexcept -> bool {
-        Instance().timeout_ = timeout;
-        return Instance().timeout_ > std::chrono::seconds{0};
+    auto SetActionTimeout(std::chrono::milliseconds const& value) noexcept
+        -> Builder& {
+        action_timeout_ = value;
+        return *this;
     }
 
-    static void SetTCStrategy(TargetCacheWriteStrategy strategy) noexcept {
-        Instance().tc_strategy_ = strategy;
+    auto SetTCStrategy(TargetCacheWriteStrategy value) noexcept -> Builder& {
+        tc_strategy_ = value;
+        return *this;
     }
 
-    // Remote execution address, if set
-    [[nodiscard]] static auto RemoteAddress() noexcept
-        -> std::optional<ServerAddress> {
-        return Instance().remote_address_;
-    }
+    /// \brief Finalize building and create RemoteServeConfig.
+    /// \return RemoteServeConfig on success or an error on failure.
+    [[nodiscard]] auto Build() const noexcept
+        -> expected<RemoteServeConfig, std::string> {
+        // To not duplicate default arguments of RemoteServeConfig in builder,
+        // create a default config and copy default arguments from there.
+        RemoteServeConfig const default_config;
 
-    // Repositories known to 'just serve'
-    [[nodiscard]] static auto KnownRepositories() noexcept
-        -> const std::vector<std::filesystem::path>& {
-        return Instance().repositories_;
-    }
+        auto remote_address = default_config.remote_address;
+        if (remote_address_.has_value()) {
+            remote_address = ParseAddress(*remote_address_);
+            if (not remote_address) {
+                return unexpected{
+                    fmt::format("Setting serve service address '{}' failed.",
+                                *remote_address_)};
+            }
+        }
 
-    // Get the number of jobs
-    [[nodiscard]] static auto Jobs() noexcept -> std::size_t {
-        return Instance().jobs_;
-    }
+        auto known_repositories = default_config.known_repositories;
+        if (known_repositories_.has_value()) {
+            try {
+                known_repositories = *known_repositories_;
+            } catch (std::exception const& ex) {
+                return unexpected{
+                    std::string("Setting known repositories failed.")};
+            }
+        }
 
-    // Get the number of build jobs
-    [[nodiscard]] static auto BuildJobs() noexcept -> std::size_t {
-        return Instance().build_jobs_;
-    }
+        auto jobs = default_config.jobs;
+        if (jobs_.has_value()) {
+            jobs = *jobs_;
+            if (jobs == 0) {
+                return unexpected{std::string{"Setting jobs failed."}};
+            }
+        }
 
-    // Get the action timeout
-    [[nodiscard]] static auto ActionTimeout() noexcept
-        -> std::chrono::milliseconds {
-        return Instance().timeout_;
-    }
+        auto build_jobs = default_config.jobs;
+        if (build_jobs_.has_value()) {
+            build_jobs = *build_jobs_;
+            if (build_jobs == 0) {
+                return unexpected{std::string{"Setting build jobs failed."}};
+            }
+        }
 
-    // Get the target-level cache write strategy
-    [[nodiscard]] static auto TCStrategy() noexcept
-        -> TargetCacheWriteStrategy {
-        return Instance().tc_strategy_;
+        auto action_timeout = default_config.action_timeout;
+        if (action_timeout_.has_value()) {
+            action_timeout = *action_timeout_;
+            if (bool const valid = action_timeout > std::chrono::seconds{0};
+                not valid) {
+                return unexpected{
+                    std::string{"Setting action timeout failed."}};
+            }
+        }
+
+        auto tc_strategy = default_config.tc_strategy;
+        if (tc_strategy_.has_value()) {
+            tc_strategy = *tc_strategy_;
+        }
+
+        return RemoteServeConfig{
+            .remote_address = std::move(remote_address),
+            .known_repositories = std::move(known_repositories),
+            .jobs = jobs,
+            .build_jobs = build_jobs,
+            .action_timeout = action_timeout,
+            .tc_strategy = tc_strategy};
     }
 
   private:
     // Server address of remote execution.
-    std::optional<ServerAddress> remote_address_{};
+    std::optional<std::string> remote_address_;
 
     // Known Git repositories to serve server.
-    std::vector<std::filesystem::path> repositories_{};
+    std::optional<std::vector<std::filesystem::path>> known_repositories_;
 
     // Number of jobs
-    std::size_t jobs_{};
+    std::optional<std::size_t> jobs_;
 
     // Number of build jobs
-    std::size_t build_jobs_{};
+    std::optional<std::size_t> build_jobs_;
 
     // Action timeout
-    std::chrono::milliseconds timeout_{};
+    std::optional<std::chrono::milliseconds> action_timeout_;
 
     // Strategy for synchronizing target-level cache
-    TargetCacheWriteStrategy tc_strategy_{TargetCacheWriteStrategy::Sync};
+    std::optional<TargetCacheWriteStrategy> tc_strategy_;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_SERVE_API_REMOTE_CONFIG_HPP

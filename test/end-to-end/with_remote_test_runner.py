@@ -41,6 +41,8 @@ def dump_results() -> None:
         f.write("%s\n" % (stdout, ))
     with open("stderr", "w") as f:
         f.write("%s\n" % (stderr, ))
+    with open("pwd", "w") as f:
+        f.write("%s\n" % (os.getcwd(), ))
 
 
 def get_remote_execution_address(d: Json) -> str:
@@ -80,7 +82,7 @@ if not custom_remote:
     ).stdout.decode('utf-8')
 
     remote_cmd = [
-        "./bin/just",
+        "./staged/bin/just",
         "execute",
         "-L",
         json.dumps(["env", "PATH=" + PATH]),

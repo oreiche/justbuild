@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
+
 #include <filesystem>
 #include <unordered_map>
 
 #include "catch2/catch_test_macros.hpp"
-#include "src/buildtool/common/artifact_factory.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob.hpp"
+#include "src/buildtool/common/artifact_description.hpp"
+#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
+#include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "test/utils/blob_creator.hpp"
 
 TEST_CASE("Bazel internals: MessageFactory", "[execution_api]") {
     std::filesystem::path workspace{"test/buildtool/storage/data"};
@@ -34,44 +38,42 @@ TEST_CASE("Bazel internals: MessageFactory", "[execution_api]") {
     std::filesystem::path link = subdir1 / "link";
     REQUIRE(FileSystemManager::CreateSymlink("file1", link));
 
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
     // create the corresponding blobs
-    auto file1_blob = CreateBlobFromPath(file1);
-    auto file2_blob = CreateBlobFromPath(file2);
-    auto link_blob = CreateBlobFromPath(link);
+    auto file1_blob = CreateBlobFromPath(file1, hash_function);
+    auto file2_blob = CreateBlobFromPath(file2, hash_function);
+    auto link_blob = CreateBlobFromPath(link, hash_function);
 
     CHECK(file1_blob);
     CHECK(file2_blob);
     CHECK(link_blob);
 
     // both files are the same and should result in identical blobs
-    CHECK(file1_blob->data == file2_blob->data);
+    CHECK(*file1_blob->data == *file2_blob->data);
     CHECK(file1_blob->digest.hash() == file2_blob->digest.hash());
     CHECK(file1_blob->digest.size_bytes() == file2_blob->digest.size_bytes());
 
     // create known artifacts
     auto artifact1_opt =
-        ArtifactFactory::FromDescription(ArtifactFactory::DescribeKnownArtifact(
-            NativeSupport::Unprefix(file1_blob->digest.hash()),
-            static_cast<std::size_t>(file1_blob->digest.size_bytes()),
-            ObjectType::File));
-    CHECK(artifact1_opt.has_value());
-    auto artifact1 = DependencyGraph::ArtifactNode{std::move(*artifact1_opt)};
+        ArtifactDescription::CreateKnown(ArtifactDigest{file1_blob->digest},
+                                         ObjectType::File)
+            .ToArtifact();
+    auto artifact1 = DependencyGraph::ArtifactNode{std::move(artifact1_opt)};
 
     auto artifact2_opt =
-        ArtifactFactory::FromDescription(ArtifactFactory::DescribeKnownArtifact(
-            NativeSupport::Unprefix(file2_blob->digest.hash()),
-            static_cast<std::size_t>(file2_blob->digest.size_bytes()),
-            ObjectType::File));
-    CHECK(artifact2_opt.has_value());
-    auto artifact2 = DependencyGraph::ArtifactNode{std::move(*artifact2_opt)};
+        ArtifactDescription::CreateKnown(ArtifactDigest{file2_blob->digest},
+                                         ObjectType::File)
+            .ToArtifact();
+    auto artifact2 = DependencyGraph::ArtifactNode{std::move(artifact2_opt)};
 
     auto artifact3_opt =
-        ArtifactFactory::FromDescription(ArtifactFactory::DescribeKnownArtifact(
-            NativeSupport::Unprefix(link_blob->digest.hash()),
-            static_cast<std::size_t>(link_blob->digest.size_bytes()),
-            ObjectType::Symlink));
-    CHECK(artifact3_opt.has_value());
-    auto artifact3 = DependencyGraph::ArtifactNode{std::move(*artifact3_opt)};
+        ArtifactDescription::CreateKnown(ArtifactDigest{link_blob->digest},
+                                         ObjectType::Symlink)
+            .ToArtifact();
+    auto artifact3 = DependencyGraph::ArtifactNode{std::move(artifact3_opt)};
 
     // create directory tree
     auto tree =
@@ -88,7 +90,7 @@ TEST_CASE("Bazel internals: MessageFactory", "[execution_api]") {
         {link_blob->digest, link}};
 
     // create blobs via tree
-    BlobContainer blobs{};
+    BazelBlobContainer blobs{};
     REQUIRE(BazelMsgFactory::CreateDirectoryDigestFromTree(
         *tree,
         [&fake_cas](std::vector<bazel_re::Digest> const& digests,
@@ -110,7 +112,10 @@ TEST_CASE("Bazel internals: MessageFactory", "[execution_api]") {
                 }
             }
         },
-        [&blobs](BazelBlob&& blob) { blobs.Emplace(std::move(blob)); }));
+        [&blobs](BazelBlob&& blob) {
+            blobs.Emplace(std::move(blob));
+            return true;
+        }));
 
     // TODO(aehlig): also check total number of DirectoryNode blobs in container
 }

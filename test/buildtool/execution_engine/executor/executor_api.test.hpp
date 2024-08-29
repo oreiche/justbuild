@@ -26,16 +26,21 @@
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
-#include "src/buildtool/common/artifact_factory.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
+#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
+#include "src/buildtool/execution_engine/executor/context.hpp"
 #include "src/buildtool/execution_engine/executor/executor.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/progress_reporting/progress.hpp"
-#include "test/utils/test_env.hpp"
+#include "test/utils/executor/test_api_bundle.hpp"
+#include "test/utils/remote_execution/test_remote_config.hpp"
 
 using ApiFactory = std::function<IExecutionApi::Ptr()>;
 
@@ -50,9 +55,13 @@ static inline void RunBlobUpload(RepositoryConfig* repo_config,
                                  ApiFactory const& factory) {
     SetupConfig(repo_config);
     auto api = factory();
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
     std::string const blob = "test";
-    CHECK(api->Upload(BlobContainer{{BazelBlob{
-        ArtifactDigest{HashFunction::ComputeBlobHash(blob).HexString(),
+    CHECK(api->Upload(ArtifactBlobContainer{{ArtifactBlob{
+        ArtifactDigest{hash_function.HashBlobData(blob).HexString(),
                        blob.size(),
                        /*is_tree=*/false},
         blob,
@@ -93,13 +102,15 @@ static inline void RunHelloWorldCompilation(
     gsl::not_null<Statistics*> const& stats,
     gsl::not_null<Progress*> const& progress,
     ApiFactory const& factory,
+    gsl::not_null<Auth const*> const& auth,
+
     bool is_hermetic = true,
     int expected_queued = 0,
     int expected_cached = 0) {
     using path = std::filesystem::path;
     SetupConfig(repo_config);
     auto const main_cpp_desc =
-        ArtifactDescription{path{"data/hello_world/main.cpp"}, ""};
+        ArtifactDescription::CreateLocal(path{"data/hello_world/main.cpp"}, "");
     auto const& main_cpp_id = main_cpp_desc.Id();
     std::string const make_hello_id = "make_hello";
     auto* env_path = std::getenv("PATH");
@@ -118,21 +129,34 @@ static inline void RunHelloWorldCompilation(
                env},
         {{"src/main.cpp", main_cpp_desc}}};
     auto const exec_desc =
-        ArtifactDescription{make_hello_id, "out/hello_world"};
+        ArtifactDescription::CreateAction(make_hello_id, "out/hello_world");
     auto const& exec_id = exec_desc.Id();
 
     DependencyGraph g;
     CHECK(g.AddAction(make_hello_desc));
     CHECK(g.ArtifactNodeWithId(exec_id)->HasBuilderAction());
 
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    RetryConfig retry_config{};  // default retry config
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &*remote_config};
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
     auto api = factory();
-    Executor runner{repo_config,
-                    api.get(),
-                    api.get(),
-                    RemoteExecutionConfig::PlatformProperties(),
-                    RemoteExecutionConfig::DispatchList(),
-                    stats,
-                    progress};
+    auto const apis = CreateTestApiBundle(hash_function, api);
+
+    ExecutionContext const exec_context{.repo_config = repo_config,
+                                        .apis = &apis,
+                                        .remote_context = &remote_context,
+                                        .statistics = stats,
+                                        .progress = progress};
+    Executor runner{&exec_context};
 
     // upload local artifacts
     auto const* main_cpp_node = g.ArtifactNodeWithId(main_cpp_id);
@@ -165,6 +189,7 @@ static inline void RunGreeterCompilation(
     gsl::not_null<Statistics*> const& stats,
     gsl::not_null<Progress*> const& progress,
     ApiFactory const& factory,
+    gsl::not_null<Auth const*> const& auth,
     std::string const& greetcpp,
     bool is_hermetic = true,
     int expected_queued = 0,
@@ -172,10 +197,10 @@ static inline void RunGreeterCompilation(
     using path = std::filesystem::path;
     SetupConfig(repo_config);
     auto const greet_hpp_desc =
-        ArtifactDescription{path{"data/greeter/greet.hpp"}, ""};
+        ArtifactDescription::CreateLocal(path{"data/greeter/greet.hpp"}, "");
     auto const& greet_hpp_id = greet_hpp_desc.Id();
     auto const greet_cpp_desc =
-        ArtifactDescription{path{"data/greeter"} / greetcpp, ""};
+        ArtifactDescription::CreateLocal(path{"data/greeter"} / greetcpp, "");
     auto const& greet_cpp_id = greet_cpp_desc.Id();
 
     std::string const compile_greet_id = "compile_greet";
@@ -203,7 +228,7 @@ static inline void RunGreeterCompilation(
                            {"src/greet.cpp", greet_cpp_desc}}};
 
     auto const greet_o_desc =
-        ArtifactDescription{compile_greet_id, "out/greet.o"};
+        ArtifactDescription::CreateAction(compile_greet_id, "out/greet.o");
     auto const& greet_o_id = greet_o_desc.Id();
 
     std::string const make_lib_id = "make_lib";
@@ -214,11 +239,11 @@ static inline void RunGreeterCompilation(
         {{"greet.o", greet_o_desc}}};
 
     auto const main_cpp_desc =
-        ArtifactDescription{path{"data/greeter/main.cpp"}, ""};
+        ArtifactDescription::CreateLocal(path{"data/greeter/main.cpp"}, "");
     auto const& main_cpp_id = main_cpp_desc.Id();
 
     auto const libgreet_desc =
-        ArtifactDescription{make_lib_id, "out/libgreet.a"};
+        ArtifactDescription::CreateAction(make_lib_id, "out/libgreet.a");
     auto const& libgreet_id = libgreet_desc.Id();
 
     std::string const make_exe_id = "make_exe";
@@ -240,19 +265,33 @@ static inline void RunGreeterCompilation(
                            {"include/greet.hpp", greet_hpp_desc},
                            {"lib/libgreet.a", libgreet_desc}}};
 
-    auto const exec_id = ArtifactDescription(make_exe_id, "out/greeter").Id();
+    auto const exec_id =
+        ArtifactDescription::CreateAction(make_exe_id, "out/greeter").Id();
 
     DependencyGraph g;
     CHECK(g.Add({compile_greet_desc, make_lib_desc, make_exe_desc}));
 
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    RetryConfig retry_config{};  // default retry config
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &*remote_config};
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
     auto api = factory();
-    Executor runner{repo_config,
-                    api.get(),
-                    api.get(),
-                    RemoteExecutionConfig::PlatformProperties(),
-                    RemoteExecutionConfig::DispatchList(),
-                    stats,
-                    progress};
+    auto const apis = CreateTestApiBundle(hash_function, api);
+
+    ExecutionContext const exec_context{.repo_config = repo_config,
+                                        .apis = &apis,
+                                        .remote_context = &remote_context,
+                                        .statistics = stats,
+                                        .progress = progress};
+    Executor runner{&exec_context};
 
     // upload local artifacts
     for (auto const& id : {greet_hpp_id, greet_cpp_id, main_cpp_id}) {
@@ -298,18 +337,19 @@ static inline void RunGreeterCompilation(
     gsl::not_null<Statistics*> const& stats,
     gsl::not_null<Progress*> const& progress,
     ApiFactory const& factory,
+    gsl::not_null<Auth const*> const& auth,
     bool is_hermetic = true) {
     SetupConfig(repo_config);
     // expecting 1 action queued, 0 results from cache
     // NOLINTNEXTLINE
     RunHelloWorldCompilation(
-        repo_config, stats, progress, factory, is_hermetic, 1, 0);
+        repo_config, stats, progress, factory, auth, is_hermetic, 1, 0);
 
     SECTION("Running same compilation again") {
         // expecting 2 actions queued, 1 result from cache
         // NOLINTNEXTLINE
         RunHelloWorldCompilation(
-            repo_config, stats, progress, factory, is_hermetic, 2, 1);
+            repo_config, stats, progress, factory, auth, is_hermetic, 2, 1);
     }
 }
 
@@ -318,12 +358,20 @@ static inline void RunGreeterCompilation(
     gsl::not_null<Statistics*> const& stats,
     gsl::not_null<Progress*> const& progress,
     ApiFactory const& factory,
+    gsl::not_null<Auth const*> const& auth,
     bool is_hermetic = true) {
     SetupConfig(repo_config);
     // expecting 3 action queued, 0 results from cache
     // NOLINTNEXTLINE
-    RunGreeterCompilation(
-        repo_config, stats, progress, factory, "greet.cpp", is_hermetic, 3, 0);
+    RunGreeterCompilation(repo_config,
+                          stats,
+                          progress,
+                          factory,
+                          auth,
+                          "greet.cpp",
+                          is_hermetic,
+                          3,
+                          0);
 
     SECTION("Running same compilation again") {
         // expecting 6 actions queued, 3 results from cache
@@ -331,6 +379,7 @@ static inline void RunGreeterCompilation(
                               stats,
                               progress,
                               factory,
+                              auth,
                               "greet.cpp",
                               is_hermetic,
                               6,  // NOLINT
@@ -343,6 +392,7 @@ static inline void RunGreeterCompilation(
                               stats,
                               progress,
                               factory,
+                              auth,
                               "greet_mod.cpp",
                               is_hermetic,
                               6,  // NOLINT
@@ -355,6 +405,7 @@ static inline void TestUploadAndDownloadTrees(
     gsl::not_null<Statistics*> const& stats,
     gsl::not_null<Progress*> const& progress,
     ApiFactory const& factory,
+    gsl::not_null<Auth const*> const& auth,
     bool /*is_hermetic*/ = true,
     int /*expected_queued*/ = 0,
     int /*expected_cached*/ = 0) {
@@ -369,38 +420,54 @@ static inline void TestUploadAndDownloadTrees(
         env.emplace("PATH", "/bin:/usr/bin");
     }
 
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
     auto foo = std::string{"foo"};
     auto bar = std::string{"bar"};
     auto foo_digest =
-        ArtifactDigest{HashFunction::ComputeBlobHash(foo).HexString(),
+        ArtifactDigest{hash_function.HashBlobData(foo).HexString(),
                        foo.size(),
                        /*is_tree=*/false};
     auto bar_digest =
-        ArtifactDigest{HashFunction::ComputeBlobHash(bar).HexString(),
+        ArtifactDigest{hash_function.HashBlobData(bar).HexString(),
                        bar.size(),
                        /*is_tree=*/false};
 
     // upload blobs
     auto api = factory();
-    REQUIRE(api->Upload(
-        BlobContainer{{BazelBlob{foo_digest, foo, /*is_exec=*/false},
-                       BazelBlob{bar_digest, bar, /*is_exec=*/false}}}));
+    REQUIRE(api->Upload(ArtifactBlobContainer{
+        {ArtifactBlob{foo_digest, foo, /*is_exec=*/false},
+         ArtifactBlob{bar_digest, bar, /*is_exec=*/false}}}));
 
     // define known artifacts
-    auto foo_desc = ArtifactDescription{foo_digest, ObjectType::File};
-    auto bar_desc = ArtifactDescription{bar_digest, ObjectType::Symlink};
+    auto foo_desc =
+        ArtifactDescription::CreateKnown(foo_digest, ObjectType::File);
+    auto bar_desc =
+        ArtifactDescription::CreateKnown(bar_digest, ObjectType::Symlink);
 
     DependencyGraph g{};
     auto foo_id = g.AddArtifact(foo_desc);
     auto bar_id = g.AddArtifact(bar_desc);
 
-    Executor runner{repo_config,
-                    api.get(),
-                    api.get(),
-                    RemoteExecutionConfig::PlatformProperties(),
-                    RemoteExecutionConfig::DispatchList(),
-                    stats,
-                    progress};
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    RetryConfig retry_config{};  // default retry config
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &*remote_config};
+
+    auto const apis = CreateTestApiBundle(hash_function, api);
+
+    ExecutionContext const exec_context{.repo_config = repo_config,
+                                        .apis = &apis,
+                                        .remote_context = &remote_context,
+                                        .statistics = stats,
+                                        .progress = progress};
+    Executor runner{&exec_context};
+
     REQUIRE(runner.Process(g.ArtifactNodeWithId(foo_id)));
     REQUIRE(runner.Process(g.ArtifactNodeWithId(bar_id)));
 
@@ -507,11 +574,16 @@ static inline void TestRetrieveOutputDirectories(
     gsl::not_null<Statistics*> const& stats,
     gsl::not_null<Progress*> const& progress,
     ApiFactory const& factory,
+    gsl::not_null<Auth const*> const& auth,
     bool /*is_hermetic*/ = true,
     int /*expected_queued*/ = 0,
     int /*expected_cached*/ = 0) {
     SetupConfig(repo_config);
     auto tmpdir = GetTestDir();
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
 
     auto const make_tree_id = std::string{"make_tree"};
     auto const* make_tree_cmd =
@@ -541,9 +613,18 @@ static inline void TestRetrieveOutputDirectories(
             {}};
     };
 
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    RetryConfig retry_config{};  // default retry config
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &*remote_config};
+
     SECTION("entire action output as directory") {
         auto const make_tree_desc = create_action({}, {""});
-        auto const root_desc = ArtifactDescription{make_tree_id, ""};
+        auto const root_desc =
+            ArtifactDescription::CreateAction(make_tree_id, "");
 
         DependencyGraph g{};
         REQUIRE(g.AddAction(make_tree_desc));
@@ -555,13 +636,14 @@ static inline void TestRetrieveOutputDirectories(
 
         // run action
         auto api = factory();
-        Executor runner{repo_config,
-                        api.get(),
-                        api.get(),
-                        RemoteExecutionConfig::PlatformProperties(),
-                        RemoteExecutionConfig::DispatchList(),
-                        stats,
-                        progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+
+        ExecutionContext const exec_context{.repo_config = repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = stats,
+                                            .progress = progress};
+        Executor runner{&exec_context};
         REQUIRE(runner.Process(action));
 
         // read output
@@ -587,9 +669,12 @@ static inline void TestRetrieveOutputDirectories(
 
     SECTION("disjoint files and directories") {
         auto const make_tree_desc = create_action({"foo", "bar"}, {"baz"});
-        auto const foo_desc = ArtifactDescription{make_tree_id, "foo"};
-        auto const bar_desc = ArtifactDescription{make_tree_id, "bar"};
-        auto const baz_desc = ArtifactDescription{make_tree_id, "baz"};
+        auto const foo_desc =
+            ArtifactDescription::CreateAction(make_tree_id, "foo");
+        auto const bar_desc =
+            ArtifactDescription::CreateAction(make_tree_id, "bar");
+        auto const baz_desc =
+            ArtifactDescription::CreateAction(make_tree_id, "baz");
 
         DependencyGraph g{};
         REQUIRE(g.AddAction(make_tree_desc));
@@ -605,13 +690,14 @@ static inline void TestRetrieveOutputDirectories(
 
         // run action
         auto api = factory();
-        Executor runner{repo_config,
-                        api.get(),
-                        api.get(),
-                        RemoteExecutionConfig::PlatformProperties(),
-                        RemoteExecutionConfig::DispatchList(),
-                        stats,
-                        progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+
+        ExecutionContext const exec_context{.repo_config = repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = stats,
+                                            .progress = progress};
+        Executor runner{&exec_context};
         REQUIRE(runner.Process(action));
 
         // read output
@@ -650,10 +736,14 @@ static inline void TestRetrieveOutputDirectories(
     SECTION("nested files and directories") {
         auto const make_tree_desc =
             create_action({"foo", "baz/bar"}, {"", "baz/baz"});
-        auto const root_desc = ArtifactDescription{make_tree_id, ""};
-        auto const foo_desc = ArtifactDescription{make_tree_id, "foo"};
-        auto const bar_desc = ArtifactDescription{make_tree_id, "baz/bar"};
-        auto const baz_desc = ArtifactDescription{make_tree_id, "baz/baz"};
+        auto const root_desc =
+            ArtifactDescription::CreateAction(make_tree_id, "");
+        auto const foo_desc =
+            ArtifactDescription::CreateAction(make_tree_id, "foo");
+        auto const bar_desc =
+            ArtifactDescription::CreateAction(make_tree_id, "baz/bar");
+        auto const baz_desc =
+            ArtifactDescription::CreateAction(make_tree_id, "baz/baz");
 
         DependencyGraph g{};
         REQUIRE(g.AddAction(make_tree_desc));
@@ -671,13 +761,14 @@ static inline void TestRetrieveOutputDirectories(
 
         // run action
         auto api = factory();
-        Executor runner{repo_config,
-                        api.get(),
-                        api.get(),
-                        RemoteExecutionConfig::PlatformProperties(),
-                        RemoteExecutionConfig::DispatchList(),
-                        stats,
-                        progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+
+        ExecutionContext const exec_context{.repo_config = repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = stats,
+                                            .progress = progress};
+        Executor runner{&exec_context};
         REQUIRE(runner.Process(action));
 
         // read output
@@ -730,7 +821,8 @@ static inline void TestRetrieveOutputDirectories(
     SECTION("non-existing outputs") {
         SECTION("non-existing file") {
             auto const make_tree_desc = create_action({"fool"}, {});
-            auto const fool_desc = ArtifactDescription{make_tree_id, "fool"};
+            auto const fool_desc =
+                ArtifactDescription::CreateAction(make_tree_id, "fool");
 
             DependencyGraph g{};
             REQUIRE(g.AddAction(make_tree_desc));
@@ -742,19 +834,22 @@ static inline void TestRetrieveOutputDirectories(
 
             // run action
             auto api = factory();
-            Executor runner{repo_config,
-                            api.get(),
-                            api.get(),
-                            RemoteExecutionConfig::PlatformProperties(),
-                            RemoteExecutionConfig::DispatchList(),
-                            stats,
-                            progress};
+            auto const apis = CreateTestApiBundle(hash_function, api);
+
+            ExecutionContext const exec_context{
+                .repo_config = repo_config,
+                .apis = &apis,
+                .remote_context = &remote_context,
+                .statistics = stats,
+                .progress = progress};
+            Executor runner{&exec_context};
             CHECK_FALSE(runner.Process(action));
         }
 
         SECTION("non-existing directory") {
             auto const make_tree_desc = create_action({"bazel"}, {});
-            auto const bazel_desc = ArtifactDescription{make_tree_id, "bazel"};
+            auto const bazel_desc =
+                ArtifactDescription::CreateAction(make_tree_id, "bazel");
 
             DependencyGraph g{};
             REQUIRE(g.AddAction(make_tree_desc));
@@ -766,13 +861,15 @@ static inline void TestRetrieveOutputDirectories(
 
             // run action
             auto api = factory();
-            Executor runner{repo_config,
-                            api.get(),
-                            api.get(),
-                            RemoteExecutionConfig::PlatformProperties(),
-                            RemoteExecutionConfig::DispatchList(),
-                            stats,
-                            progress};
+            auto const apis = CreateTestApiBundle(hash_function, api);
+
+            ExecutionContext const exec_context{
+                .repo_config = repo_config,
+                .apis = &apis,
+                .remote_context = &remote_context,
+                .statistics = stats,
+                .progress = progress};
+            Executor runner{&exec_context};
             CHECK_FALSE(runner.Process(action));
         }
     }

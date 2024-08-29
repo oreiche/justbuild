@@ -12,28 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/common/action_description.hpp"
+
 #include <filesystem>
 
 #include "catch2/catch_test_macros.hpp"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/common/action.hpp"
-#include "src/buildtool/common/action_description.hpp"
-#include "src/buildtool/common/artifact_factory.hpp"
+#include "src/buildtool/common/artifact_description.hpp"
 
 TEST_CASE("From JSON", "[action_description]") {
     using path = std::filesystem::path;
-    auto desc =
-        ActionDescription{{"output0", "output1"},
-                          {"dir0", "dir1"},
-                          Action{"id", {"command", "line"}, {{"env", "vars"}}},
-                          {{"path0", ArtifactDescription{path{"input0"}}},
-                           {"path1", ArtifactDescription{path{"input1"}}}}};
+    auto desc = ActionDescription{
+        {"output0", "output1"},
+        {"dir0", "dir1"},
+        Action{"id", {"command", "line"}, {{"env", "vars"}}},
+        {{"path0", ArtifactDescription::CreateTree(path{"input0"})},
+         {"path1", ArtifactDescription::CreateTree(path{"input1"})}}};
     auto const& action = desc.GraphAction();
-    auto json = ArtifactFactory::DescribeAction(desc.OutputFiles(),
-                                                desc.OutputDirs(),
-                                                action.Command(),
-                                                desc.Inputs(),
-                                                action.Env());
+    auto json =
+        ActionDescription{desc.OutputFiles(),
+                          desc.OutputDirs(),
+                          Action{"unused", action.Command(), action.Env()},
+                          desc.Inputs()}
+            .ToJson();
 
     SECTION("Parse full action") {
         auto description = ActionDescription::FromJson("id", json);

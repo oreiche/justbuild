@@ -26,6 +26,7 @@ BazelAction::BazelAction(
     std::shared_ptr<BazelNetwork> network,
     bazel_re::Digest root_digest,
     std::vector<std::string> command,
+    std::string cwd,
     std::vector<std::string> output_files,
     std::vector<std::string> output_dirs,
     std::map<std::string, std::string> const& env_vars,
@@ -33,6 +34,7 @@ BazelAction::BazelAction(
     : network_{std::move(network)},
       root_digest_{std::move(root_digest)},
       cmdline_{std::move(command)},
+      cwd_{std::move(cwd)},
       output_files_{std::move(output_files)},
       output_dirs_{std::move(output_dirs)},
       env_vars_{BazelMsgFactory::CreateMessageVectorFromMap<
@@ -45,9 +47,17 @@ BazelAction::BazelAction(
 
 auto BazelAction::Execute(Logger const* logger) noexcept
     -> IExecutionResponse::Ptr {
-    BlobContainer blobs{};
+    BazelBlobContainer blobs{};
     auto do_cache = CacheEnabled(cache_flag_);
     auto action = CreateBundlesForAction(&blobs, root_digest_, not do_cache);
+    if (not action) {
+        if (logger != nullptr) {
+            logger->Emit(LogLevel::Error,
+                         "failed to create an action digest for {}",
+                         root_digest_.hash());
+        }
+        return nullptr;
+    }
 
     if (logger != nullptr) {
         logger->Emit(LogLevel::Trace,
@@ -55,56 +65,74 @@ auto BazelAction::Execute(Logger const* logger) noexcept
                      " - exec_dir digest: {}\n"
                      " - action digest: {}",
                      root_digest_.hash(),
-                     action.hash());
+                     action->hash());
     }
 
     if (do_cache) {
         if (auto result =
-                network_->GetCachedActionResult(action, output_files_)) {
+                network_->GetCachedActionResult(*action, output_files_)) {
             if (result->exit_code() == 0 and
                 ActionResultContainsExpectedOutputs(
                     *result, output_files_, output_dirs_)
 
             ) {
                 return IExecutionResponse::Ptr{new BazelResponse{
-                    action.hash(), network_, {*result, true}}};
+                    action->hash(), network_, {*result, true}}};
             }
         }
     }
 
-    if (ExecutionEnabled(cache_flag_) and network_->UploadBlobs(blobs)) {
-        if (auto output = network_->ExecuteBazelActionSync(action)) {
+    if (ExecutionEnabled(cache_flag_) and
+        network_->UploadBlobs(std::move(blobs))) {
+        if (auto output = network_->ExecuteBazelActionSync(*action)) {
             if (cache_flag_ == CacheFlag::PretendCached) {
                 // ensure the same id is created as if caching were enabled
-                auto action_id =
-                    CreateBundlesForAction(nullptr, root_digest_, false).hash();
+                auto action_cached =
+                    CreateBundlesForAction(nullptr, root_digest_, false);
+                if (not action_cached) {
+                    if (logger != nullptr) {
+                        logger->Emit(
+                            LogLevel::Error,
+                            "failed to create a cached action digest for {}",
+                            root_digest_.hash());
+                    }
+                    return nullptr;
+                }
+
                 output->cached_result = true;
                 return IExecutionResponse::Ptr{new BazelResponse{
-                    std::move(action_id), network_, std::move(*output)}};
+                    action_cached->hash(), network_, std::move(*output)}};
             }
-            return IExecutionResponse::Ptr{
-                new BazelResponse{action.hash(), network_, std::move(*output)}};
+            return IExecutionResponse::Ptr{new BazelResponse{
+                action->hash(), network_, std::move(*output)}};
         }
     }
 
     return nullptr;
 }
 
-auto BazelAction::CreateBundlesForAction(BlobContainer* blobs,
+auto BazelAction::CreateBundlesForAction(BazelBlobContainer* blobs,
                                          bazel_re::Digest const& exec_dir,
                                          bool do_not_cache) const noexcept
-    -> bazel_re::Digest {
-    return BazelMsgFactory::CreateActionDigestFromCommandLine(
-        cmdline_,
-        exec_dir,
-        output_files_,
-        output_dirs_,
-        env_vars_,
-        properties_,
-        do_not_cache,
-        timeout_,
-        blobs == nullptr ? std::nullopt
-                         : std::make_optional([&blobs](BazelBlob&& blob) {
-                               blobs->Emplace(std::move(blob));
-                           }));
+    -> std::optional<bazel_re::Digest> {
+    using StoreFunc = BazelMsgFactory::ActionDigestRequest::BlobStoreFunc;
+    std::optional<StoreFunc> store_blob = std::nullopt;
+    if (blobs != nullptr) {
+        store_blob = [&blobs](BazelBlob&& blob) {
+            blobs->Emplace(std::move(blob));
+        };
+    }
+    BazelMsgFactory::ActionDigestRequest request{
+        .command_line = &cmdline_,
+        .cwd = &cwd_,
+        .output_files = &output_files_,
+        .output_dirs = &output_dirs_,
+        .env_vars = &env_vars_,
+        .properties = &properties_,
+        .exec_dir = &exec_dir,
+        .hash_function = network_->GetHashFunction(),
+        .timeout = timeout_,
+        .skip_action_cache = do_not_cache,
+        .store_blob = std::move(store_blob)};
+    return BazelMsgFactory::CreateActionDigestFromCommandLine(request);
 }

@@ -21,8 +21,11 @@
 #include <vector>
 
 #include "build/bazel/remote/execution/v2/remote_execution.grpc.pb.h"
+#include "gsl/gsl"
+#include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/common/remote/port.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -31,7 +34,11 @@
 /// https://github.com/bazelbuild/remote-apis/blob/e1fe21be4c9ae76269a5a63215bb3c72ed9ab3f0/build/bazel/remote/execution/v2/remote_execution.proto#L144
 class BazelAcClient {
   public:
-    BazelAcClient(std::string const& server, Port port) noexcept;
+    explicit BazelAcClient(
+        std::string const& server,
+        Port port,
+        gsl::not_null<Auth const*> const& auth,
+        gsl::not_null<RetryConfig const*> const& retry_config) noexcept;
 
     [[nodiscard]] auto GetActionResult(
         std::string const& instance_name,
@@ -42,6 +49,7 @@ class BazelAcClient {
         -> std::optional<bazel_re::ActionResult>;
 
   private:
+    RetryConfig const& retry_config_;
     std::unique_ptr<bazel_re::ActionCache::Stub> stub_;
     Logger logger_{"RemoteAcClient"};
 };

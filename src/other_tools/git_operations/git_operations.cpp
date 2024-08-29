@@ -25,6 +25,19 @@
 auto CriticalGitOps::GitInitialCommit(GitOpParams const& crit_op_params,
                                       AsyncMapConsumerLoggerPtr const& logger)
     -> GitOpValue {
+#ifndef NDEBUG
+    // Check required fields have been set
+    if (not crit_op_params.message) {
+        (*logger)("missing message for operation creating commit",
+                  true /*fatal*/);
+        return {.git_cas = nullptr, .result = std::nullopt};
+    }
+    if (not crit_op_params.source_path) {
+        (*logger)("missing source_path for operation creating commit",
+                  true /*fatal*/);
+        return {.git_cas = nullptr, .result = std::nullopt};
+    }
+#endif
     // Create and open a GitRepoRemote at given target location
     auto git_repo = GitRepoRemote::InitAndOpen(crit_op_params.target_path,
                                                /*is_bare=*/false);
@@ -41,9 +54,11 @@ auto CriticalGitOps::GitInitialCommit(GitOpParams const& crit_op_params,
                 fmt::format("While doing initial commit Git op:\n{}", msg),
                 fatal);
         });
-    // Stage and commit all at the target location
-    auto commit_hash = git_repo->StageAndCommitAllAnonymous(
-        crit_op_params.message.value(), wrapped_logger);
+    // Commit all at the target directory
+    auto commit_hash =
+        git_repo->CommitDirectory(crit_op_params.source_path.value(),
+                                  crit_op_params.message.value(),
+                                  wrapped_logger);
     if (commit_hash == std::nullopt) {
         return {.git_cas = nullptr, .result = std::nullopt};
     }
@@ -80,6 +95,14 @@ auto CriticalGitOps::GitEnsureInit(GitOpParams const& crit_op_params,
 auto CriticalGitOps::GitKeepTag(GitOpParams const& crit_op_params,
                                 AsyncMapConsumerLoggerPtr const& logger)
     -> GitOpValue {
+#ifndef NDEBUG
+    // Check required fields have been set
+    if (not crit_op_params.message) {
+        (*logger)("missing message for operation tagging a commit",
+                  true /*fatal*/);
+        return {.git_cas = nullptr, .result = std::nullopt};
+    }
+#endif
     // Make sure folder we want to access exists
     if (not FileSystemManager::Exists(crit_op_params.target_path)) {
         (*logger)(fmt::format("target directory {} does not exist!",
@@ -102,13 +125,14 @@ auto CriticalGitOps::GitKeepTag(GitOpParams const& crit_op_params,
                       fatal);
         });
     // Create tag of given commit
-    if (not git_repo->KeepTag(crit_op_params.git_hash,
-                              crit_op_params.message.value(),
-                              wrapped_logger)) {
+    auto tag_result = git_repo->KeepTag(crit_op_params.git_hash,
+                                        crit_op_params.message.value(),
+                                        wrapped_logger);
+    if (not tag_result) {
         return {.git_cas = nullptr, .result = std::nullopt};
     }
     // success
-    return {.git_cas = git_repo->GetGitCAS(), .result = ""};
+    return {.git_cas = git_repo->GetGitCAS(), .result = *tag_result};
 }
 
 auto CriticalGitOps::GitGetHeadId(GitOpParams const& crit_op_params,
@@ -147,6 +171,14 @@ auto CriticalGitOps::GitGetHeadId(GitOpParams const& crit_op_params,
 auto CriticalGitOps::GitKeepTree(GitOpParams const& crit_op_params,
                                  AsyncMapConsumerLoggerPtr const& logger)
     -> GitOpValue {
+#ifndef NDEBUG
+    // Check required fields have been set
+    if (not crit_op_params.message) {
+        (*logger)("missing message for operation keeping a tree comitted",
+                  true /*fatal*/);
+        return {.git_cas = nullptr, .result = std::nullopt};
+    }
+#endif
     // Make sure folder we want to access exists
     if (not FileSystemManager::Exists(crit_op_params.target_path)) {
         (*logger)(fmt::format("target directory {} does not exist!",
@@ -169,11 +201,12 @@ auto CriticalGitOps::GitKeepTree(GitOpParams const& crit_op_params,
                       fatal);
         });
     // Create tag for given tree
-    if (not git_repo->KeepTree(crit_op_params.git_hash,
-                               crit_op_params.message.value(),
-                               wrapped_logger)) {
+    auto tag_result = git_repo->KeepTree(crit_op_params.git_hash,
+                                         crit_op_params.message.value(),
+                                         wrapped_logger);
+    if (not tag_result) {
         return {.git_cas = nullptr, .result = std::nullopt};
     }
     // success
-    return {.git_cas = git_repo->GetGitCAS(), .result = ""};
+    return {.git_cas = git_repo->GetGitCAS(), .result = *tag_result};
 }

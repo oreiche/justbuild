@@ -17,133 +17,27 @@
 #include <algorithm>
 #include <cstddef>
 
-#include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/execution_api/common/message_limits.hpp"
-#include "src/buildtool/execution_api/remote/bazel/bazel_response.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
-namespace {
-
-[[nodiscard]] auto ReadDirectory(
-    gsl::not_null<BazelNetwork const*> const& network,
-    bazel_re::Digest const& digest) noexcept
-    -> std::optional<bazel_re::Directory> {
-    auto blobs = network->ReadBlobs({digest}).Next();
-    if (blobs.size() == 1) {
-        return BazelMsgFactory::MessageFromString<bazel_re::Directory>(
-            blobs.at(0).data);
-    }
-    Logger::Log(LogLevel::Debug,
-                "Directory {} not found in CAS",
-                NativeSupport::Unprefix(digest.hash()));
-    return std::nullopt;
-}
-
-[[nodiscard]] auto ReadGitTree(
-    gsl::not_null<BazelNetwork const*> const& network,
-    bazel_re::Digest const& digest) noexcept
-    -> std::optional<GitRepo::tree_entries_t> {
-    auto blobs = network->ReadBlobs({digest}).Next();
-    if (blobs.size() == 1) {
-        auto const& content = blobs.at(0).data;
-        auto check_symlinks =
-            [&network](std::vector<bazel_re::Digest> const& ids) {
-                auto size = ids.size();
-                auto reader = network->ReadBlobs(ids);
-                auto blobs = reader.Next();
-                std::size_t count{};
-                while (not blobs.empty()) {
-                    if (count + blobs.size() > size) {
-                        Logger::Log(LogLevel::Debug,
-                                    "received more blobs than requested.");
-                        return false;
-                    }
-                    for (auto const& blob : blobs) {
-                        if (not PathIsNonUpwards(blob.data)) {
-                            return false;
-                        }
-                    }
-                    count += blobs.size();
-                    blobs = reader.Next();
-                }
-                return true;
-            };
-        return GitRepo::ReadTreeData(
-            content,
-            HashFunction::ComputeTreeHash(content).Bytes(),
-            check_symlinks,
-            /*is_hex_id=*/false);
-    }
-    Logger::Log(LogLevel::Debug,
-                "Tree {} not found in CAS",
-                NativeSupport::Unprefix(digest.hash()));
-    return std::nullopt;
-}
-
-[[nodiscard]] auto TreeToStream(
-    gsl::not_null<BazelNetwork const*> const& network,
-    bazel_re::Digest const& tree_digest,
-    gsl::not_null<FILE*> const& stream,
-    bool raw_tree) noexcept -> bool {
-    if (raw_tree) {
-        auto blobs = network->ReadBlobs({tree_digest}).Next();
-        if (blobs.size() != 1) {
-            Logger::Log(LogLevel::Debug,
-                        "Object {} not found in CAS",
-                        NativeSupport::Unprefix(tree_digest.hash()));
-            return false;
-        }
-        auto const& str = blobs.at(0).data;
-        std::fwrite(str.data(), 1, str.size(), stream);
-        return true;
-    }
-    if (Compatibility::IsCompatible()) {
-        if (auto dir = ReadDirectory(network, tree_digest)) {
-            if (auto data = BazelMsgFactory::DirectoryToString(*dir)) {
-                auto const& str = *data;
-                std::fwrite(str.data(), 1, str.size(), stream);
-                return true;
-            }
-        }
-    }
-    else {
-        if (auto entries = ReadGitTree(network, tree_digest)) {
-            if (auto data = BazelMsgFactory::GitTreeToString(*entries)) {
-                auto const& str = *data;
-                std::fwrite(str.data(), 1, str.size(), stream);
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-[[nodiscard]] auto BlobToStream(
-    gsl::not_null<BazelNetwork const*> const& network,
-    bazel_re::Digest const& blob_digest,
-    gsl::not_null<FILE*> const& stream) noexcept -> bool {
-    auto reader = network->IncrementalReadSingleBlob(blob_digest);
-    auto data = reader.Next();
-    while (data and not data->empty()) {
-        auto const& str = *data;
-        std::fwrite(str.data(), 1, str.size(), stream);
-        data = reader.Next();
-    }
-    return data.has_value();
-}
-
-}  // namespace
-
-BazelNetwork::BazelNetwork(std::string instance_name,
-                           std::string const& host,
-                           Port port,
-                           ExecutionConfiguration const& exec_config) noexcept
+BazelNetwork::BazelNetwork(
+    std::string instance_name,
+    std::string const& host,
+    Port port,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RetryConfig const*> const& retry_config,
+    ExecutionConfiguration const& exec_config,
+    HashFunction hash_function) noexcept
     : instance_name_{std::move(instance_name)},
+      cas_{std::make_unique<BazelCasClient>(host, port, auth, retry_config)},
+      ac_{std::make_unique<BazelAcClient>(host, port, auth, retry_config)},
+      exec_{std::make_unique<BazelExecutionClient>(host,
+                                                   port,
+                                                   auth,
+                                                   retry_config)},
       exec_config_{exec_config},
-      cas_{std::make_unique<BazelCasClient>(host, port)},
-      ac_{std::make_unique<BazelAcClient>(host, port)},
-      exec_{std::make_unique<BazelExecutionClient>(host, port)} {}
+      hash_function_{hash_function} {}
 
 auto BazelNetwork::IsAvailable(bazel_re::Digest const& digest) const noexcept
     -> bool {
@@ -188,17 +82,23 @@ auto BazelNetwork::DoUploadBlobs(T_Iter const& first,
         //
         // The blobs belonging to the second group are uploaded via the
         // bytestream api.
-        std::vector<typename T_Iter::value_type> sorted(first, last);
+        std::vector<gsl::not_null<BazelBlob const*>> sorted;
+        sorted.reserve(std::distance(first, last));
+        std::transform(
+            first, last, std::back_inserter(sorted), [](BazelBlob const& b) {
+                return &b;
+            });
+
         auto it = std::stable_partition(
-            sorted.begin(), sorted.end(), [](auto const& x) {
-                return x.data.size() <= kMaxBatchTransferSize;
+            sorted.begin(), sorted.end(), [](BazelBlob const* x) {
+                return x->data->size() <= kMaxBatchTransferSize;
             });
         auto digests_count =
             cas_->BatchUpdateBlobs(instance_name_, sorted.begin(), it);
 
         return digests_count == std::distance(sorted.begin(), it) &&
-               std::all_of(it, sorted.end(), [this](auto const& x) {
-                   return cas_->UpdateSingleBlob(instance_name_, x);
+               std::all_of(it, sorted.end(), [this](BazelBlob const* x) {
+                   return cas_->UpdateSingleBlob(instance_name_, *x);
                });
     } catch (...) {
         Logger::Log(LogLevel::Warning, "Unknown exception");
@@ -206,15 +106,15 @@ auto BazelNetwork::DoUploadBlobs(T_Iter const& first,
     }
 }
 
-auto BazelNetwork::UploadBlobs(BlobContainer const& blobs,
+auto BazelNetwork::UploadBlobs(BazelBlobContainer&& blobs,
                                bool skip_find_missing) noexcept -> bool {
     if (skip_find_missing) {
-        return DoUploadBlobs(blobs.begin(), blobs.end());
+        auto blob_range = blobs.Blobs();
+        return DoUploadBlobs(blob_range.begin(), blob_range.end());
     }
 
     // find digests of blobs missing in CAS
-    auto missing_digests =
-        cas_->FindMissingBlobs(instance_name_, blobs.Digests());
+    auto missing_digests = cas_->FindMissingBlobs(instance_name_, blobs);
 
     if (not missing_digests.empty()) {
         // update missing blobs
@@ -242,55 +142,8 @@ auto BazelNetwork::ExecuteBazelActionSync(
     return response.output;
 }
 
-auto BazelNetwork::BlobReader::Next() noexcept -> std::vector<BazelBlob> {
-    std::size_t size{};
-    std::vector<BazelBlob> blobs{};
-
-    try {
-        while (current_ != ids_.end()) {
-            auto blob_size = gsl::narrow<std::size_t>(current_->size_bytes());
-            size += blob_size;
-            // read if size is 0 (unknown) or exceeds transfer size
-            if (blob_size == 0 or size > kMaxBatchTransferSize) {
-                // perform read of range [begin_, current_)
-                if (begin_ == current_) {
-                    auto blob = cas_->ReadSingleBlob(instance_name_, *begin_);
-                    if (blob) {
-                        blobs.emplace_back(std::move(*blob));
-                    }
-                    ++current_;
-                }
-                else {
-                    blobs =
-                        cas_->BatchReadBlobs(instance_name_, begin_, current_);
-                }
-                begin_ = current_;
-                break;
-            }
-            ++current_;
-        }
-
-        if (begin_ != current_) {
-            blobs = cas_->BatchReadBlobs(instance_name_, begin_, current_);
-            begin_ = current_;
-        }
-    } catch (std::exception const& e) {
-        Logger::Log(
-            LogLevel::Warning, "Reading blobs failed with: {}", e.what());
-        Ensures(false);
-    }
-
-    return blobs;
-}
-
-auto BazelNetwork::ReadBlobs(std::vector<bazel_re::Digest> ids) const noexcept
-    -> BlobReader {
-    return BlobReader{instance_name_, cas_.get(), std::move(ids)};
-}
-
-auto BazelNetwork::IncrementalReadSingleBlob(bazel_re::Digest const& id)
-    const noexcept -> ByteStreamClient::IncrementalReader {
-    return cas_->IncrementalReadSingleBlob(instance_name_, id);
+auto BazelNetwork::CreateReader() const noexcept -> BazelNetworkReader {
+    return BazelNetworkReader{instance_name_, cas_.get(), hash_function_};
 }
 
 auto BazelNetwork::GetCachedActionResult(
@@ -299,149 +152,4 @@ auto BazelNetwork::GetCachedActionResult(
     -> std::optional<bazel_re::ActionResult> {
     return ac_->GetActionResult(
         instance_name_, action, false, false, output_files);
-}
-
-auto BazelNetwork::RecursivelyReadTreeLeafs(
-    bazel_re::Digest const& tree_digest,
-    std::filesystem::path const& parent,
-    bool request_remote_tree) const noexcept
-    -> std::optional<std::pair<std::vector<std::filesystem::path>,
-                               std::vector<Artifact::ObjectInfo>>> {
-    std::optional<DirectoryMap> dir_map{std::nullopt};
-    if (Compatibility::IsCompatible() and request_remote_tree) {
-        // Query full tree from remote CAS. Note that this is currently not
-        // supported by Buildbarn revision c3c06bbe2a.
-        auto dirs =
-            cas_->GetTree(instance_name_, tree_digest, kMaxBatchTransferSize);
-
-        // Convert to Directory map
-        dir_map = DirectoryMap{};
-        dir_map->reserve(dirs.size());
-        for (auto& dir : dirs) {
-            try {
-                dir_map->emplace(ArtifactDigest::Create<ObjectType::File>(
-                                     dir.SerializeAsString()),
-                                 std::move(dir));
-            } catch (...) {
-                return std::nullopt;
-            }
-        }
-    }
-
-    std::vector<std::filesystem::path> paths{};
-    std::vector<Artifact::ObjectInfo> infos{};
-
-    auto store_info = [&paths, &infos](auto path, auto info) {
-        paths.emplace_back(path);
-        infos.emplace_back(info);
-        return true;
-    };
-
-    if (ReadObjectInfosRecursively(dir_map, store_info, parent, tree_digest)) {
-        return std::make_pair(std::move(paths), std::move(infos));
-    }
-
-    return std::nullopt;
-}
-
-auto BazelNetwork::ReadDirectTreeEntries(
-    bazel_re::Digest const& tree_digest,
-    std::filesystem::path const& parent) const noexcept
-    -> std::optional<std::pair<std::vector<std::filesystem::path>,
-                               std::vector<Artifact::ObjectInfo>>> {
-    std::vector<std::filesystem::path> paths{};
-    std::vector<Artifact::ObjectInfo> infos{};
-
-    auto store_info = [&paths, &infos](auto path, auto info) {
-        paths.emplace_back(path);
-        infos.emplace_back(info);
-        return true;
-    };
-
-    if (Compatibility::IsCompatible()) {
-        // read from CAS
-        if (auto dir = ReadDirectory(this, tree_digest)) {
-            if (not BazelMsgFactory::ReadObjectInfosFromDirectory(
-                    *dir, [&store_info, &parent](auto path, auto info) {
-                        return store_info(parent / path, info);
-                    })) {
-                return std::nullopt;
-            }
-        }
-    }
-    else {
-        if (auto entries = ReadGitTree(this, tree_digest)) {
-            if (not BazelMsgFactory::ReadObjectInfosFromGitTree(
-                    *entries, [&store_info, &parent](auto path, auto info) {
-                        return store_info(parent / path, info);
-                    })) {
-                return std::nullopt;
-            }
-        }
-    }
-
-    return std::make_pair(std::move(paths), std::move(infos));
-}
-
-// NOLINTNEXTLINE(misc-no-recursion)
-auto BazelNetwork::ReadObjectInfosRecursively(
-    std::optional<DirectoryMap> const& dir_map,
-    BazelMsgFactory::InfoStoreFunc const& store_info,
-    std::filesystem::path const& parent,
-    bazel_re::Digest const& digest) const noexcept -> bool {
-    if (Compatibility::IsCompatible()) {
-        // read from in-memory Directory map
-        if (dir_map) {
-            if (dir_map->contains(digest)) {
-                return BazelMsgFactory::ReadObjectInfosFromDirectory(
-                    dir_map->at(digest),
-                    [this, &dir_map, &store_info, &parent](auto path,
-                                                           auto info) {
-                        return IsTreeObject(info.type)
-                                   ? ReadObjectInfosRecursively(dir_map,
-                                                                store_info,
-                                                                parent / path,
-                                                                info.digest)
-                                   : store_info(parent / path, info);
-                    });
-            }
-        }
-
-        // fallback read from CAS
-        if (auto dir = ReadDirectory(this, digest)) {
-            return BazelMsgFactory::ReadObjectInfosFromDirectory(
-                *dir,
-                [this, &dir_map, &store_info, &parent](auto path, auto info) {
-                    return IsTreeObject(info.type)
-                               ? ReadObjectInfosRecursively(dir_map,
-                                                            store_info,
-                                                            parent / path,
-                                                            info.digest)
-                               : store_info(parent / path, info);
-                });
-        }
-    }
-    else {
-        if (auto entries = ReadGitTree(this, digest)) {
-            return BazelMsgFactory::ReadObjectInfosFromGitTree(
-                *entries,
-                [this, &dir_map, &store_info, &parent](auto path, auto info) {
-                    return IsTreeObject(info.type)
-                               ? ReadObjectInfosRecursively(dir_map,
-                                                            store_info,
-                                                            parent / path,
-                                                            info.digest)
-                               : store_info(parent / path, info);
-                });
-        }
-    }
-    return false;
-}
-
-auto BazelNetwork::DumpToStream(Artifact::ObjectInfo const& info,
-                                gsl::not_null<FILE*> const& stream,
-                                bool raw_tree) const noexcept -> bool {
-    return IsTreeObject(info.type)
-               ? TreeToStream(this, info.digest, stream, raw_tree)
-               : BlobToStream(this, info.digest, stream);
 }

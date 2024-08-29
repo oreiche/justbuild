@@ -22,6 +22,8 @@
 #include "fmt/core.h"
 #include "src/buildtool/compatibility/native_support.hpp"
 #include "src/buildtool/execution_api/common/bytestream_common.hpp"
+#include "src/buildtool/execution_api/execution_service/cas_utils.hpp"
+#include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
@@ -48,21 +50,20 @@ auto BytestreamServiceImpl::Read(
     logger_.Emit(LogLevel::Trace, "Read {}", request->resource_name());
     // resource_name is of type
     // remote-execution/blobs/62f408d64bca5de775c4b1dbc3288fc03afd6b19eb/0
-    std::istringstream iss{request->resource_name()};
     auto hash = ParseResourceName(request->resource_name());
-    if (!hash) {
+    if (not hash) {
         auto str = fmt::format("could not parse {}", request->resource_name());
-        logger_.Emit(LogLevel::Error, str);
+        logger_.Emit(LogLevel::Error, "{}", str);
         return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, str};
     }
 
     if (auto error_msg = IsAHash(*hash); error_msg) {
-        logger_.Emit(LogLevel::Debug, *error_msg);
+        logger_.Emit(LogLevel::Debug, "{}", *error_msg);
         return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, *error_msg};
     }
 
-    auto lock = GarbageCollector::SharedLock();
-    if (!lock) {
+    auto lock = GarbageCollector::SharedLock(storage_config_);
+    if (not lock) {
         auto str = fmt::format("Could not acquire SharedLock");
         logger_.Emit(LogLevel::Error, str);
         return grpc::Status{grpc::StatusCode::INTERNAL, str};
@@ -72,32 +73,38 @@ auto BytestreamServiceImpl::Read(
 
     if (NativeSupport::IsTree(*hash)) {
         ArtifactDigest dgst{NativeSupport::Unprefix(*hash), 0, true};
-        path = storage_->CAS().TreePath(static_cast<bazel_re::Digest>(dgst));
+        path = storage_.CAS().TreePath(static_cast<bazel_re::Digest>(dgst));
     }
     else {
         ArtifactDigest dgst{NativeSupport::Unprefix(*hash), 0, false};
-        path = storage_->CAS().BlobPath(static_cast<bazel_re::Digest>(dgst),
-                                        false);
+        path =
+            storage_.CAS().BlobPath(static_cast<bazel_re::Digest>(dgst), false);
     }
-    if (!path) {
+    if (not path) {
         auto str = fmt::format("could not find {}", *hash);
-        logger_.Emit(LogLevel::Error, str);
+        logger_.Emit(LogLevel::Error, "{}", str);
         return ::grpc::Status{::grpc::StatusCode::NOT_FOUND, str};
     }
-    std::ifstream blob{*path};
+
+    std::ifstream stream{*path, std::ios::binary};
+    stream.seekg(request->read_offset(), std::ios::beg);
 
     ::google::bytestream::ReadResponse response;
-    std::string buffer(kChunkSize, '\0');
-    bool done = false;
-    blob.seekg(request->read_offset());
-    while (!done) {
-        blob.read(buffer.data(), kChunkSize);
-        if (blob.eof()) {
-            // do not send random bytes
-            buffer.resize(static_cast<std::size_t>(blob.gcount()));
-            done = true;
+    std::string& buffer = *response.mutable_data();
+    buffer.resize(kChunkSize);
+
+    while (not stream.eof()) {
+        stream.read(buffer.data(), kChunkSize);
+        if (stream.bad()) {
+            auto const str = fmt::format("Failed to read data for {}", *hash);
+            logger_.Emit(LogLevel::Error, str);
+            return grpc::Status{grpc::StatusCode::INTERNAL, str};
         }
-        *(response.mutable_data()) = buffer;
+
+        if (stream.eof()) {
+            // do not send random bytes
+            buffer.resize(static_cast<std::size_t>(stream.gcount()));
+        }
         writer->Write(response);
     }
     return ::grpc::Status::OK;
@@ -111,13 +118,13 @@ auto BytestreamServiceImpl::Write(
     reader->Read(&request);
     logger_.Emit(LogLevel::Debug, "write {}", request.resource_name());
     auto hash = ParseResourceName(request.resource_name());
-    if (!hash) {
+    if (not hash) {
         auto str = fmt::format("could not parse {}", request.resource_name());
-        logger_.Emit(LogLevel::Error, str);
+        logger_.Emit(LogLevel::Error, "{}", str);
         return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, str};
     }
     if (auto error_msg = IsAHash(*hash); error_msg) {
-        logger_.Emit(LogLevel::Debug, *error_msg);
+        logger_.Emit(LogLevel::Debug, "{}", *error_msg);
         return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, *error_msg};
     }
     logger_.Emit(LogLevel::Trace,
@@ -125,43 +132,82 @@ auto BytestreamServiceImpl::Write(
                  *hash,
                  request.write_offset(),
                  request.finish_write());
-    auto lock = GarbageCollector::SharedLock();
-    if (!lock) {
+    auto lock = GarbageCollector::SharedLock(storage_config_);
+    if (not lock) {
         auto str = fmt::format("Could not acquire SharedLock");
         logger_.Emit(LogLevel::Error, str);
         return grpc::Status{grpc::StatusCode::INTERNAL, str};
     }
-    auto tmp_dir = StorageConfig::CreateTypedTmpDir("execution-service");
-    if (!tmp_dir) {
+    auto tmp_dir = storage_config_.CreateTypedTmpDir("execution-service");
+    if (not tmp_dir) {
         return ::grpc::Status{::grpc::StatusCode::INTERNAL,
                               "could not create TmpDir"};
     }
+
     auto tmp = tmp_dir->GetPath() / *hash;
     {
-        std::ofstream of{tmp, std::ios::binary};
-        of.write(request.data().data(),
-                 static_cast<std::streamsize>(request.data().size()));
+        std::ofstream stream{tmp, std::ios::binary};
+        do {
+            if (not stream.good()) {
+                auto const str =
+                    fmt::format("Failed to write data for {}", *hash);
+                logger_.Emit(LogLevel::Error, "{}", str);
+                return ::grpc::Status{::grpc::StatusCode::INTERNAL, str};
+            }
+            stream.write(request.data().data(),
+                         static_cast<std::streamsize>(request.data().size()));
+        } while (not request.finish_write() and reader->Read(&request));
     }
-    while (!request.finish_write() && reader->Read(&request)) {
-        std::ofstream of{tmp, std::ios::binary | std::ios::app};
-        of.write(request.data().data(),
-                 static_cast<std::streamsize>(request.data().size()));
-    }
-    if (NativeSupport::IsTree(*hash)) {
-        if (not storage_->CAS().StoreTree</*kOwner=*/true>(tmp)) {
-            auto str = fmt::format("could not store tree {}", *hash);
-            logger_.Emit(LogLevel::Error, str);
-            return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, str};
+
+    // Before storing a tree, we have to verify that its parts are present
+    bool const is_tree = NativeSupport::IsTree(*hash);
+    if (is_tree) {
+        // ... unfortunately, this requires us to read the whole tree object
+        // into memory
+        auto content = FileSystemManager::ReadFile(tmp);
+        if (not content) {
+            auto const msg = fmt::format(
+                "Failed to read temporary file {} for {}", tmp.string(), *hash);
+            logger_.Emit(LogLevel::Error, "{}", msg);
+            return ::grpc::Status{::grpc::StatusCode::INTERNAL, msg};
         }
+
+        ArtifactDigest dgst{NativeSupport::Unprefix(*hash), 0, true};
+        if (auto err = CASUtils::EnsureTreeInvariant(
+                static_cast<bazel_re::Digest>(dgst), *content, storage_)) {
+            auto const str = fmt::format("Write: {}", *std::move(err));
+            logger_.Emit(LogLevel::Error, "{}", str);
+            return ::grpc::Status{grpc::StatusCode::FAILED_PRECONDITION, str};
+        }
+    }
+
+    // Store blob and verify hash
+    std::optional<bazel_re::Digest> stored;
+    if (is_tree) {
+        stored = storage_.CAS().StoreTree</*kOwner=*/true>(tmp);
     }
     else {
-        if (not storage_->CAS().StoreBlob</*kOwner=*/true>(
-                tmp, /*is_executable=*/false)) {
-            auto str = fmt::format("could not store blob {}", *hash);
-            logger_.Emit(LogLevel::Error, str);
-            return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, str};
-        }
+        stored = storage_.CAS().StoreBlob</*kOwner=*/true>(
+            tmp, /*is_executable=*/false);
     }
+
+    if (not stored) {
+        // This is a serious problem: we have a sequence of bytes, but cannot
+        // write them to CAS.
+        auto str = fmt::format("Failed to store object {}", *hash);
+        logger_.Emit(LogLevel::Error, "{}", str);
+        return ::grpc::Status{::grpc::StatusCode::INTERNAL, str};
+    }
+
+    if (stored->hash() != *hash) {
+        // User error: did not get a file with the announced hash
+        auto str = fmt::format("In upload for {} received object with hash {}",
+                               *hash,
+                               stored->hash());
+        logger_.Emit(LogLevel::Error, "{}", str);
+        return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, str};
+    }
+
     response->set_committed_size(
         static_cast<google::protobuf::int64>(std::filesystem::file_size(tmp)));
     return ::grpc::Status::OK;
@@ -173,6 +219,6 @@ auto BytestreamServiceImpl::QueryWriteStatus(
     ::google::bytestream::QueryWriteStatusResponse* /*response*/)
     -> ::grpc::Status {
     auto const* str = "QueryWriteStatus not implemented";
-    logger_.Emit(LogLevel::Error, str);
+    logger_.Emit(LogLevel::Error, "{}", str);
     return ::grpc::Status{grpc::StatusCode::UNIMPLEMENTED, str};
 }

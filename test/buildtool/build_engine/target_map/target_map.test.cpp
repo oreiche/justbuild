@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/build_engine/target_map/target_map.hpp"
+
 #include <filesystem>
 #include <string>
 #include <utility>  // std::move
 
 #include "catch2/catch_test_macros.hpp"
+#include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/build_engine/base_maps/directory_map.hpp"
 #include "src/buildtool/build_engine/base_maps/entity_name.hpp"
 #include "src/buildtool/build_engine/base_maps/expression_map.hpp"
@@ -24,14 +27,26 @@
 #include "src/buildtool/build_engine/base_maps/source_map.hpp"
 #include "src/buildtool/build_engine/base_maps/targets_file_map.hpp"
 #include "src/buildtool/build_engine/expression/expression.hpp"
-#include "src/buildtool/build_engine/target_map/target_map.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
+#include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
+#include "src/buildtool/execution_api/local/config.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
+#include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
+#include "src/buildtool/main/analyse_context.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
 #include "src/buildtool/progress_reporting/progress.hpp"
+#include "src/buildtool/serve_api/remote/config.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
-#include "test/utils/hermeticity/local.hpp"
+#include "test/utils/hermeticity/test_storage_config.hpp"
+#include "test/utils/serve_service/test_serve_config.hpp"
 
 namespace {
 
@@ -71,7 +86,10 @@ auto SetupConfig() -> RepositoryConfig {
 
 }  // namespace
 
-TEST_CASE_METHOD(HermeticLocalTestFixture, "simple targets", "[target_map]") {
+TEST_CASE("simple targets", "[target_map]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+
     auto repo_config = SetupConfig();
     auto directory_entries =
         BuildMaps::Base::CreateDirectoryEntriesMap(&repo_config);
@@ -89,26 +107,50 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "simple targets", "[target_map]") {
     BuildMaps::Target::ResultTargetMap result_map{0};
     Statistics stats{};
     Progress exports_progress{};
+
+    auto serve_config = TestServeConfig::ReadFromEnvironment();
+    REQUIRE(serve_config);
+
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
+    Auth auth{};
+    RetryConfig retry_config{};
+    RemoteExecutionConfig remote_exec_config{};
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = &auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &remote_exec_config};
+
+    auto const apis = ApiBundle::Create(&local_context,
+                                        &remote_context,
+                                        /*repo_config=*/nullptr);
+    auto serve =
+        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
+    AnalyseContext ctx{.repo_config = &repo_config,
+                       .storage = &storage,
+                       .statistics = &stats,
+                       .progress = &exports_progress,
+                       .serve = serve ? &*serve : nullptr};
+
     auto absent_target_variables_map =
-        BuildMaps::Target::CreateAbsentTargetVariablesMap(0);
-    auto absent_target_map =
-        BuildMaps::Target::CreateAbsentTargetMap(&result_map,
-                                                 &absent_target_variables_map,
-                                                 &repo_config,
-                                                 &stats,
-                                                 &exports_progress,
-                                                 0);
-    auto target_map =
-        BuildMaps::Target::CreateTargetMap(&source,
-                                           &targets_file_map,
-                                           &rule_map,
-                                           &directory_entries,
-                                           &absent_target_map,
-                                           &result_map,
-                                           &repo_config,
-                                           Storage::Instance().TargetCache(),
-                                           &stats,
-                                           &exports_progress);
+        BuildMaps::Target::CreateAbsentTargetVariablesMap(&ctx, 0);
+
+    auto absent_target_map = BuildMaps::Target::CreateAbsentTargetMap(
+        &ctx, &result_map, &absent_target_variables_map, 0);
+
+    auto target_map = BuildMaps::Target::CreateTargetMap(&ctx,
+                                                         &source,
+                                                         &targets_file_map,
+                                                         &rule_map,
+                                                         &directory_entries,
+                                                         &absent_target_map,
+                                                         &result_map);
 
     AnalysedTargetPtr result;
     bool error{false};
@@ -134,7 +176,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "simple targets", "[target_map]") {
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         auto artifacts = result->Artifacts();
         ExpressionPtr artifact = artifacts->Get("c/d/foo", none_t{});
@@ -160,7 +202,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "simple targets", "[target_map]") {
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         auto artifacts = result->Artifacts();
         ExpressionPtr artifact = artifacts->Get("c/d/link", none_t{});
@@ -362,6 +404,84 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "simple targets", "[target_map]") {
         CHECK(artifacts_desc["foo.txt"]["type"] == "KNOWN");
     }
 
+    SECTION("Rule stages symlink") {
+        {
+            error_msg = "NONE";
+            error = false;
+            result = nullptr;
+
+            TaskSystem ts;
+            target_map.ConsumeAfterKeysReady(
+                &ts,
+                {BuildMaps::Target::ConfiguredTarget{
+                    .target =
+                        BuildMaps::Base::EntityName{
+                            "", "simple_targets", "stage link"},
+                    .config = empty_config}},
+                [&result](auto values) { result = *values[0]; },
+                [&error, &error_msg](std::string const& msg, bool /*unused*/) {
+                    error = true;
+                    error_msg = msg;
+                });
+        }
+        CHECK(not error);
+        CHECK(error_msg == "NONE");
+        auto blobs = result->Blobs();
+        CHECK(blobs.size() == 1);
+        CHECK(blobs[0] == "this/is/a/link");
+        auto artifacts_desc = result->Artifacts()->ToJson();
+        CHECK(artifacts_desc["foo.txt"]["type"] == "KNOWN");
+        CHECK(artifacts_desc["foo.txt"]["data"]["file_type"] == "l");
+    }
+
+    SECTION("Rule stages symlink, bad: absolute") {
+        {
+            error_msg = "NONE";
+            error = false;
+            result = nullptr;
+
+            TaskSystem ts;
+            target_map.ConsumeAfterKeysReady(
+                &ts,
+                {BuildMaps::Target::ConfiguredTarget{
+                    .target =
+                        BuildMaps::Base::EntityName{
+                            "", "simple_targets", "bad absolute link"},
+                    .config = empty_config}},
+                [&result](auto values) { result = *values[0]; },
+                [&error, &error_msg](std::string const& msg, bool /*unused*/) {
+                    error = true;
+                    error_msg = msg;
+                });
+        }
+        CHECK(error);
+        CHECK(error_msg != "NONE");
+    }
+
+    SECTION("Rule stages symlink, bad: upwards") {
+        {
+            error_msg = "NONE";
+            error = false;
+            result = nullptr;
+
+            TaskSystem ts;
+            target_map.ConsumeAfterKeysReady(
+                &ts,
+                {BuildMaps::Target::ConfiguredTarget{
+                    .target =
+                        BuildMaps::Base::EntityName{
+                            "", "simple_targets", "bad upwards link"},
+                    .config = empty_config}},
+                [&result](auto values) { result = *values[0]; },
+                [&error, &error_msg](std::string const& msg, bool /*unused*/) {
+                    error = true;
+                    error_msg = msg;
+                });
+        }
+        CHECK(error);
+        CHECK(error_msg != "NONE");
+    }
+
     SECTION("Stage implicit target") {
         {
             error_msg = "NONE";
@@ -427,11 +547,176 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "simple targets", "[target_map]") {
         CHECK(result->Actions()[1]->ToJson()["input"]["in"]["data"]["path"] ==
               "simple_targets/bar.txt");
     }
+
+    SECTION("ok outs") {
+        {
+            error_msg = "NONE";
+            error = false;
+            result = nullptr;
+
+            TaskSystem ts;
+            target_map.ConsumeAfterKeysReady(
+                &ts,
+                {BuildMaps::Target::ConfiguredTarget{
+                    .target =
+                        BuildMaps::Base::EntityName{
+                            "", "simple_targets", "ok outs"},
+                    .config = empty_config}},
+                [&result](auto values) { result = *values[0]; },
+                [&error, &error_msg](std::string const& msg, bool /*unused*/) {
+                    error = true;
+                    error_msg = msg;
+                });
+        }
+        CHECK(not error);
+        CHECK(error_msg == "NONE");
+        auto artifacts_desc = result->Artifacts()->ToJson();
+        CHECK(artifacts_desc["foo/bar/baz.txt"]["type"] == "ACTION");
+    }
+
+    SECTION("bad outs") {
+        {
+            error_msg = "NONE";
+            error = false;
+            result = nullptr;
+
+            TaskSystem ts;
+            target_map.ConsumeAfterKeysReady(
+                &ts,
+                {BuildMaps::Target::ConfiguredTarget{
+                    .target =
+                        BuildMaps::Base::EntityName{
+                            "", "simple_targets", "bad outs"},
+                    .config = empty_config}},
+                [&result](auto values) { result = *values[0]; },
+                [&error, &error_msg](std::string const& msg, bool /*unused*/) {
+                    error = true;
+                    error_msg = msg;
+                });
+        }
+        CHECK(error);
+        CHECK(error_msg != "NONE");
+    }
+
+    SECTION("non-normal outs and out_dirs") {
+        {
+            error_msg = "NONE";
+            error = false;
+            result = nullptr;
+
+            TaskSystem ts;
+            target_map.ConsumeAfterKeysReady(
+                &ts,
+                {BuildMaps::Target::ConfiguredTarget{
+                    .target = BuildMaps::Base::EntityName{"",
+                                                          "simple_targets",
+                                                          "non-normal outs and "
+                                                          "out_dirs"},
+                    .config = empty_config}},
+                [&result](auto values) { result = *values[0]; },
+                [&error, &error_msg](std::string const& msg, bool /*unused*/) {
+                    error = true;
+                    error_msg = msg;
+                });
+        }
+        CHECK(not error);
+        CHECK(error_msg == "NONE");
+        REQUIRE(result->Actions().size() == 1);
+        auto action = result->Actions()[0]->ToJson();
+        CHECK(action["output_dirs"] == R"(["install"])"_json);
+        CHECK(action["output"] == R"(["log"])"_json);
+    }
+
+    SECTION("generic non-normal outs and out_dirs") {
+        {
+            {
+                error_msg = "NONE";
+                error = false;
+                result = nullptr;
+
+                TaskSystem ts;
+                target_map.ConsumeAfterKeysReady(
+                    &ts,
+                    {BuildMaps::Target::ConfiguredTarget{
+                        .target =
+                            BuildMaps::Base::EntityName{"",
+                                                        "simple_targets",
+                                                        "generic non-normal "
+                                                        "outs and out_dirs"},
+                        .config = empty_config}},
+                    [&result](auto values) { result = *values[0]; },
+                    [&error, &error_msg](std::string const& msg,
+                                         bool /*unused*/) {
+                        error = true;
+                        error_msg = msg;
+                    });
+            }
+            CHECK(not error);
+            CHECK(error_msg == "NONE");
+            REQUIRE(result->Actions().size() == 1);
+            auto action = result->Actions()[0]->ToJson();
+            CHECK(action["output_dirs"] == R"(["install"])"_json);
+            CHECK(action["output"] == R"(["log"])"_json);
+        }
+    }
+
+    SECTION("staging conflict: rule") {
+        {
+            error_msg = "NONE";
+            error = false;
+            result = nullptr;
+
+            TaskSystem ts;
+            target_map.ConsumeAfterKeysReady(
+                &ts,
+                {BuildMaps::Target::ConfiguredTarget{
+                    .target =
+                        BuildMaps::Base::EntityName{
+                            "", "simple_targets", "stage conflict: rule"},
+                    .config = empty_config}},
+                [&result](auto values) { result = *values[0]; },
+                [&error, &error_msg](std::string const& msg, bool /*unused*/) {
+                    error = true;
+                    error_msg = msg;
+                });
+        }
+        CHECK(error);
+        CHECK(error_msg != "NONE");
+        CHECK(error_msg.find("artifacts") != std::string::npos);
+        CHECK(error_msg.find("install") != std::string::npos);
+    }
+
+    SECTION("staging conflict: generic") {
+        {
+            error_msg = "NONE";
+            error = false;
+            result = nullptr;
+
+            TaskSystem ts;
+            target_map.ConsumeAfterKeysReady(
+                &ts,
+                {BuildMaps::Target::ConfiguredTarget{
+                    .target =
+                        BuildMaps::Base::EntityName{
+                            "", "simple_targets", "stage conflict: generic"},
+                    .config = empty_config}},
+                [&result](auto values) { result = *values[0]; },
+                [&error, &error_msg](std::string const& msg, bool /*unused*/) {
+                    error = true;
+                    error_msg = msg;
+                });
+        }
+        CHECK(error);
+        CHECK(error_msg != "NONE");
+        CHECK(error_msg.find("artifacts") != std::string::npos);
+        CHECK(error_msg.find("install") != std::string::npos);
+    }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "configuration deduplication",
-                 "[target_map]") {
+TEST_CASE("configuration deduplication", "[target_map]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+
     auto repo_config = SetupConfig();
     auto directory_entries =
         BuildMaps::Base::CreateDirectoryEntriesMap(&repo_config);
@@ -449,26 +734,52 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     BuildMaps::Target::ResultTargetMap result_map{0};
     Statistics stats{};
     Progress exports_progress{};
+
+    auto serve_config = TestServeConfig::ReadFromEnvironment();
+    REQUIRE(serve_config);
+
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
+    Auth auth{};
+    RetryConfig retry_config{};
+    RemoteExecutionConfig remote_exec_config{};
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = &auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &remote_exec_config};
+
+    auto const apis = ApiBundle::Create(&local_context,
+                                        &remote_context,
+                                        /*repo_config=*/nullptr);
+
+    auto serve =
+        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
+
+    AnalyseContext ctx{.repo_config = &repo_config,
+                       .storage = &storage,
+                       .statistics = &stats,
+                       .progress = &exports_progress,
+                       .serve = serve ? &*serve : nullptr};
+
     auto absent_target_variables_map =
-        BuildMaps::Target::CreateAbsentTargetVariablesMap(0);
-    auto absent_target_map =
-        BuildMaps::Target::CreateAbsentTargetMap(&result_map,
-                                                 &absent_target_variables_map,
-                                                 &repo_config,
-                                                 &stats,
-                                                 &exports_progress,
-                                                 0);
-    auto target_map =
-        BuildMaps::Target::CreateTargetMap(&source,
-                                           &targets_file_map,
-                                           &rule_map,
-                                           &directory_entries,
-                                           &absent_target_map,
-                                           &result_map,
-                                           &repo_config,
-                                           Storage::Instance().TargetCache(),
-                                           &stats,
-                                           &exports_progress);
+        BuildMaps::Target::CreateAbsentTargetVariablesMap(&ctx, 0);
+
+    auto absent_target_map = BuildMaps::Target::CreateAbsentTargetMap(
+        &ctx, &result_map, &absent_target_variables_map, 0);
+
+    auto target_map = BuildMaps::Target::CreateTargetMap(&ctx,
+                                                         &source,
+                                                         &targets_file_map,
+                                                         &rule_map,
+                                                         &directory_entries,
+                                                         &absent_target_map,
+                                                         &result_map);
 
     std::vector<AnalysedTargetPtr> result;
     bool error{false};
@@ -512,9 +823,10 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     CHECK(analysis_result.actions.size() == 2);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "generator functions in string arguments",
-                 "[target_map]") {
+TEST_CASE("generator functions in string arguments", "[target_map]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+
     auto repo_config = SetupConfig();
     auto directory_entries =
         BuildMaps::Base::CreateDirectoryEntriesMap(&repo_config);
@@ -532,26 +844,52 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     BuildMaps::Target::ResultTargetMap result_map{0};
     Statistics stats{};
     Progress exports_progress{};
+
+    auto serve_config = TestServeConfig::ReadFromEnvironment();
+    REQUIRE(serve_config);
+
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
+    Auth auth{};
+    RetryConfig retry_config{};
+    RemoteExecutionConfig remote_exec_config{};
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = &auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &remote_exec_config};
+
+    auto const apis = ApiBundle::Create(&local_context,
+                                        &remote_context,
+                                        /*repo_config=*/nullptr);
+
+    auto serve =
+        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
+
+    AnalyseContext ctx{.repo_config = &repo_config,
+                       .storage = &storage,
+                       .statistics = &stats,
+                       .progress = &exports_progress,
+                       .serve = serve ? &*serve : nullptr};
+
     auto absent_target_variables_map =
-        BuildMaps::Target::CreateAbsentTargetVariablesMap(0);
-    auto absent_target_map =
-        BuildMaps::Target::CreateAbsentTargetMap(&result_map,
-                                                 &absent_target_variables_map,
-                                                 &repo_config,
-                                                 &stats,
-                                                 &exports_progress,
-                                                 0);
-    auto target_map =
-        BuildMaps::Target::CreateTargetMap(&source,
-                                           &targets_file_map,
-                                           &rule_map,
-                                           &directory_entries,
-                                           &absent_target_map,
-                                           &result_map,
-                                           &repo_config,
-                                           Storage::Instance().TargetCache(),
-                                           &stats,
-                                           &exports_progress);
+        BuildMaps::Target::CreateAbsentTargetVariablesMap(&ctx, 0);
+
+    auto absent_target_map = BuildMaps::Target::CreateAbsentTargetMap(
+        &ctx, &result_map, &absent_target_variables_map, 0);
+
+    auto target_map = BuildMaps::Target::CreateTargetMap(&ctx,
+                                                         &source,
+                                                         &targets_file_map,
+                                                         &rule_map,
+                                                         &directory_entries,
+                                                         &absent_target_map,
+                                                         &result_map);
 
     AnalysedTargetPtr result;
     bool error{false};
@@ -576,7 +914,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         CHECK(result->Artifacts()->ToJson()["index.txt"]["type"] == "KNOWN");
         CHECK(result->Blobs()[0] == "bar.txt;baz.txt;foo.txt;link");
@@ -600,14 +938,17 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         CHECK(result->Artifacts()->ToJson()["index.txt"]["type"] == "KNOWN");
         CHECK(result->Blobs()[0] == "bar.txt;baz.txt;foo.txt;link");
     }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture, "built-in rules", "[target_map]") {
+TEST_CASE("built-in rules", "[target_map]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+
     auto repo_config = SetupConfig();
     auto directory_entries =
         BuildMaps::Base::CreateDirectoryEntriesMap(&repo_config);
@@ -625,26 +966,52 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "built-in rules", "[target_map]") {
     BuildMaps::Target::ResultTargetMap result_map{0};
     Statistics stats{};
     Progress exports_progress{};
+
+    auto serve_config = TestServeConfig::ReadFromEnvironment();
+    REQUIRE(serve_config);
+
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
+    Auth auth{};
+    RetryConfig retry_config{};
+    RemoteExecutionConfig remote_exec_config{};
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = &auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &remote_exec_config};
+
+    auto const apis = ApiBundle::Create(&local_context,
+                                        &remote_context,
+                                        /*repo_config=*/nullptr);
+
+    auto serve =
+        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
+
+    AnalyseContext ctx{.repo_config = &repo_config,
+                       .storage = &storage,
+                       .statistics = &stats,
+                       .progress = &exports_progress,
+                       .serve = serve ? &*serve : nullptr};
+
     auto absent_target_variables_map =
-        BuildMaps::Target::CreateAbsentTargetVariablesMap(0);
-    auto absent_target_map =
-        BuildMaps::Target::CreateAbsentTargetMap(&result_map,
-                                                 &absent_target_variables_map,
-                                                 &repo_config,
-                                                 &stats,
-                                                 &exports_progress,
-                                                 0);
-    auto target_map =
-        BuildMaps::Target::CreateTargetMap(&source,
-                                           &targets_file_map,
-                                           &rule_map,
-                                           &directory_entries,
-                                           &absent_target_map,
-                                           &result_map,
-                                           &repo_config,
-                                           Storage::Instance().TargetCache(),
-                                           &stats,
-                                           &exports_progress);
+        BuildMaps::Target::CreateAbsentTargetVariablesMap(&ctx, 0);
+
+    auto absent_target_map = BuildMaps::Target::CreateAbsentTargetMap(
+        &ctx, &result_map, &absent_target_variables_map, 0);
+
+    auto target_map = BuildMaps::Target::CreateTargetMap(&ctx,
+                                                         &source,
+                                                         &targets_file_map,
+                                                         &rule_map,
+                                                         &directory_entries,
+                                                         &absent_target_map,
+                                                         &result_map);
     AnalysedTargetPtr result;
     bool error{false};
     std::string error_msg;
@@ -668,7 +1035,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "built-in rules", "[target_map]") {
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         CHECK(result->Artifacts()->Map().size() == 1);
         CHECK(result->Artifacts()->ToJson()["out"]["type"] == "ACTION");
@@ -693,7 +1060,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "built-in rules", "[target_map]") {
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         CHECK(result->Artifacts() == result->RunFiles());
         auto stage = result->Artifacts()->ToJson();
@@ -739,7 +1106,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "built-in rules", "[target_map]") {
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         CHECK(result->Artifacts()->ToJson()["generated.txt"]["type"] ==
               "KNOWN");
@@ -765,7 +1132,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "built-in rules", "[target_map]") {
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         CHECK(result->Artifacts()->ToJson()["generated_link"]["type"] ==
               "KNOWN");
@@ -799,18 +1166,23 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "built-in rules", "[target_map]") {
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         CHECK(bar_result->Artifacts()->ToJson()["foo.txt."]["type"] == "KNOWN");
-        CHECK(bar_result->Artifacts()->ToJson()["foo.txt."]["data"]["id"] ==
-              HashFunction::ComputeBlobHash("bar").HexString());
+        CHECK(
+            bar_result->Artifacts()->ToJson()["foo.txt."]["data"]["id"] ==
+            storage_config.Get().hash_function.HashBlobData("bar").HexString());
         CHECK(baz_result->Artifacts()->ToJson()["foo.txt."]["type"] == "KNOWN");
-        CHECK(baz_result->Artifacts()->ToJson()["foo.txt."]["data"]["id"] ==
-              HashFunction::ComputeBlobHash("baz").HexString());
+        CHECK(
+            baz_result->Artifacts()->ToJson()["foo.txt."]["data"]["id"] ==
+            storage_config.Get().hash_function.HashBlobData("baz").HexString());
     }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture, "target reference", "[target_map]") {
+TEST_CASE("target reference", "[target_map]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+
     auto repo_config = SetupConfig();
     auto directory_entries =
         BuildMaps::Base::CreateDirectoryEntriesMap(&repo_config);
@@ -828,26 +1200,52 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "target reference", "[target_map]") {
     BuildMaps::Target::ResultTargetMap result_map{0};
     Statistics stats{};
     Progress exports_progress{};
+
+    auto serve_config = TestServeConfig::ReadFromEnvironment();
+    REQUIRE(serve_config);
+
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
+    Auth auth{};
+    RetryConfig retry_config{};
+    RemoteExecutionConfig remote_exec_config{};
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = &auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &remote_exec_config};
+
+    auto const apis = ApiBundle::Create(&local_context,
+                                        &remote_context,
+                                        /*repo_config=*/nullptr);
+
+    auto serve =
+        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
+
+    AnalyseContext ctx{.repo_config = &repo_config,
+                       .storage = &storage,
+                       .statistics = &stats,
+                       .progress = &exports_progress,
+                       .serve = serve ? &*serve : nullptr};
+
     auto absent_target_variables_map =
-        BuildMaps::Target::CreateAbsentTargetVariablesMap(0);
-    auto absent_target_map =
-        BuildMaps::Target::CreateAbsentTargetMap(&result_map,
-                                                 &absent_target_variables_map,
-                                                 &repo_config,
-                                                 &stats,
-                                                 &exports_progress,
-                                                 0);
-    auto target_map =
-        BuildMaps::Target::CreateTargetMap(&source,
-                                           &targets_file_map,
-                                           &rule_map,
-                                           &directory_entries,
-                                           &absent_target_map,
-                                           &result_map,
-                                           &repo_config,
-                                           Storage::Instance().TargetCache(),
-                                           &stats,
-                                           &exports_progress);
+        BuildMaps::Target::CreateAbsentTargetVariablesMap(&ctx, 0);
+
+    auto absent_target_map = BuildMaps::Target::CreateAbsentTargetMap(
+        &ctx, &result_map, &absent_target_variables_map, 0);
+
+    auto target_map = BuildMaps::Target::CreateTargetMap(&ctx,
+                                                         &source,
+                                                         &targets_file_map,
+                                                         &rule_map,
+                                                         &directory_entries,
+                                                         &absent_target_map,
+                                                         &result_map);
 
     AnalysedTargetPtr result;
     bool error{false};
@@ -872,7 +1270,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "target reference", "[target_map]") {
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         CHECK(result->Artifacts()->ToJson()["hello.txt"]["type"] == "ACTION");
         CHECK(result->Artifacts()->ToJson()["hello.txt"]["data"]["path"] ==
@@ -904,7 +1302,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "target reference", "[target_map]") {
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         CHECK(result->Artifacts()->ToJson()["link"]["type"] == "ACTION");
         CHECK(result->Artifacts()->ToJson()["link"]["data"]["path"] == "link");
@@ -935,7 +1333,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "target reference", "[target_map]") {
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         CHECK(result->Artifacts()->ToJson()["absolute"]["data"]["path"] ==
               "x/x/foo");
@@ -946,7 +1344,10 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "target reference", "[target_map]") {
     }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture, "trees", "[target_map]") {
+TEST_CASE("trees", "[target_map]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+
     auto repo_config = SetupConfig();
     auto directory_entries =
         BuildMaps::Base::CreateDirectoryEntriesMap(&repo_config);
@@ -964,26 +1365,52 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "trees", "[target_map]") {
     BuildMaps::Target::ResultTargetMap result_map{0};
     Statistics stats{};
     Progress exports_progress{};
+
+    auto serve_config = TestServeConfig::ReadFromEnvironment();
+    REQUIRE(serve_config);
+
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
+    Auth auth{};
+    RetryConfig retry_config{};
+    RemoteExecutionConfig remote_exec_config{};
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = &auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &remote_exec_config};
+
+    auto const apis = ApiBundle::Create(&local_context,
+                                        &remote_context,
+                                        /*repo_config=*/nullptr);
+
+    auto serve =
+        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
+
+    AnalyseContext ctx{.repo_config = &repo_config,
+                       .storage = &storage,
+                       .statistics = &stats,
+                       .progress = &exports_progress,
+                       .serve = serve ? &*serve : nullptr};
+
     auto absent_target_variables_map =
-        BuildMaps::Target::CreateAbsentTargetVariablesMap(0);
-    auto absent_target_map =
-        BuildMaps::Target::CreateAbsentTargetMap(&result_map,
-                                                 &absent_target_variables_map,
-                                                 &repo_config,
-                                                 &stats,
-                                                 &exports_progress,
-                                                 0);
-    auto target_map =
-        BuildMaps::Target::CreateTargetMap(&source,
-                                           &targets_file_map,
-                                           &rule_map,
-                                           &directory_entries,
-                                           &absent_target_map,
-                                           &result_map,
-                                           &repo_config,
-                                           Storage::Instance().TargetCache(),
-                                           &stats,
-                                           &exports_progress);
+        BuildMaps::Target::CreateAbsentTargetVariablesMap(&ctx, 0);
+
+    auto absent_target_map = BuildMaps::Target::CreateAbsentTargetMap(
+        &ctx, &result_map, &absent_target_variables_map, 0);
+
+    auto target_map = BuildMaps::Target::CreateTargetMap(&ctx,
+                                                         &source,
+                                                         &targets_file_map,
+                                                         &rule_map,
+                                                         &directory_entries,
+                                                         &absent_target_map,
+                                                         &result_map);
 
     AnalysedTargetPtr result;
     bool error{false};
@@ -1007,7 +1434,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "trees", "[target_map]") {
                     error_msg = msg;
                 });
         }
-        CHECK(!error);
+        CHECK(not error);
         CHECK(error_msg == "NONE");
         CHECK(result->Actions().size() == 1);
         CHECK(result->Actions()[0]->ToJson()["input"]["tree"]["type"] ==
@@ -1046,9 +1473,10 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "trees", "[target_map]") {
     }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "RESULT error reporting",
-                 "[target_map]") {
+TEST_CASE("RESULT error reporting", "[target_map]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+
     auto repo_config = SetupConfig();
     auto directory_entries =
         BuildMaps::Base::CreateDirectoryEntriesMap(&repo_config);
@@ -1066,26 +1494,52 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     BuildMaps::Target::ResultTargetMap result_map{0};
     Statistics stats{};
     Progress exports_progress{};
+
+    auto serve_config = TestServeConfig::ReadFromEnvironment();
+    REQUIRE(serve_config);
+
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
+    Auth auth{};
+    RetryConfig retry_config{};
+    RemoteExecutionConfig remote_exec_config{};
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = &auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &remote_exec_config};
+
+    auto const apis = ApiBundle::Create(&local_context,
+                                        &remote_context,
+                                        /*repo_config=*/nullptr);
+
+    auto serve =
+        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
+
+    AnalyseContext ctx{.repo_config = &repo_config,
+                       .storage = &storage,
+                       .statistics = &stats,
+                       .progress = &exports_progress,
+                       .serve = serve ? &*serve : nullptr};
+
     auto absent_target_variables_map =
-        BuildMaps::Target::CreateAbsentTargetVariablesMap(0);
-    auto absent_target_map =
-        BuildMaps::Target::CreateAbsentTargetMap(&result_map,
-                                                 &absent_target_variables_map,
-                                                 &repo_config,
-                                                 &stats,
-                                                 &exports_progress,
-                                                 0);
-    auto target_map =
-        BuildMaps::Target::CreateTargetMap(&source,
-                                           &targets_file_map,
-                                           &rule_map,
-                                           &directory_entries,
-                                           &absent_target_map,
-                                           &result_map,
-                                           &repo_config,
-                                           Storage::Instance().TargetCache(),
-                                           &stats,
-                                           &exports_progress);
+        BuildMaps::Target::CreateAbsentTargetVariablesMap(&ctx, 0);
+
+    auto absent_target_map = BuildMaps::Target::CreateAbsentTargetMap(
+        &ctx, &result_map, &absent_target_variables_map, 0);
+
+    auto target_map = BuildMaps::Target::CreateTargetMap(&ctx,
+                                                         &source,
+                                                         &targets_file_map,
+                                                         &rule_map,
+                                                         &directory_entries,
+                                                         &absent_target_map,
+                                                         &result_map);
 
     AnalysedTargetPtr result;
     bool error{false};
@@ -1207,7 +1661,10 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture, "wrong arguments", "[target_map]") {
+TEST_CASE("wrong arguments", "[target_map]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+
     auto repo_config = SetupConfig();
     auto directory_entries =
         BuildMaps::Base::CreateDirectoryEntriesMap(&repo_config);
@@ -1225,26 +1682,52 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "wrong arguments", "[target_map]") {
     BuildMaps::Target::ResultTargetMap result_map{0};
     Statistics stats{};
     Progress exports_progress{};
+
+    auto serve_config = TestServeConfig::ReadFromEnvironment();
+    REQUIRE(serve_config);
+
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
+    Auth auth{};
+    RetryConfig retry_config{};
+    RemoteExecutionConfig remote_exec_config{};
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = &auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &remote_exec_config};
+
+    auto const apis = ApiBundle::Create(&local_context,
+                                        &remote_context,
+                                        /*repo_config=*/nullptr);
+
+    auto serve =
+        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
+
+    AnalyseContext ctx{.repo_config = &repo_config,
+                       .storage = &storage,
+                       .statistics = &stats,
+                       .progress = &exports_progress,
+                       .serve = serve ? &*serve : nullptr};
+
     auto absent_target_variables_map =
-        BuildMaps::Target::CreateAbsentTargetVariablesMap(0);
-    auto absent_target_map =
-        BuildMaps::Target::CreateAbsentTargetMap(&result_map,
-                                                 &absent_target_variables_map,
-                                                 &repo_config,
-                                                 &stats,
-                                                 &exports_progress,
-                                                 0);
-    auto target_map =
-        BuildMaps::Target::CreateTargetMap(&source,
-                                           &targets_file_map,
-                                           &rule_map,
-                                           &directory_entries,
-                                           &absent_target_map,
-                                           &result_map,
-                                           &repo_config,
-                                           Storage::Instance().TargetCache(),
-                                           &stats,
-                                           &exports_progress);
+        BuildMaps::Target::CreateAbsentTargetVariablesMap(&ctx, 0);
+
+    auto absent_target_map = BuildMaps::Target::CreateAbsentTargetMap(
+        &ctx, &result_map, &absent_target_variables_map, 0);
+
+    auto target_map = BuildMaps::Target::CreateTargetMap(&ctx,
+                                                         &source,
+                                                         &targets_file_map,
+                                                         &rule_map,
+                                                         &directory_entries,
+                                                         &absent_target_map,
+                                                         &result_map);
 
     AnalysedTargetPtr result;
     bool error{false};

@@ -28,15 +28,17 @@
 #include "src/buildtool/build_engine/expression/configuration.hpp"
 #include "src/buildtool/common/retry_cli.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/git_context.hpp"
 #include "src/buildtool/logging/log_config.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/log_sink_cmdline.hpp"
 #include "src/buildtool/logging/log_sink_file.hpp"
 #include "src/buildtool/logging/logger.hpp"
-#include "src/buildtool/main/retry.hpp"
 #include "src/buildtool/main/version.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
+#include "src/buildtool/storage/repository_garbage_collector.hpp"
 #include "src/other_tools/just_mr/cli.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
 #include "src/other_tools/just_mr/fetch.hpp"
@@ -100,6 +102,8 @@ void SetupSetupCommandArguments(
         "Advance Git commit IDs and print updated just-mr configuration.");
     auto* cmd_do = app.add_subcommand(
         "do", "Canonical way of specifying subcommands to be launched.");
+    auto* cmd_gc_repo = app.add_subcommand(
+        "gc-repo", "Perform garbage collection on the repository roots.");
     cmd_do->set_help_flag();  // disable help flag
     // define just subcommands
     std::vector<CLI::App*> cmd_just_subcmds{};
@@ -132,8 +136,11 @@ void SetupSetupCommandArguments(
     try {
         app.parse(argc, argv);
     } catch (CLI::Error& e) {
-        [[maybe_unused]] auto err = app.exit(e);
-        std::exit(kExitClargsError);
+        // CLI11 throws for things like --help calls for them to be handled
+        // separately by parse callers. In this case it nevertheless sets the
+        // error code to 0 (success).
+        auto const err = app.exit(e);
+        std::exit(err == 0 ? kExitSuccess : kExitClargsError);
     } catch (std::exception const& ex) {
         Logger::Log(LogLevel::Error, "Command line parse error: {}", ex.what());
         std::exit(kExitClargsError);
@@ -153,6 +160,9 @@ void SetupSetupCommandArguments(
     }
     else if (*cmd_update) {
         clargs.cmd = SubCommand::kUpdate;
+    }
+    else if (*cmd_gc_repo) {
+        clargs.cmd = SubCommand::kGcRepo;
     }
     else if (*cmd_do) {
         clargs.cmd = SubCommand::kJustDo;
@@ -195,6 +205,26 @@ void SetupLogging(MultiRepoLogArguments const& clargs) {
             clargs.log_append ? LogSinkFile::Mode::Append
                               : LogSinkFile::Mode::Overwrite));
     }
+}
+
+[[nodiscard]] auto CreateStorageConfig(MultiRepoCommonArguments const& args,
+                                       bool is_compatible) noexcept
+    -> std::optional<StorageConfig> {
+    StorageConfig::Builder builder;
+    if (args.just_mr_paths->root.has_value()) {
+        builder.SetBuildRoot(*args.just_mr_paths->root);
+    }
+    builder.SetHashType(is_compatible ? HashFunction::Type::PlainSHA256
+                                      : HashFunction::Type::GitSHA1);
+
+    // As just-mr does not require the TargetCache, we do not need to set any of
+    // the remote execution fields for the backend description.
+    auto config = builder.Build();
+    if (config) {
+        return *std::move(config);
+    }
+    Logger::Log(LogLevel::Error, config.error());
+    return std::nullopt;
 }
 
 }  // namespace
@@ -288,12 +318,22 @@ auto main(int argc, char* argv[]) -> int {
 
         // Setup LocalStorageConfig to store the local_build_root properly
         // and make the cas and git cache roots available
-        if (not StorageConfig::SetBuildRoot(
-                *arguments.common.just_mr_paths->root)) {
+        auto storage_config = CreateStorageConfig(
+            arguments.common, Compatibility::IsCompatible());
+        if (not storage_config) {
             Logger::Log(LogLevel::Error,
                         "Failed to configure local build root.");
             return kExitGenericFailure;
         }
+
+        if (arguments.cmd == SubCommand::kGcRepo) {
+            return RepositoryGarbageCollector::TriggerGarbageCollection(
+                       *storage_config)
+                       ? kExitSuccess
+                       : kExitBuiltinCommandFailure;
+        }
+
+        auto const storage = Storage::Create(&*storage_config);
 
         // check for conflicts in main repo name
         if ((not arguments.setup.sub_all) and arguments.common.main and
@@ -314,10 +354,6 @@ auto main(int argc, char* argv[]) -> int {
             return kExitGenericFailure;
         }
 
-        if (not SetupRetryConfig(arguments.retry)) {
-            return kExitGenericFailure;
-        }
-
         /**
          * The current implementation of libgit2 uses pthread_key_t incorrectly
          * on POSIX systems to handle thread-specific data, which requires us to
@@ -330,8 +366,7 @@ auto main(int argc, char* argv[]) -> int {
         if (arguments.cmd == SubCommand::kJustDo or
             arguments.cmd == SubCommand::kJustSubCmd) {
             // check setup configuration arguments for validity
-            if (arguments.common.compatible == true and
-                arguments.common.fetch_absent) {
+            if (arguments.common.compatible and arguments.common.fetch_absent) {
                 Logger::Log(LogLevel::Error,
                             "Fetching absent repositories only available in "
                             "native mode!");
@@ -345,10 +380,17 @@ auto main(int argc, char* argv[]) -> int {
                             arguments.auth,
                             arguments.retry,
                             arguments.launch_fwd,
+                            *storage_config,
+                            storage,
                             forward_build_root,
                             my_name);
         }
-        auto lock = GarbageCollector::SharedLock();
+        auto repo_lock =
+            RepositoryGarbageCollector::SharedLock(*storage_config);
+        if (not repo_lock) {
+            return kExitGenericFailure;
+        }
+        auto lock = GarbageCollector::SharedLock(*storage_config);
         if (not lock) {
             return kExitGenericFailure;
         }
@@ -361,8 +403,7 @@ auto main(int argc, char* argv[]) -> int {
         if (arguments.cmd == SubCommand::kSetup or
             arguments.cmd == SubCommand::kSetupEnv) {
             // check setup configuration arguments for validity
-            if (arguments.common.compatible == true and
-                arguments.common.fetch_absent) {
+            if (arguments.common.compatible and arguments.common.fetch_absent) {
                 Logger::Log(LogLevel::Error,
                             "Fetching absent repositories only available in "
                             "native mode!");
@@ -374,6 +415,9 @@ auto main(int argc, char* argv[]) -> int {
                 arguments.setup,
                 arguments.just_cmd,
                 arguments.auth,
+                arguments.retry,
+                *storage_config,
+                storage,
                 /*interactive=*/(arguments.cmd == SubCommand::kSetupEnv),
                 my_name);
             // dump resulting config to stdout
@@ -389,14 +433,17 @@ auto main(int argc, char* argv[]) -> int {
 
         // Run subcommand `update`
         if (arguments.cmd == SubCommand::kUpdate) {
-            return MultiRepoUpdate(
-                config, arguments.common, arguments.update, my_name);
+            return MultiRepoUpdate(config,
+                                   arguments.common,
+                                   arguments.update,
+                                   *storage_config,
+                                   my_name);
         }
 
         // Run subcommand `fetch`
         if (arguments.cmd == SubCommand::kFetch) {
             // check fetch configuration arguments for validity
-            if (arguments.common.compatible == true) {
+            if (arguments.common.compatible) {
                 if (arguments.common.remote_execution_address and
                     arguments.fetch.backup_to_remote) {
                     Logger::Log(
@@ -417,6 +464,9 @@ auto main(int argc, char* argv[]) -> int {
                                   arguments.setup,
                                   arguments.fetch,
                                   arguments.auth,
+                                  arguments.retry,
+                                  *storage_config,
+                                  storage,
                                   my_name);
         }
 

@@ -21,10 +21,13 @@
 
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
 #include "src/other_tools/ops_maps/import_to_git_map.hpp"
 
-/// \brief Maps a oreign file to the resulting Git tree WS root,
+/// \brief Maps a foreign file to the resulting Git tree WS root,
 /// together with the information whether it was a cache hit.
 using ForeignFileGitMap =
     AsyncMapConsumer<ForeignFileInfo,
@@ -33,7 +36,9 @@ using ForeignFileGitMap =
 [[nodiscard]] auto CreateForeignFileGitMap(
     gsl::not_null<ContentCASMap*> const& content_cas_map,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
-    bool serve_api_exists,
+    ServeApi const* serve,
+    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<Storage const*> const& storage,
     bool fetch_absent,
     std::size_t jobs) -> ForeignFileGitMap;
 

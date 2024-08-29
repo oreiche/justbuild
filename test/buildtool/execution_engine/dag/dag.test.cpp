@@ -12,18 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/execution_engine/dag/dag.hpp"
+
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "catch2/catch_test_macros.hpp"
+#include "gsl/gsl"
 #include "src/buildtool/common/action.hpp"
 #include "src/buildtool/common/action_description.hpp"
-#include "src/buildtool/common/artifact_factory.hpp"
+#include "src/buildtool/common/artifact_description.hpp"
 #include "src/buildtool/common/identifier.hpp"
-#include "src/buildtool/execution_engine/dag/dag.hpp"
 #include "test/utils/container_matchers.hpp"
+
+namespace {
+[[nodiscard]] auto IsValidGraph(DependencyGraph const& graph) noexcept -> bool;
+[[nodiscard]] auto GetActionOfArtifact(
+    DependencyGraph const& g,
+    ActionIdentifier const& action_id) noexcept
+    -> DependencyGraph::ActionNode const*;
+}  // namespace
 
 /// \brief Checks that each artifact with identifier in output_ids has been
 /// added to the graph and that its builder action has id action_id, and that
@@ -34,16 +46,21 @@ void CheckOutputNodesCorrectlyAdded(
     std::vector<std::string> const& output_paths) {
     std::vector<ArtifactIdentifier> output_ids;
     for (auto const& path : output_paths) {
-        auto const output_id = ArtifactFactory::Identifier(
-            ArtifactFactory::DescribeActionArtifact(action_id, path));
-        CHECK(g.ArtifactWithId(output_id));
-        auto const* action = g.ActionNodeOfArtifactWithId(output_id);
+        auto const output_id =
+            ArtifactDescription::CreateAction(action_id, path).Id();
+        CHECK(g.ArtifactNodeWithId(output_id) != nullptr);
+        auto const* action = GetActionOfArtifact(g, output_id);
         CHECK(action != nullptr);
         CHECK(action->Content().Id() == action_id);
         output_ids.push_back(output_id);
     }
+
+    std::vector<ArtifactIdentifier> output_file_ids;
+    for (auto const& out_file : g.ActionNodeWithId(action_id)->OutputFiles()) {
+        output_file_ids.push_back(out_file.node->Content().Id());
+    }
     CHECK_THAT(
-        g.ActionNodeWithId(action_id)->OutputFileIds(),
+        output_file_ids,
         HasSameUniqueElementsAs<std::vector<ArtifactIdentifier>>(output_ids));
 }
 
@@ -54,10 +71,16 @@ void CheckInputNodesCorrectlyAdded(
     ActionIdentifier const& action_id,
     std::vector<ArtifactIdentifier> const& input_ids) noexcept {
     for (auto const& input_id : input_ids) {
-        CHECK(g.ArtifactWithId(input_id));
+        CHECK(g.ArtifactNodeWithId(input_id) != nullptr);
+    }
+
+    std::vector<ArtifactIdentifier> dependency_ids;
+    for (auto const& dependency :
+         g.ActionNodeWithId(action_id)->Dependencies()) {
+        dependency_ids.push_back(dependency.node->Content().Id());
     }
     CHECK_THAT(
-        g.ActionNodeWithId(action_id)->DependencyIds(),
+        dependency_ids,
         HasSameUniqueElementsAs<std::vector<ArtifactIdentifier>>(input_ids));
 }
 
@@ -78,7 +101,7 @@ void CheckLocalArtifactsCorrectlyAdded(
 
 TEST_CASE("Empty Dependency Graph", "[dag]") {
     DependencyGraph g;
-    CHECK(g.IsValid());
+    CHECK(IsValidGraph(g));
 }
 
 TEST_CASE("AddAction({single action, single output, no inputs})", "[dag]") {
@@ -88,7 +111,7 @@ TEST_CASE("AddAction({single action, single output, no inputs})", "[dag]") {
     DependencyGraph g;
     CHECK(g.AddAction(action_description));
     CheckOutputNodesCorrectlyAdded(g, action_id, {"out"});
-    CHECK(g.IsValid());
+    CHECK(IsValidGraph(g));
 }
 
 TEST_CASE("AddAction({single action, more outputs, no inputs})", "[dag]") {
@@ -102,13 +125,14 @@ TEST_CASE("AddAction({single action, more outputs, no inputs})", "[dag]") {
     DependencyGraph g;
     CHECK(g.AddAction(action_description));
     CheckOutputNodesCorrectlyAdded(g, action_id, output_files);
-    CHECK(g.IsValid());
+    CHECK(IsValidGraph(g));
 }
 
 TEST_CASE("AddAction({single action, single output, source file})", "[dag]") {
     using path = std::filesystem::path;
     std::string const action_id = "action_id";
-    auto const src_description = ArtifactDescription{path{"main.cpp"}, "repo"};
+    auto const src_description =
+        ArtifactDescription::CreateLocal(path{"main.cpp"}, "repo");
     auto const& src_id = src_description.Id();
     DependencyGraph g;
     SECTION("Input file in the same path than it is locally") {
@@ -135,13 +159,12 @@ TEST_CASE("AddAction({single action, single output, source file})", "[dag]") {
     CheckLocalArtifactsCorrectlyAdded(g, {src_id}, {"main.cpp"});
 
     // All artifacts are the source file and the executable
-    CHECK_THAT(g.ArtifactIdentifiers(),
-               HasSameUniqueElementsAs<std::unordered_set<ArtifactIdentifier>>(
-                   {src_id,
-                    ArtifactFactory::Identifier(
-                        ArtifactFactory::DescribeActionArtifact(
-                            action_id, "executable"))}));
-    CHECK(g.IsValid());
+    CHECK_THAT(
+        g.ArtifactIdentifiers(),
+        HasSameUniqueElementsAs<std::unordered_set<ArtifactIdentifier>>(
+            {src_id,
+             ArtifactDescription::CreateAction(action_id, "executable").Id()}));
+    CHECK(IsValidGraph(g));
 }
 
 TEST_CASE("AddAction({single action, single output, no inputs, env_variables})",
@@ -166,12 +189,11 @@ TEST_CASE("AddAction({single action, single output, no inputs, env_variables})",
     CHECK(action_node->Env() == env_vars);
 
     // All artifacts are the output file
-    CHECK_THAT(g.ArtifactIdentifiers(),
-               HasSameUniqueElementsAs<std::unordered_set<ArtifactIdentifier>>(
-                   {ArtifactFactory::Identifier(
-                       ArtifactFactory::DescribeActionArtifact(action_id,
-                                                               "greeting"))}));
-    CHECK(g.IsValid());
+    CHECK_THAT(
+        g.ArtifactIdentifiers(),
+        HasSameUniqueElementsAs<std::unordered_set<ArtifactIdentifier>>(
+            {ArtifactDescription::CreateAction(action_id, "greeting").Id()}));
+    CHECK(IsValidGraph(g));
 }
 
 TEST_CASE("Add executable and library", "[dag]") {
@@ -183,13 +205,17 @@ TEST_CASE("Add executable and library", "[dag]") {
     std::string const make_lib_id = "make_lib";
     std::vector<std::string> const make_exec_cmd = {"build", "exec"};
     std::vector<std::string> const make_lib_cmd = {"build", "lib.a"};
-    auto const main_desc = ArtifactDescription{path{"main.cpp"}, ""};
+    auto const main_desc =
+        ArtifactDescription::CreateLocal(path{"main.cpp"}, "");
     auto const& main_id = main_desc.Id();
-    auto const lib_hpp_desc = ArtifactDescription{path{"lib/lib.hpp"}, ""};
+    auto const lib_hpp_desc =
+        ArtifactDescription::CreateLocal(path{"lib/lib.hpp"}, "");
     auto const& lib_hpp_id = lib_hpp_desc.Id();
-    auto const lib_cpp_desc = ArtifactDescription{path{"lib/lib.cpp"}, ""};
+    auto const lib_cpp_desc =
+        ArtifactDescription::CreateLocal(path{"lib/lib.cpp"}, "");
     auto const& lib_cpp_id = lib_cpp_desc.Id();
-    auto const lib_a_desc = ArtifactDescription{make_lib_id, "lib.a"};
+    auto const lib_a_desc =
+        ArtifactDescription::CreateAction(make_lib_id, "lib.a");
     auto const& lib_a_id = lib_a_desc.Id();
 
     auto const make_exec_desc =
@@ -197,7 +223,8 @@ TEST_CASE("Add executable and library", "[dag]") {
                           {},
                           Action{make_exec_id, make_exec_cmd, {}},
                           {{"main.cpp", main_desc}, {"lib.a", lib_a_desc}}};
-    auto const& exec_out_id = ArtifactDescription{make_exec_id, "exec"}.Id();
+    auto const& exec_out_id =
+        ArtifactDescription::CreateAction(make_exec_id, "exec").Id();
 
     auto const make_lib_desc = ActionDescription{
         {"lib.a"},
@@ -207,21 +234,21 @@ TEST_CASE("Add executable and library", "[dag]") {
 
     DependencyGraph g;
     auto check_exec = [&]() {
-        CHECK(g.IsValid());
+        CHECK(IsValidGraph(g));
         CheckOutputNodesCorrectlyAdded(g, make_exec_id, {"exec"});
         CheckInputNodesCorrectlyAdded(g, make_exec_id, {main_id, lib_a_id});
         CheckLocalArtifactsCorrectlyAdded(g, {main_id}, {"main.cpp"});
-        CHECK_THAT(g.ActionNodeOfArtifactWithId(exec_out_id)->Command(),
+        CHECK_THAT(GetActionOfArtifact(g, exec_out_id)->Command(),
                    Catch::Matchers::Equals(make_exec_cmd));
     };
 
     auto check_lib = [&]() {
-        CHECK(g.IsValid());
+        CHECK(IsValidGraph(g));
         CheckOutputNodesCorrectlyAdded(g, make_lib_id, {"lib.a"});
         CheckInputNodesCorrectlyAdded(g, make_lib_id, {lib_hpp_id, lib_cpp_id});
         CheckLocalArtifactsCorrectlyAdded(
             g, {lib_hpp_id, lib_cpp_id}, {"lib/lib.hpp", "lib/lib.cpp"});
-        CHECK_THAT(g.ActionNodeOfArtifactWithId(lib_a_id)->Command(),
+        CHECK_THAT(GetActionOfArtifact(g, lib_a_id)->Command(),
                    Catch::Matchers::Equals(make_lib_cmd));
     };
 
@@ -271,8 +298,10 @@ TEST_CASE("AddAction(Empty mandatory non-empty field in action description)",
 TEST_CASE("Adding cyclic dependencies produces invalid graph", "[dag]") {
     std::string const action1_id = "action1";
     std::string const action2_id = "action2";
-    auto const out1_desc = ArtifactDescription(action1_id, "out1");
-    auto const out2_desc = ArtifactDescription(action2_id, "out2");
+    auto const out1_desc =
+        ArtifactDescription::CreateAction(action1_id, "out1");
+    auto const out2_desc =
+        ArtifactDescription::CreateAction(action2_id, "out2");
 
     auto const action1_desc =
         ActionDescription{{"out1"},
@@ -287,7 +316,7 @@ TEST_CASE("Adding cyclic dependencies produces invalid graph", "[dag]") {
 
     DependencyGraph g;
     CHECK(g.Add({action1_desc, action2_desc}));
-    CHECK(not g.IsValid());
+    CHECK(not IsValidGraph(g));
 }
 
 TEST_CASE("Error when adding an action with an id already added", "[dag]") {
@@ -298,7 +327,7 @@ TEST_CASE("Error when adding an action with an id already added", "[dag]") {
     DependencyGraph g;
     CHECK(g.AddAction(action_desc));
     CheckOutputNodesCorrectlyAdded(g, action_id, {"out"});
-    CHECK(g.IsValid());
+    CHECK(IsValidGraph(g));
 
     CHECK(not g.AddAction(action_desc));
 }
@@ -311,3 +340,80 @@ TEST_CASE("Error when adding conflicting output files and directories",
     DependencyGraph g;
     CHECK_FALSE(g.AddAction(action_desc));
 }
+
+namespace {
+[[nodiscard]] auto IsValidNode(
+    DependencyGraph::ArtifactNode const& node) noexcept -> bool {
+    return node.Children().size() <= 1;
+}
+
+[[nodiscard]] auto IsValidNode(DependencyGraph::ActionNode const& node) noexcept
+    -> bool {
+    return not node.Parents().empty();
+}
+
+template <typename TNode>
+// NOLINTNEXTLINE(misc-no-recursion)
+[[nodiscard]] auto IsValidNode(
+    TNode const& node,
+    gsl::not_null<std::unordered_set<std::uintptr_t>*> const& seen) -> bool {
+    // Check the node hasn't been met yet (cycles check):
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    auto const node_id = reinterpret_cast<std::uintptr_t>(&node);
+    auto [it, inserted] = seen->insert(node_id);
+    if (not inserted) {
+        return false;
+    }
+
+    // Check the validity of the node and all children:
+    if (not IsValidNode(node)) {
+        return false;
+    }
+    for (auto const& child : node.Children()) {
+        if (not IsValidNode(*child, seen)) {
+            return false;
+        }
+    }
+
+    seen->erase(it);
+    return true;
+}
+
+[[nodiscard]] auto IsValidGraph(DependencyGraph const& graph) noexcept -> bool {
+    std::unordered_set<std::uintptr_t> seen{};
+    for (auto const& id : graph.ArtifactIdentifiers()) {
+        DependencyGraph::ArtifactNode const* node =
+            graph.ArtifactNodeWithId(id);
+
+        try {
+            // Check the node exists and is valid:
+            if (node == nullptr or not IsValidNode(*node, &seen)) {
+                return false;
+            }
+        } catch (...) {
+            return false;
+        }
+
+        // There must be no pending nodes:
+        if (not seen.empty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] auto GetActionOfArtifact(
+    DependencyGraph const& g,
+    ActionIdentifier const& action_id) noexcept
+    -> DependencyGraph::ActionNode const* {
+    auto const* node = g.ArtifactNodeWithId(action_id);
+    if (node != nullptr) {
+        auto const& children = node->Children();
+        if (children.empty()) {
+            return nullptr;
+        }
+        return children[0];
+    }
+    return nullptr;
+}
+}  // namespace

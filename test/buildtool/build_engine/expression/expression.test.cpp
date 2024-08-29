@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/build_engine/expression/expression.hpp"
+
 #include <filesystem>
 #include <sstream>
 #include <string>
@@ -20,8 +22,8 @@
 #include "catch2/catch_test_macros.hpp"
 #include "catch2/matchers/catch_matchers_all.hpp"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
-#include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/build_engine/expression/function_map.hpp"
+#include "src/buildtool/common/artifact_description.hpp"
 #include "test/utils/container_matchers.hpp"
 
 TEST_CASE("Expression access", "[expression]") {  // NOLINT
@@ -38,7 +40,8 @@ TEST_CASE("Expression access", "[expression]") {  // NOLINT
     auto boolean = ExpressionPtr{true};
     auto number = ExpressionPtr{number_t{1}};
     auto string = ExpressionPtr{"2"s};
-    auto artifact = ExpressionPtr{artifact_t{path{"local_path"}}};
+    auto artifact =
+        ExpressionPtr{ArtifactDescription::CreateTree(path{"local_path"})};
     auto result = ExpressionPtr{result_t{boolean, number, string}};
     auto list = ExpressionPtr{list_t{number}};
     auto map = ExpressionPtr{map_t{{"3"s, number}}};
@@ -78,7 +81,8 @@ TEST_CASE("Expression access", "[expression]") {  // NOLINT
         CHECK(string->String() == "2"s);
         CHECK_THROWS_AS(string->Artifact(), Expression::ExpressionTypeError);
 
-        CHECK(artifact->Artifact() == artifact_t{path{"local_path"}});
+        CHECK(artifact->Artifact() ==
+              ArtifactDescription::CreateTree(path{"local_path"}));
         CHECK_THROWS_AS(artifact->String(), Expression::ExpressionTypeError);
 
         CHECK(result->Result() == result_t{boolean, number, string});
@@ -154,13 +158,14 @@ TEST_CASE("Expression access", "[expression]") {  // NOLINT
         CHECK(string == Expression::FromJson(R"("2")"_json));
         CHECK(string != ""s);
         CHECK(string != Expression{""s});
-        CHECK(string != artifact_t{path{"local_path"}});
+        CHECK(string != ArtifactDescription::CreateTree(path{"local_path"}));
         CHECK(string != artifact);
         CHECK(string != Expression::FromJson(R"("")"_json));
 
         CHECK(artifact == artifact);
-        CHECK(artifact == artifact_t{path{"local_path"}});
-        CHECK(artifact == Expression{artifact_t{path{"local_path"}}});
+        CHECK(artifact == ArtifactDescription::CreateTree(path{"local_path"}));
+        CHECK(artifact ==
+              Expression{ArtifactDescription::CreateTree(path{"local_path"})});
         CHECK(artifact != ""s);
         CHECK(artifact != string);
 
@@ -191,16 +196,16 @@ TEST_CASE("Expression access", "[expression]") {  // NOLINT
         CHECK(map != Expression::FromJson(R"(["3",1])"_json));
 
         // compare nullptr != null != false != 0 != "" != [] != {}
-        auto exprs =
-            std::vector<ExpressionPtr>{ExpressionPtr{nullptr},
-                                       ExpressionPtr{artifact_t{path{""}}},
-                                       ExpressionPtr{result_t{}},
-                                       Expression::FromJson("null"_json),
-                                       Expression::FromJson("false"_json),
-                                       Expression::FromJson("0"_json),
-                                       Expression::FromJson(R"("")"_json),
-                                       Expression::FromJson("[]"_json),
-                                       Expression::FromJson("{}"_json)};
+        auto exprs = std::vector<ExpressionPtr>{
+            ExpressionPtr{nullptr},
+            ExpressionPtr{ArtifactDescription::CreateTree(path{""})},
+            ExpressionPtr{result_t{}},
+            Expression::FromJson("null"_json),
+            Expression::FromJson("false"_json),
+            Expression::FromJson("0"_json),
+            Expression::FromJson(R"("")"_json),
+            Expression::FromJson("[]"_json),
+            Expression::FromJson("{}"_json)};
         for (auto const& l : exprs) {
             for (auto const& r : exprs) {
                 if (&l != &r) {
@@ -287,8 +292,9 @@ concept ValidExpressionTypeOrPtr =
     Expression::IsValidType<T>() or std::is_same_v<T, ExpressionPtr>;
 
 template <ValidExpressionTypeOrPtr T>
-auto Add(ExpressionPtr const& expr, std::string const& key, T const& by)
-    -> ExpressionPtr {
+auto Add(ExpressionPtr const& expr,
+         std::string const& key,
+         T const& by) -> ExpressionPtr {
     try {
         auto new_map = Expression::map_t::underlying_map_t{};
         new_map.emplace(key, by);
@@ -299,8 +305,9 @@ auto Add(ExpressionPtr const& expr, std::string const& key, T const& by)
 }
 
 template <ValidExpressionTypeOrPtr T>
-auto Replace(ExpressionPtr const& expr, std::string const& key, T const& by)
-    -> ExpressionPtr {
+auto Replace(ExpressionPtr const& expr,
+             std::string const& key,
+             T const& by) -> ExpressionPtr {
     auto const& map = expr->Map();
     if (not map.contains(key)) {
         return ExpressionPtr{nullptr};
@@ -341,14 +348,9 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
         CHECK_FALSE(result);
     }
 
-    fcts = FunctionMap::MakePtr(
-        "literal", [](auto&& /*eval*/, auto const& expr, auto const& /*env*/) {
-            return expr->Get("$1", Expression::none_t{});
-        });
-
     SECTION("custom function") {
         auto expr = Expression::FromJson(R"(
-            { "type": "literal"
+            { "type": "'"
             , "$1": "PLACEHOLDER" })"_json);
         REQUIRE(expr);
 
@@ -383,6 +385,76 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
         REQUIRE(overwrite);
         REQUIRE(overwrite->IsList());
         CHECK(overwrite == Expression::FromJson(R"(["bar"])"_json));
+    }
+
+    SECTION("quote expression") {
+        auto expr = Expression::FromJson(R"(
+          {"type": "'", "$1": {"type": "var", "name": "this is literal"}}
+        )"_json);
+        REQUIRE(expr);
+
+        auto result = expr.Evaluate(env, fcts);
+        CHECK(result == Expression::FromJson(R"(
+          {"type": "var", "name": "this is literal"})"_json));
+
+        auto expr_empty = Expression::FromJson(R"({"type": "'"})"_json);
+        REQUIRE(expr_empty);
+        auto result_empty = expr_empty.Evaluate(env, fcts);
+        CHECK(result_empty == Expression::FromJson(R"(null)"_json));
+    }
+
+    SECTION("quasi-quote expression") {
+        auto expr = Expression::FromJson(R"({"type": "`", "$1":
+          { "foo": {"type": ",", "$1": {"type": "var", "name": "foo_var"}}
+          , "bar": [ 1, 2, ["deep", "literals"]
+                   , {"type": ",@", "$1": {"type": "var", "name": "bar_var"}}
+                   , 3
+                   , {"type": ",", "$1": {"type": "var", "name": "bar_plain"}}
+                   , 4, 5
+                   , {"type": ",", "$1": {"type": "var", "name": "foo_var"}}
+                   , [ "deep", "expansion"
+                    , {"type": ",", "$1": {"type": "var", "name": "bar_plain"}}
+                    , {"type": ",@", "$1": {"type": "var", "name": "bar_var"}}
+                    , {"type": ",", "$1": {"type": "var", "name": "foo_var"}}
+                    ]
+                   ]
+          }
+        })"_json);
+        REQUIRE(expr);
+        env = env.Update("foo_var", "foo value"s);
+        env = env.Update("bar_var",
+                         Expression::FromJson(R"(["b", "a", "r"])"_json));
+        env =
+            env.Update("bar_plain",
+                       Expression::FromJson(R"(["kept", "as", "list"])"_json));
+        auto result = expr.Evaluate(env, fcts);
+        auto expected = Expression::FromJson(R"(
+          { "foo": "foo value"
+          , "bar": [ 1, 2, ["deep", "literals"]
+                   , "b", "a", "r"
+                   , 3
+                   , ["kept", "as", "list"]
+                   , 4, 5
+                   , "foo value"
+                   , [ "deep", "expansion"
+                     , ["kept", "as", "list"]
+                     , "b", "a", "r"
+                     , "foo value"
+                     ]
+                   ]
+         })"_json);
+
+        CHECK(result == expected);
+
+        auto doc_example_a = Expression::FromJson(
+            R"({"type": "`", "$1": [1, 2, {"type": ",@", "$1": [3, 4]}]})"_json);
+        auto result_a = doc_example_a.Evaluate(env, fcts);
+        CHECK(result_a == Expression::FromJson(R"([1, 2, 3, 4])"_json));
+
+        auto doc_example_b = Expression::FromJson(
+            R"({"type": "`", "$1": [1, 2, {"type": ",", "$1": [3, 4]}]})"_json);
+        auto result_b = doc_example_b.Evaluate(env, fcts);
+        CHECK(result_b == Expression::FromJson(R"([1, 2, [3, 4]])"_json));
     }
 
     SECTION("if expression") {
@@ -459,7 +531,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
 
         SECTION("Map condition") {
             auto literal = Expression::FromJson(
-                R"({"type": "literal", "$1": {"foo": "bar"}})"_json);
+                R"({"type": "'", "$1": {"foo": "bar"}})"_json);
             REQUIRE(literal);
             expr = Replace(expr, "cond", literal);
             REQUIRE(expr);
@@ -469,7 +541,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
             CHECK(success == Expression::FromJson(R"("success")"_json));
 
             auto empty =
-                Expression::FromJson(R"({"type": "literal", "$1": {}})"_json);
+                Expression::FromJson(R"({"type": "'", "$1": {}})"_json);
             REQUIRE(empty);
             expr = Replace(expr, "cond", empty);
             REQUIRE(expr);
@@ -700,7 +772,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
 
         // test evaluation of list elements
         expr = Replace(expr, "$1", list_t{foo, Expression::FromJson(R"(
-            {"type": "literal"
+            {"type": "'"
             , "$1": true})"_json)});
         REQUIRE(expr);
         auto evaluated = expr.Evaluate(env, fcts);
@@ -751,7 +823,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
 
         // test evaluation of list elements
         expr = Replace(expr, "$1", list_t{foo, Expression::FromJson(R"(
-            {"type": "literal"
+            {"type": "'"
             , "$1": true})"_json)});
         REQUIRE(expr);
         auto evaluated = expr.Evaluate(env, fcts);
@@ -875,6 +947,19 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
         CHECK(result == Expression::FromJson(R"(
              ["libg.a", "libe.a", "libf.a", "libc.a", "libd.a", "libb.a", "liba.a"]
              )"_json));
+    }
+
+    SECTION("nub_left expression") {
+        auto expr = Expression::FromJson(R"(
+             {"type": "nub_left"
+             , "$1": ["a", "b", "b", "a", "c", "b", "a"]
+             })"_json);
+        REQUIRE(expr);
+
+        auto result = expr.Evaluate(env, fcts);
+        REQUIRE(result);
+        REQUIRE(result->IsList());
+        CHECK(result == Expression::FromJson(R"(["a", "b", "c"])"_json));
     }
 
     SECTION("change_ending") {
@@ -1068,7 +1153,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
     SECTION("keys expression") {
         auto expr = Expression::FromJson(R"(
             { "type": "keys"
-            , "$1": { "type": "literal"
+            , "$1": { "type": "'"
                     , "$1": { "foo": true
                             , "bar": false
                             , "baz": true }}})"_json);
@@ -1083,7 +1168,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
     SECTION("values expression") {
         auto expr = Expression::FromJson(R"(
             { "type": "values"
-            , "$1": { "type": "literal"
+            , "$1": { "type": "'"
                     , "$1": { "foo": true
                             , "bar": "foo"
                             , "baz": 1 }}})"_json);
@@ -1099,7 +1184,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
         auto expr = Expression::FromJson(R"(
             { "type": "lookup"
             , "key": "PLACEHOLDER"
-            , "map": { "type": "literal"
+            , "map": { "type": "'"
                     , "$1": { "foo": true
                             , "bar": 1 }}})"_json);
         REQUIRE(expr);
@@ -1138,7 +1223,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
         auto expr = Expression::FromJson(R"(
             { "type": "lookup"
             , "key": "PLACEHOLDER"
-            , "map": { "type": "literal"
+            , "map": { "type": "'"
                      , "$1": { "foo": false
                              , "bar": 1
                              , "baz" : null}}
@@ -1266,14 +1351,14 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
             , "$1": "PLACEHOLDER" })"_json);
         REQUIRE(expr);
 
-        auto literal_foo = Expression::FromJson(
-            R"({"type": "literal", "$1": {"foo":true}})"_json);
+        auto literal_foo =
+            Expression::FromJson(R"({"type": "'", "$1": {"foo":true}})"_json);
         REQUIRE(literal_foo);
-        auto literal_foo_false = Expression::FromJson(
-            R"({"type": "literal", "$1": {"foo":false}})"_json);
+        auto literal_foo_false =
+            Expression::FromJson(R"({"type": "'", "$1": {"foo":false}})"_json);
         REQUIRE(literal_foo_false);
-        auto literal_bar = Expression::FromJson(
-            R"({"type": "literal", "$1": {"bar":false}})"_json);
+        auto literal_bar =
+            Expression::FromJson(R"({"type": "'", "$1": {"bar":false}})"_json);
         REQUIRE(literal_bar);
 
         expr = Replace(expr, "$1", list_t{literal_foo, literal_bar});
@@ -1309,7 +1394,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
     SECTION("map_union expression") {
         auto expr = Expression::FromJson(R"(
             { "type": "map_union"
-            , "$1": { "type": "literal"
+            , "$1": { "type": "'"
                     , "$1": [ {"foo": true}
                             , {"bar": false}] }})"_json);
         REQUIRE(expr);
@@ -1333,7 +1418,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
         auto expr = Expression::FromJson(R"(
             { "type": "to_subdir"
             , "subdir": "prefix"
-            , "$1": { "type": "literal"
+            , "$1": { "type": "'"
                     , "$1": { "foo": "hello"
                             , "bar": "world" }}})"_json);
         REQUIRE(expr);
@@ -1350,7 +1435,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
         auto expr = Expression::FromJson(R"(
             { "type": "to_subdir"
             , "subdir": "prefix"
-            , "$1": { "type": "literal"
+            , "$1": { "type": "'"
                     , "$1": { "foo": "hello"
                             , "./foo": "world" }}})"_json);
         REQUIRE(expr);
@@ -1363,7 +1448,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
             { "type": "to_subdir"
             , "subdir": "prefix"
             , "flat" : "YES"
-            , "$1": { "type": "literal"
+            , "$1": { "type": "'"
                     , "$1": { "foobar/data/foo": "hello"
                             , "foobar/include/foo": "hello"
                             , "bar": "world" }}})"_json);
@@ -1382,12 +1467,66 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
             { "type": "to_subdir"
             , "subdir": "prefix"
             , "flat" : "YES"
-            , "$1": { "type": "literal"
+            , "$1": { "type": "'"
                     , "$1": { "foobar/data/foo": "HELLO"
                             , "foobar/include/foo": "hello"
                             , "bar": "world" }}})"_json);
         REQUIRE(expr);
 
+        CHECK_FALSE(expr.Evaluate(env, fcts));
+    }
+
+    SECTION("from_subdir") {
+        auto expr = Expression::FromJson(R"(
+       {"type": "from_subdir", "subdir": "foo"
+       , "$1": {"type": "'", "$1":
+          { "foo/a/b/c": "abc.txt"
+          , "foo/a/other": "other.txt"
+          , "foo/top": "top.xt"
+          , "foo/a/b/../d/e": "make canonical"
+          , "bar/a/b/c": "ignore bar/a/b/c"
+          , "bar/a/b/../b/c": "also ingnore other path"
+          }}}
+      )"_json);
+        REQUIRE(expr);
+
+        auto result = expr.Evaluate(env, fcts);
+        REQUIRE(result);
+        CHECK(result == Expression::FromJson(R"(
+          { "a/b/c": "abc.txt"
+          , "a/other": "other.txt"
+          , "top": "top.xt"
+          , "a/d/e": "make canonical"
+          }
+      )"_json));
+    }
+
+    SECTION("from_subdir trivial conflict") {
+        auto expr = Expression::FromJson(R"(
+      {"type": "from_subdir", "subdir": "foo"
+       , "$1": {"type": "'", "$1":
+          { "foo/a/b/c": "abc.txt"
+          , "foo/a/b/../b/c": "abc.txt"
+          }}}
+      )"_json);
+        REQUIRE(expr);
+
+        auto result = expr.Evaluate(env, fcts);
+        REQUIRE(result);
+        CHECK(result == Expression::FromJson(R"(
+       {"a/b/c": "abc.txt"}
+      )"_json));
+    }
+
+    SECTION("from_subdir conflict") {
+        auto expr = Expression::FromJson(R"(
+       {"type": "from_subdir", "subdir": "foo"
+       , "$1": {"type": "'", "$1":
+          { "foo/a/b/c": "one value"
+          , "foo/a/b/../b/c": "different value"
+          }}}
+      )"_json);
+        REQUIRE(expr);
         CHECK_FALSE(expr.Evaluate(env, fcts));
     }
 
@@ -1436,7 +1575,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
 
         // range is map with one entry
         expr = Add(expr, "range", Expression::FromJson(R"(
-            { "type": "literal"
+            { "type": "'"
             , "$1": {"foo": "bar"}})"_json));
         REQUIRE(expr);
 
@@ -1447,7 +1586,7 @@ TEST_CASE("Expression Evaluation", "[expression]") {  // NOLINT
 
         // range is map with multiple entries
         expr = Replace(expr, "range", Expression::FromJson(R"(
-            { "type": "literal"
+            { "type": "'"
             , "$1": {"foo": "bar", "bar": "baz"}})"_json));
         REQUIRE(expr);
 
@@ -1697,7 +1836,7 @@ TEST_CASE("Expression hash computation", "[expression]") {
     auto boolean = ExpressionPtr{false};
     auto number = ExpressionPtr{number_t{}};
     auto string = ExpressionPtr{""s};
-    auto artifact = ExpressionPtr{artifact_t{path{""}}};
+    auto artifact = ExpressionPtr{ArtifactDescription::CreateTree(path{""})};
     auto result = ExpressionPtr{result_t{}};
     auto list = ExpressionPtr{list_t{}};
     auto map = ExpressionPtr{map_t{}};
@@ -1718,9 +1857,11 @@ TEST_CASE("Expression hash computation", "[expression]") {
     CHECK_FALSE(string->ToHash() == Expression{" "s}.ToHash());
 
     CHECK_FALSE(artifact->ToHash().empty());
-    CHECK(artifact->ToHash() == Expression{artifact_t{path{""}}}.ToHash());
-    CHECK_FALSE(artifact->ToHash() ==
-                Expression{artifact_t{path{" "}}}.ToHash());
+    CHECK(artifact->ToHash() ==
+          Expression{ArtifactDescription::CreateTree(path{""})}.ToHash());
+    CHECK_FALSE(
+        artifact->ToHash() ==
+        Expression{ArtifactDescription::CreateTree(path{" "})}.ToHash());
 
     CHECK_FALSE(result->ToHash().empty());
     CHECK(result->ToHash() == Expression{result_t{}}.ToHash());

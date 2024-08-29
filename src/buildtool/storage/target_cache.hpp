@@ -17,27 +17,30 @@
 
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "gsl/gsl"
-#include "nlohmann/json.hpp"
+#include "src/buildtool/build_engine/base_maps/entity_name_data.hpp"
+#include "src/buildtool/build_engine/expression/configuration.hpp"
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/storage/config.hpp"
-#include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/buildtool/storage/local_cas.hpp"
 #include "src/buildtool/storage/target_cache_entry.hpp"
 #include "src/buildtool/storage/target_cache_key.hpp"
-#include "src/utils/cpp/gsl.hpp"
+#include "src/buildtool/storage/uplinker.hpp"
 
 /// \brief The high-level target cache for storing export target's data.
-/// Supports global uplinking across all generations using the garbage
-/// collector. The uplink is automatically performed for every entry that is
-/// read and already exists in an older generation.
-/// \tparam kDoGlobalUplink     Enable global uplinking via garbage collector.
+/// Supports global uplinking across all generations. The uplink is
+/// automatically performed for every entry that is read and already exists in
+/// an older generation.
+/// \tparam kDoGlobalUplink     Enable global uplinking.
 template <bool kDoGlobalUplink>
 class TargetCache {
   public:
@@ -48,20 +51,15 @@ class TargetCache {
     using ArtifactDownloader =
         std::function<bool(std::vector<Artifact::ObjectInfo> const&)>;
 
-    TargetCache(std::shared_ptr<LocalCAS<kDoGlobalUplink>> cas,
-                std::filesystem::path const& store_path,
-                std::optional<std::string> const& explicit_shard = std::nullopt)
-        : cas_{std::move(cas)},
-          file_store_{explicit_shard ? store_path / *explicit_shard
-                                     : store_path / ComputeShard()},
-          explicit_shard_{explicit_shard} {
-        if (kDoGlobalUplink && not explicit_shard) {
-            // write backend description (shard) to CAS
-            [[maybe_unused]] auto id =
-                cas_->StoreBlob(StorageConfig::ExecutionBackendDescription());
-            EnsuresAudit(id and ArtifactDigest{*id}.hash() == ComputeShard());
-        }
-    }
+    explicit TargetCache(
+        gsl::not_null<LocalCAS<kDoGlobalUplink> const*> const& cas,
+        GenerationConfig const& config,
+        gsl::not_null<Uplinker<kDoGlobalUplink> const*> const& uplinker)
+        : cas_{*cas},
+          file_store_{config.target_cache /
+                      config.storage_config->backend_description_id},
+          uplinker_{*uplinker},
+          explicit_shard_{std::nullopt} {}
 
     /// \brief Returns a new TargetCache backed by the same CAS, but the
     /// FileStorage uses the given \p shard. This is particularly useful for the
@@ -71,10 +69,7 @@ class TargetCache {
     /// valid path.
     [[nodiscard]] auto WithShard(const std::optional<std::string>& shard) const
         -> TargetCache {
-        return shard
-                   ? TargetCache<kDoGlobalUplink>(
-                         cas_, file_store_.StorageRoot().parent_path(), *shard)
-                   : *this;
+        return shard ? TargetCache<kDoGlobalUplink>(*this, *shard) : *this;
     }
 
     TargetCache(TargetCache const&) = default;
@@ -93,6 +88,15 @@ class TargetCache {
         TargetCacheEntry const& value,
         ArtifactDownloader const& downloader) const noexcept -> bool;
 
+    /// \brief Calculate TargetCacheKey based on auxiliary information.
+    /// Doesn't create a TargetCacheEntry in the TargetCache.
+    /// \return TargetCacheKey on success.
+    [[nodiscard]] auto ComputeKey(
+        std::string const& repo_key,
+        BuildMaps::Base::NamedTarget const& target_name,
+        Configuration const& effective_config) const noexcept
+        -> std::optional<TargetCacheKey>;
+
     /// \brief Read existing entry and object info from the target cache.
     /// \param key  The target-cache key to read the entry from.
     /// \param shard Optional explicit shard, if the default is not intended.
@@ -108,7 +112,8 @@ class TargetCache {
     /// \param key      The target-cache key for the entry to uplink.
     /// \returns True if entry was successfully uplinked.
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
-    requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkEntry(
+        requires(kIsLocalGeneration)
+    [[nodiscard]] auto LocalUplinkEntry(
         LocalGenerationTC const& latest,
         TargetCacheKey const& key) const noexcept -> bool;
 
@@ -119,23 +124,27 @@ class TargetCache {
         kDoGlobalUplink ? StoreMode::LastWins : StoreMode::FirstWins;
 
     std::shared_ptr<Logger> logger_{std::make_shared<Logger>("TargetCache")};
-    gsl::not_null<std::shared_ptr<LocalCAS<kDoGlobalUplink>>> cas_;
+    LocalCAS<kDoGlobalUplink> const& cas_;
     FileStorage<ObjectType::File,
                 kStoreMode,
                 /*kSetEpochTime=*/false>
         file_store_;
+    Uplinker<kDoGlobalUplink> const& uplinker_;
     std::optional<std::string> explicit_shard_{std::nullopt};
 
+    explicit TargetCache(TargetCache const& other,
+                         std::string const& explicit_shard)
+        : cas_{other.cas_},
+          file_store_{other.file_store_.StorageRoot().parent_path() /
+                      explicit_shard},
+          uplinker_{other.uplinker_},
+          explicit_shard_{explicit_shard} {}
+
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
-    requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkEntry(
+        requires(kIsLocalGeneration)
+    [[nodiscard]] auto LocalUplinkEntry(
         LocalGenerationTC const& latest,
         std::string const& key_digest) const noexcept -> bool;
-
-    [[nodiscard]] static auto ComputeShard() noexcept -> std::string {
-        return ArtifactDigest::Create<ObjectType::File>(
-                   StorageConfig::ExecutionBackendDescription())
-            .hash();
-    }
 
     [[nodiscard]] auto DownloadKnownArtifacts(
         TargetCacheEntry const& value,

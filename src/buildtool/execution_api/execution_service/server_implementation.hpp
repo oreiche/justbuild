@@ -15,40 +15,47 @@
 #ifndef SERVER_IMPLEMENATION_HPP
 #define SERVER_IMPLEMENATION_HPP
 
+#include <cstdint>
 #include <fstream>
+#include <optional>
 #include <string>
 
-class ServerImpl {
+#include "gsl/gsl"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
+
+class ServerImpl final {
   public:
-    ServerImpl() noexcept = default;
-    [[nodiscard]] static auto Instance() noexcept -> ServerImpl& {
-        static ServerImpl x;
-        return x;
-    }
+    [[nodiscard]] static auto Create(
+        std::optional<std::string> interface,
+        std::optional<int> port,
+        std::optional<std::string> info_file,
+        std::optional<std::string> pid_file) noexcept
+        -> std::optional<ServerImpl>;
 
-    [[nodiscard]] static auto SetInterface(std::string const& x) noexcept
-        -> bool {
-        Instance().interface_ = x;
-        return true;
-    }
-
-    [[nodiscard]] static auto SetPidFile(std::string const& x) noexcept -> bool;
-
-    [[nodiscard]] static auto SetPort(int x) noexcept -> bool;
-
-    [[nodiscard]] static auto SetInfoFile(std::string const& x) noexcept
-        -> bool;
+    ~ServerImpl() noexcept = default;
 
     ServerImpl(ServerImpl const&) = delete;
     auto operator=(ServerImpl const&) noexcept -> ServerImpl& = delete;
 
-    ServerImpl(ServerImpl&&) noexcept = delete;
-    auto operator=(ServerImpl&&) noexcept -> ServerImpl& = delete;
+    ServerImpl(ServerImpl&&) noexcept = default;
+    auto operator=(ServerImpl&&) noexcept -> ServerImpl& = default;
 
-    auto Run() -> bool;
-    ~ServerImpl() = default;
+    /// \brief Start the execution service.
+    /// \param local_context    The LocalContext to be used.
+    /// \param remote_context   The RemoteContext to be used.
+    /// \param apis             Apis to be used, only local api is actually
+    ///                         needed.
+    /// \param op_exponent      Log2 threshold for operation cache.
+    auto Run(gsl::not_null<LocalContext const*> const& local_context,
+             gsl::not_null<RemoteContext const*> const& remote_context,
+             ApiBundle const& apis,
+             std::optional<std::uint8_t> op_exponent) -> bool;
 
   private:
+    ServerImpl() noexcept = default;
+
     std::string interface_{"127.0.0.1"};
     int port_{0};
     std::string info_file_{};

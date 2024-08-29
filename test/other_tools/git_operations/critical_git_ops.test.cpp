@@ -173,16 +173,16 @@ TEST_CASE("Critical git operations", "[critical_git_op_map]") {
                                   {
                                       path_init_commit,  // target_path
                                       "",                // git_hash
-                                      "",                // branch
-                                      "Init commit"      // message
+                                      "Init commit",     // message
+                                      path_init_commit   // source_path
                                   },
                               .op_type = GitOpType::INITIAL_COMMIT},
                      GitOpKey{.params =
                                   {
                                       path_init_bare,  // target_path
                                       "",              // git_hash
-                                      "",              // branch
                                       std::nullopt,    // message
+                                      std::nullopt,    // source_path
                                       true             // init_bare
                                   },
                               .op_type = GitOpType::ENSURE_INIT},
@@ -190,8 +190,8 @@ TEST_CASE("Critical git operations", "[critical_git_op_map]") {
                                   {
                                       path_init_non_bare,  // target_path
                                       "",                  // git_hash
-                                      "",                  // branch
                                       std::nullopt,        // message
+                                      std::nullopt,        // source_path
                                       false                // init_bare
                                   },
                               .op_type = GitOpType::ENSURE_INIT},
@@ -199,7 +199,6 @@ TEST_CASE("Critical git operations", "[critical_git_op_map]") {
                                   {
                                       *path_keep_tag,  // target_path
                                       kRootCommit,     // git_hash
-                                      "",              // branch
                                       "keep-commit"    // message
                                   },
                               .op_type = GitOpType::KEEP_TAG},
@@ -207,14 +206,12 @@ TEST_CASE("Critical git operations", "[critical_git_op_map]") {
                                   {
                                       *path_get_head_id,  // target_path
                                       "",                 // git_hash
-                                      "",                 // branch
                                   },
                               .op_type = GitOpType::GET_HEAD_ID},
                      GitOpKey{.params =
                                   {
                                       *path_keep_tree,  // target_path
                                       kBazSymId,        // git_hash
-                                      "",               // branch
                                       "keep-tree"       // message
                                   },
                               .op_type = GitOpType::KEEP_TREE}},

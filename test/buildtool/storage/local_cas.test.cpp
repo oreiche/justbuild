@@ -17,17 +17,23 @@
 
 #include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
-#include "test/utils/hermeticity/local.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
+#include "test/utils/blob_creator.hpp"
+#include "test/utils/hermeticity/test_storage_config.hpp"
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalCAS: Add blob to storage from bytes",
-                 "[storage]") {
+TEST_CASE("LocalCAS: Add blob to storage from bytes", "[storage]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const& cas = storage.CAS();
+
     std::string test_bytes("test");
 
-    auto const& cas = Storage::Instance().CAS();
-    auto test_digest = ArtifactDigest::Create<ObjectType::File>(test_bytes);
+    auto test_digest = ArtifactDigest::Create<ObjectType::File>(
+        storage_config.Get().hash_function, test_bytes);
 
     // check blob not in storage
     CHECK(not cas.BlobPath(test_digest, true));
@@ -68,14 +74,17 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalCAS: Add blob to storage from non-executable file",
-                 "[storage]") {
+TEST_CASE("LocalCAS: Add blob to storage from non-executable file",
+          "[storage]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const& cas = storage.CAS();
+
     std::filesystem::path non_exec_file{
         "test/buildtool/storage/data/non_executable_file"};
 
-    auto const& cas = Storage::Instance().CAS();
-    auto test_blob = CreateBlobFromPath(non_exec_file);
+    auto test_blob =
+        CreateBlobFromPath(non_exec_file, storage_config.Get().hash_function);
     REQUIRE(test_blob);
 
     // check blob not in storage
@@ -117,14 +126,16 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalCAS: Add blob to storage from executable file",
-                 "[storage]") {
+TEST_CASE("LocalCAS: Add blob to storage from executable file", "[storage]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const& cas = storage.CAS();
+
     std::filesystem::path exec_file{
         "test/buildtool/storage/data/executable_file"};
 
-    auto const& cas = Storage::Instance().CAS();
-    auto test_blob = CreateBlobFromPath(exec_file);
+    auto test_blob =
+        CreateBlobFromPath(exec_file, storage_config.Get().hash_function);
     REQUIRE(test_blob);
 
     // check blob not in storage

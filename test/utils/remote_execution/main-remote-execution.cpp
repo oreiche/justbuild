@@ -21,13 +21,14 @@
 
 #include "catch2/catch_session.hpp"
 #include "catch2/catch_test_macros.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/file_system/git_context.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
-#include "src/buildtool/storage/storage.hpp"
 #include "test/utils/logging/log_config.hpp"
+#include "test/utils/remote_execution/test_auth_config.hpp"
+#include "test/utils/remote_execution/test_remote_config.hpp"
 #include "test/utils/test_env.hpp"
 
 namespace {
@@ -40,39 +41,18 @@ void wait_for_grpc_to_shutdown() {
 /// \brief Configure remote execution from test environment. In case the
 /// environment variable is malformed, we write a message and stop execution.
 /// \returns true   If remote execution was successfully configured.
-[[nodiscard]] auto ConfigureRemoteExecution() -> bool {
+void ConfigureRemoteExecution() {
     ReadCompatibilityFromEnv();
-    if (not ReadTLSAuthArgsFromEnv()) {
-        return false;
-    }
-    HashFunction::SetHashType(Compatibility::IsCompatible()
-                                  ? HashFunction::JustHash::Compatible
-                                  : HashFunction::JustHash::Native);
-    auto address = ReadRemoteAddressFromEnv();
-    if (address and not RemoteExecutionConfig::SetRemoteAddress(*address)) {
-        Logger::Log(LogLevel::Error, "parsing address '{}' failed.", *address);
+
+    // Ensure authentication config is available
+    if (not TestAuthConfig::ReadFromEnvironment()) {
         std::exit(EXIT_FAILURE);
     }
-    for (auto const& property : ReadPlatformPropertiesFromEnv()) {
-        if (not RemoteExecutionConfig::AddPlatformProperty(property)) {
-            Logger::Log(
-                LogLevel::Error, "parsing property '{}' failed.", property);
-            std::exit(EXIT_FAILURE);
-        }
-    }
-    return static_cast<bool>(RemoteExecutionConfig::RemoteAddress());
-}
 
-[[nodiscard]] auto ConfigureBuildRoot() -> bool {
-    auto cache_dir = FileSystemManager::GetCurrentDirectory() / "cache";
-    if (not FileSystemManager::CreateDirectoryExclusive(cache_dir) or
-        not StorageConfig::SetBuildRoot(cache_dir)) {
-        return false;
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    if (not remote_config or remote_config->remote_address == std::nullopt) {
+        std::exit(EXIT_FAILURE);
     }
-    // After the build root has been changed, the file roots of the
-    // static storage instances need to be updated.
-    Storage::Reinitialize();
-    return true;
 }
 
 }  // namespace
@@ -80,13 +60,7 @@ void wait_for_grpc_to_shutdown() {
 auto main(int argc, char* argv[]) -> int {
     ConfigureLogging();
 
-    if (not ConfigureBuildRoot()) {
-        return EXIT_FAILURE;
-    }
-
-    if (not ConfigureRemoteExecution()) {
-        return EXIT_FAILURE;
-    }
+    ConfigureRemoteExecution();
 
     /**
      * The current implementation of libgit2 uses pthread_key_t incorrectly

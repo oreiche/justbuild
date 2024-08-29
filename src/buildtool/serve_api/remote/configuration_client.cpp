@@ -12,29 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef BOOTSTRAP_BUILD_TOOL
+
 #include "src/buildtool/serve_api/remote/configuration_client.hpp"
 
 #include <exception>
 #include <optional>
 
 #include "nlohmann/json.hpp"
-#include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/logging/log_level.hpp"
-#include "src/buildtool/serve_api/remote/config.hpp"
 
-auto ConfigurationClient::CheckServeRemoteExecution() noexcept -> bool {
-    auto client_remote_address = RemoteExecutionConfig::RemoteAddress();
-    if (!client_remote_address) {
+ConfigurationClient::ConfigurationClient(
+    ServerAddress address,
+    gsl::not_null<RemoteContext const*> const& remote_context) noexcept
+    : client_serve_address_{std::move(address)},
+      remote_config_{*remote_context->exec_config} {
+    stub_ = justbuild::just_serve::Configuration::NewStub(
+        CreateChannelWithCredentials(client_serve_address_.host,
+                                     client_serve_address_.port,
+                                     remote_context->auth));
+}
+
+auto ConfigurationClient::CheckServeRemoteExecution() const noexcept -> bool {
+    auto const client_remote_address = remote_config_.remote_address;
+    if (not client_remote_address) {
         logger_.Emit(LogLevel::Error,
                      "Internal error: the remote execution endpoint should "
                      "have been set.");
-        return false;
-    }
-    auto client_serve_address = RemoteServeConfig::RemoteAddress();
-    if (!client_serve_address) {
-        logger_.Emit(
-            LogLevel::Error,
-            "Internal error: the serve endpoint should have been set.");
         return false;
     }
 
@@ -61,10 +66,10 @@ auto ConfigurationClient::CheckServeRemoteExecution() noexcept -> bool {
             // NOTE: This check might make sense to be removed altogether in the
             // future, or updated to (at most) a warning.
             if (client_remote_address->ToJson() ==
-                client_serve_address->ToJson()) {
+                client_serve_address_.ToJson()) {
                 return true;
             }
-            serve_msg = client_serve_address->ToJson().dump();
+            serve_msg = client_serve_address_.ToJson().dump();
         }
         else {
             nlohmann::json serve_remote_endpoint{};
@@ -101,7 +106,7 @@ auto ConfigurationClient::CheckServeRemoteExecution() noexcept -> bool {
     return false;
 }
 
-auto ConfigurationClient::IsCompatible() noexcept -> std::optional<bool> {
+auto ConfigurationClient::IsCompatible() const noexcept -> std::optional<bool> {
     grpc::ClientContext context;
     justbuild::just_serve::CompatibilityRequest request{};
     justbuild::just_serve::CompatibilityResponse response{};
@@ -113,3 +118,5 @@ auto ConfigurationClient::IsCompatible() noexcept -> std::optional<bool> {
     }
     return response.compatible();
 }
+
+#endif  // BOOTSTRAP_BUILD_TOOL

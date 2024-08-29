@@ -15,18 +15,30 @@
 #include "src/other_tools/just_mr/fetch.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <utility>  // std::move
 
 #include "fmt/core.h"
 #include "nlohmann/json.hpp"
+#include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
-#include "src/buildtool/execution_api/local/local_api.hpp"
+#include "src/buildtool/execution_api/local/config.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
+#include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/main/retry.hpp"
+#include "src/buildtool/multithreading/async_map_utils.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
+#include "src/buildtool/serve_api/remote/config.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress_reporter.hpp"
+#include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
 #include "src/other_tools/just_mr/setup_utils.hpp"
 #include "src/other_tools/ops_maps/archive_fetch_map.hpp"
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
@@ -40,6 +52,9 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                     MultiRepoSetupArguments const& setup_args,
                     MultiRepoFetchArguments const& fetch_args,
                     MultiRepoRemoteAuthArguments const& auth_args,
+                    RetryArguments const& retry_args,
+                    StorageConfig const& storage_config,
+                    Storage const& storage,
                     std::string multi_repository_tool_name) -> int {
     // provide report
     Logger::Log(LogLevel::Info, "Performing repositories fetch");
@@ -389,42 +404,88 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
         Logger::Log(LogLevel::Info, "Found {} to fetch", fetchables);
     }
 
+    // setup local execution config
+    auto local_exec_config =
+        JustMR::Utils::CreateLocalExecutionConfig(common_args);
+    if (not local_exec_config) {
+        return kExitConfigError;
+    }
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &*local_exec_config,
+                                     .storage_config = &storage_config,
+                                     .storage = &storage};
+
+    // setup authentication config
+    auto auth_config = JustMR::Utils::CreateAuthConfig(auth_args);
+    if (not auth_config) {
+        return kExitConfigError;
+    }
+
+    // setup the retry config
+    auto retry_config = CreateRetryConfig(retry_args);
+    if (not retry_config) {
+        return kExitConfigError;
+    }
+
+    // setup remote execution config
+    auto remote_exec_config = JustMR::Utils::CreateRemoteExecutionConfig(
+        common_args.remote_execution_address, common_args.remote_serve_address);
+    if (not remote_exec_config) {
+        return kExitConfigError;
+    }
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = &*auth_config,
+                                       .retry_config = &*retry_config,
+                                       .exec_config = &*remote_exec_config};
+
     // setup the APIs for archive fetches; only happens if in native mode
-    auto remote_api =
-        JustMR::Utils::GetRemoteApi(common_args.remote_execution_address,
-                                    common_args.remote_serve_address,
-                                    auth_args);
-    IExecutionApi::Ptr local_api{std::make_unique<LocalApi>()};
-    bool remote_compatible{common_args.compatible == true};
+    auto const apis = ApiBundle::Create(&local_context,
+                                        &remote_context,
+                                        /*repo_config=*/nullptr);
+
+    bool const has_remote_api =
+        apis.local != apis.remote and not common_args.compatible;
 
     // setup the API for serving roots
-    auto serve_api_exists = JustMR::Utils::SetupServeApi(
-        common_args.remote_serve_address, auth_args);
+    auto serve_config =
+        JustMR::Utils::CreateServeConfig(common_args.remote_serve_address);
+    if (not serve_config) {
+        return kExitConfigError;
+    }
 
+    auto serve =
+        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
     // check configuration of the serve endpoint provided
-    if (serve_api_exists) {
+    if (serve) {
+        // if we have a remote endpoint explicitly given by the user, it must
+        // match what the serve endpoint expects
+        if (common_args.remote_execution_address and
+            not serve->CheckServeRemoteExecution()) {
+            return kExitFetchError;  // this check logs error on failure
+        }
+
         // check the compatibility mode of the serve endpoint
-        auto compatible = ServeApi::IsCompatible();
+        auto compatible = serve->IsCompatible();
         if (not compatible) {
             Logger::Log(LogLevel::Warning,
                         "Checking compatibility configuration of the provided "
                         "serve endpoint failed. Serve endpoint ignored.");
-            serve_api_exists = false;
+            serve = std::nullopt;
         }
-        if (*compatible != remote_compatible) {
+        if (*compatible != common_args.compatible) {
             Logger::Log(
                 LogLevel::Warning,
                 "Provided serve endpoint operates in a different compatibility "
                 "mode than stated. Serve endpoint ignored.");
-            serve_api_exists = false;
-        }
-        // if we have a remote endpoint explicitly given by the user, it must
-        // match what the serve endpoint expects
-        if (remote_api and common_args.remote_execution_address and
-            not ServeApi::CheckServeRemoteExecution()) {
-            return kExitFetchError;  // this check logs error on failure
+            serve = std::nullopt;
         }
     }
+
+    // setup progress and statistics instances
+    JustMRStatistics stats{};
+    JustMRProgress progress{nr_a + nr_gt};
 
     // create async maps
     auto crit_git_op_ptr = std::make_shared<CriticalGitOpGuard>();
@@ -435,26 +496,29 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                             common_args.alternative_mirrors,
                             common_args.ca_info,
                             &critical_git_op_map,
-                            serve_api_exists,
-                            &(*local_api),
-                            (remote_api and not remote_compatible)
-                                ? std::make_optional(&(*remote_api))
-                                : std::nullopt,
+                            serve ? &*serve : nullptr,
+                            &storage_config,
+                            &storage,
+                            &(*apis.local),
+                            has_remote_api ? &*apis.remote : nullptr,
+                            &progress,
                             common_args.jobs);
 
     auto archive_fetch_map = CreateArchiveFetchMap(
         &content_cas_map,
         *fetch_dir,
-        &(*local_api),
-        (fetch_args.backup_to_remote and remote_api and not remote_compatible)
-            ? std::make_optional(&(*remote_api))
-            : std::nullopt,
+        &storage,
+        &(*apis.local),
+        (fetch_args.backup_to_remote and has_remote_api) ? &*apis.remote
+                                                         : nullptr,
+        &stats,
         common_args.jobs);
 
     auto import_to_git_map =
         CreateImportToGitMap(&critical_git_op_map,
                              common_args.git_path->string(),
                              *common_args.local_launcher,
+                             &storage_config,
                              common_args.jobs);
 
     auto git_tree_fetch_map =
@@ -462,30 +526,32 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                               &import_to_git_map,
                               common_args.git_path->string(),
                               *common_args.local_launcher,
-                              serve_api_exists,
-                              &(*local_api),
-                              (remote_api and not remote_compatible)
-                                  ? std::make_optional(&(*remote_api))
-                                  : std::nullopt,
+                              serve ? &*serve : nullptr,
+                              &storage_config,
+                              &(*apis.local),
+                              has_remote_api ? &*apis.remote : nullptr,
                               fetch_args.backup_to_remote,
+                              &progress,
                               common_args.jobs);
 
     // set up progress observer
-    JustMRProgress::Instance().SetTotal(static_cast<int>(nr_a + nr_gt));
     std::atomic<bool> done{false};
     std::condition_variable cv{};
-    auto reporter = JustMRProgressReporter::Reporter();
+    auto reporter = JustMRProgressReporter::Reporter(&stats, &progress);
     auto observer =
         std::thread([reporter, &done, &cv]() { reporter(&done, &cv); });
 
     // do the fetch
     bool failed_archives{false};
+    bool has_value_archives{false};
     {
         TaskSystem ts{common_args.jobs};
         archive_fetch_map.ConsumeAfterKeysReady(
             &ts,
             archives_to_fetch,
-            []([[maybe_unused]] auto const& values) {},
+            [&has_value_archives]([[maybe_unused]] auto const& values) {
+                has_value_archives = true;
+            },
             [&failed_archives, &multi_repository_tool_name](auto const& msg,
                                                             bool fatal) {
                 Logger::Log(fatal ? LogLevel::Error : LogLevel::Warning,
@@ -496,12 +562,15 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
             });
     }
     bool failed_git_trees{false};
+    bool has_value_trees{false};
     {
         TaskSystem ts{common_args.jobs};
         git_tree_fetch_map.ConsumeAfterKeysReady(
             &ts,
             git_trees_to_fetch,
-            []([[maybe_unused]] auto const& values) {},
+            [&has_value_trees]([[maybe_unused]] auto const& values) {
+                has_value_trees = true;
+            },
             [&failed_git_trees, &multi_repository_tool_name](auto const& msg,
                                                              bool fatal) {
                 Logger::Log(fatal ? LogLevel::Error : LogLevel::Warning,
@@ -518,6 +587,13 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
     observer.join();
 
     if (failed_archives or failed_git_trees) {
+        return kExitFetchError;
+    }
+    if (not has_value_archives or not has_value_trees) {
+        DetectAndReportPending(
+            "fetch archives", archive_fetch_map, kArchiveContentPrinter);
+        DetectAndReportPending(
+            "fetch trees", git_tree_fetch_map, kGitTreeInfoPrinter);
         return kExitFetchError;
     }
     // report success

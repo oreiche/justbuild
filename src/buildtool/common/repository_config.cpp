@@ -14,7 +14,6 @@
 
 #include "src/buildtool/common/repository_config.hpp"
 
-#include "src/buildtool/storage/storage.hpp"
 #include "src/utils/automata/dfa_minimizer.hpp"
 
 auto RepositoryConfig::RepositoryInfo::BaseContentDescription() const
@@ -35,15 +34,17 @@ auto RepositoryConfig::RepositoryInfo::BaseContentDescription() const
     return std::nullopt;
 }
 
-auto RepositoryConfig::RepositoryKey(std::string const& repo) const noexcept
+auto RepositoryConfig::RepositoryKey(Storage const& storage,
+                                     std::string const& repo) const noexcept
     -> std::optional<std::string> {
-    auto const& unique = DeduplicateRepo(repo);
+    auto const unique = DeduplicateRepo(repo, storage.GetHashFunction());
     if (auto const* data = Data(unique)) {
         // compute key only once (thread-safe)
         return data->key.SetOnceAndGet(
-            [this, &unique]() -> std::optional<std::string> {
-                if (auto graph = BuildGraphForRepository(unique)) {
-                    auto const& cas = Storage::Instance().CAS();
+            [this, &storage, &unique]() -> std::optional<std::string> {
+                if (auto graph = BuildGraphForRepository(
+                        unique, storage.GetHashFunction())) {
+                    auto const& cas = storage.CAS();
                     if (auto digest = cas.StoreBlob(graph->dump(2))) {
                         return ArtifactDigest{*digest}.hash();
                     }
@@ -55,10 +56,11 @@ auto RepositoryConfig::RepositoryKey(std::string const& repo) const noexcept
 }
 
 // Obtain canonical name (according to bisimulation) for the given repository.
-auto RepositoryConfig::DeduplicateRepo(std::string const& repo) const
-    -> std::string const& {
+auto RepositoryConfig::DeduplicateRepo(std::string const& repo,
+                                       HashFunction hash_function) const
+    -> std::string {
     // Compute duplicates map only once (thread-safe)
-    auto const& duplicates = duplicates_.SetOnceAndGet([this] {
+    auto const& duplicates = duplicates_.SetOnceAndGet([this, &hash_function] {
         // To detect duplicate repository descriptions, we represent each
         // repository as a DFA state with repo name as state name, repo
         // bindings as state transitions, and repo base description as state
@@ -76,7 +78,7 @@ auto RepositoryConfig::DeduplicateRepo(std::string const& repo) const
             if (data.base_desc) {
                 // Use hash of content-fixed base description as content id
                 auto hash =
-                    HashFunction::ComputeHash(data.base_desc->dump()).Bytes();
+                    hash_function.PlainHashData(data.base_desc->dump()).Bytes();
                 // Add state with name, transitions, and content id
                 minimizer.AddState(repo, data.info.name_mapping, hash);
             }
@@ -94,12 +96,14 @@ auto RepositoryConfig::DeduplicateRepo(std::string const& repo) const
 
 // Returns the repository-local representation of its dependency graph if all
 // contained repositories are content fixed or return std::nullopt otherwise.
-auto RepositoryConfig::BuildGraphForRepository(std::string const& repo) const
+auto RepositoryConfig::BuildGraphForRepository(std::string const& repo,
+                                               HashFunction hash_function) const
     -> std::optional<nlohmann::json> {
     auto graph = nlohmann::json::object();
     int id_counter{};
     std::unordered_map<std::string, std::string> repo_ids{};
-    if (AddToGraphAndGetId(&graph, &id_counter, &repo_ids, repo)) {
+    if (AddToGraphAndGetId(
+            &graph, &id_counter, &repo_ids, repo, hash_function)) {
         return graph;
     }
     return std::nullopt;
@@ -115,8 +119,9 @@ auto RepositoryConfig::AddToGraphAndGetId(
     gsl::not_null<int*> const& id_counter,
     gsl::not_null<std::unordered_map<std::string, std::string>*> const&
         repo_ids,
-    std::string const& repo) const -> std::optional<std::string> {
-    auto const& unique_repo = DeduplicateRepo(repo);
+    std::string const& repo,
+    HashFunction hash_function) const -> std::optional<std::string> {
+    auto const unique_repo = DeduplicateRepo(repo, hash_function);
     auto repo_it = repo_ids->find(unique_repo);
     if (repo_it != repo_ids->end()) {
         // The same or equivalent repository was already requested before
@@ -134,8 +139,8 @@ auto RepositoryConfig::AddToGraphAndGetId(
         auto repo_desc = *data->base_desc;
         repo_desc["bindings"] = nlohmann::json::object();
         for (auto const& [local_name, global_name] : data->info.name_mapping) {
-            auto global_id =
-                AddToGraphAndGetId(graph, id_counter, repo_ids, global_name);
+            auto global_id = AddToGraphAndGetId(
+                graph, id_counter, repo_ids, global_name, hash_function);
             if (not global_id) {
                 return std::nullopt;
             }

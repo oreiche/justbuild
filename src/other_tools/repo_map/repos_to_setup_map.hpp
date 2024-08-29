@@ -16,12 +16,14 @@
 #define INCLUDED_SRC_OTHER_TOOLS_REPO_MAP_REPOS_TO_SETUP_MAP_HPP
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 
 #include "gsl/gsl"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
+#include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
 #include "src/other_tools/root_maps/commit_git_map.hpp"
 #include "src/other_tools/root_maps/content_git_map.hpp"
 #include "src/other_tools/root_maps/distdir_git_map.hpp"
@@ -44,6 +46,12 @@ auto CreateReposToSetupMap(
     gsl::not_null<DistdirGitMap*> const& distdir_git_map,
     gsl::not_null<TreeIdGitMap*> const& tree_id_git_map,
     bool fetch_absent,
+    gsl::not_null<JustMRStatistics*> const& stats,
     std::size_t jobs) -> ReposToSetupMap;
+
+// use explicit cast to std::function to allow template deduction when used
+static const std::function<std::string(std::string const&)>
+    kReposToSetupPrinter =
+        [](std::string const& x) -> std::string { return x; };
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_REPO_MAP_REPOS_TO_SETUP_MAP_HPP

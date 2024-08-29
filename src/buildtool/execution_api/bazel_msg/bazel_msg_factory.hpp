@@ -23,14 +23,15 @@
 #include <string>
 #include <vector>
 
+#include "gsl/gsl"
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
 #include "src/buildtool/execution_api/bazel_msg/directory_tree.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
-#include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
@@ -39,47 +40,29 @@
 /// communication.
 class BazelMsgFactory {
   public:
-    using BlobStoreFunc = std::function<void(BazelBlob&&)>;
-    using InfoStoreFunc = std::function<bool(std::filesystem::path const&,
-                                             Artifact::ObjectInfo const&)>;
+    /// \brief Store or otherwise process a blob. Returns success flag.
+    using BlobProcessFunc = std::function<bool(BazelBlob&&)>;
     using LinkDigestResolveFunc =
         std::function<void(std::vector<bazel_re::Digest> const&,
                            std::vector<std::string>*)>;
     using FileStoreFunc = std::function<
         std::optional<bazel_re::Digest>(std::filesystem::path const&, bool)>;
-    using DirStoreFunc = std::function<std::optional<bazel_re::Digest>(
-        std::string const&,
-        bazel_re::Directory const&)>;
     using SymlinkStoreFunc =
         std::function<std::optional<bazel_re::Digest>(std::string const&)>;
-    using TreeStoreFunc = std::function<std::optional<bazel_re::Digest>(
-        std::string const&,
-        GitRepo::tree_entries_t const&)>;
+    using TreeStoreFunc =
+        std::function<std::optional<bazel_re::Digest>(std::string const&)>;
 
-    /// \brief Read object infos from directory.
-    /// \returns true on success.
-    [[nodiscard]] static auto ReadObjectInfosFromDirectory(
-        bazel_re::Directory const& dir,
-        InfoStoreFunc const& store_info) noexcept -> bool;
-
-    /// \brief Read object infos from git tree.
-    /// \returns true on success.
-    [[nodiscard]] static auto ReadObjectInfosFromGitTree(
-        GitRepo::tree_entries_t const& entries,
-        InfoStoreFunc const& store_info) noexcept -> bool;
-
-    /// \brief Create Directory digest from artifact tree structure.
-    /// Recursively traverse entire tree and create blobs for sub-directories.
+    /// \brief Create Directory digest from artifact tree structure. Uses
+    /// compatible HashFunction for hashing. Recursively traverse entire tree
+    /// and create blobs for sub-directories.
     /// \param tree           Directory tree of artifacts.
     /// \param resolve_links  Function for resolving symlinks.
-    /// \param store_blob     Function for storing Directory blobs.
-    /// \param store_info     Function for storing object infos.
+    /// \param process_blob   Function for processing Directory blobs.
     /// \returns Digest representing the entire tree.
     [[nodiscard]] static auto CreateDirectoryDigestFromTree(
         DirectoryTreePtr const& tree,
         LinkDigestResolveFunc const& resolve_links,
-        std::optional<BlobStoreFunc> const& store_blob = std::nullopt,
-        std::optional<InfoStoreFunc> const& store_info = std::nullopt) noexcept
+        BlobProcessFunc const& process_blob) noexcept
         -> std::optional<bazel_re::Digest>;
 
     /// \brief Create Directory digest from local file root.
@@ -92,7 +75,7 @@ class BazelMsgFactory {
     [[nodiscard]] static auto CreateDirectoryDigestFromLocalTree(
         std::filesystem::path const& root,
         FileStoreFunc const& store_file,
-        DirStoreFunc const& store_dir,
+        TreeStoreFunc const& store_dir,
         SymlinkStoreFunc const& store_symlink) noexcept
         -> std::optional<bazel_re::Digest>;
 
@@ -110,40 +93,13 @@ class BazelMsgFactory {
         SymlinkStoreFunc const& store_symlink) noexcept
         -> std::optional<bazel_re::Digest>;
 
+    struct ActionDigestRequest;
     /// \brief Creates Action digest from command line.
     /// As part of the internal process, it creates an ActionBundle and
     /// CommandBundle that can be captured via BlobStoreFunc.
-    /// \param[in] cmdline      The command line.
-    /// \param[in] exec_dir     The Digest of the execution directory.
-    /// \param[in] output_files The paths of output files.
-    /// \param[in] output_dirs  The paths of output directories.
-    /// \param[in] output_node. The output node's properties.
-    /// \param[in] env_vars     The environment variables set.
-    /// \param[in] properties   The target platform's properties.
-    /// \param[in] do_not_cache Skip action cache.
-    /// \param[in] timeout      The command execution timeout.
-    /// \param[in] store_blob Function for storing action and cmd bundles.
     /// \returns Digest representing the action.
     [[nodiscard]] static auto CreateActionDigestFromCommandLine(
-        std::vector<std::string> const& cmdline,
-        bazel_re::Digest const& exec_dir,
-        std::vector<std::string> const& output_files,
-        std::vector<std::string> const& output_dirs,
-        std::vector<bazel_re::Command_EnvironmentVariable> const& env_vars,
-        std::vector<bazel_re::Platform_Property> const& properties,
-        bool do_not_cache,
-        std::chrono::milliseconds const& timeout,
-        std::optional<BlobStoreFunc> const& store_blob = std::nullopt)
-        -> bazel_re::Digest;
-
-    /// \brief Create descriptive string from Directory protobuf message.
-    [[nodiscard]] static auto DirectoryToString(
-        bazel_re::Directory const& dir) noexcept -> std::optional<std::string>;
-
-    /// \brief Create descriptive string from Git tree entries.
-    [[nodiscard]] static auto GitTreeToString(
-        GitRepo::tree_entries_t const& entries) noexcept
-        -> std::optional<std::string>;
+        ActionDigestRequest const& request) -> std::optional<bazel_re::Digest>;
 
     /// \brief Create message vector from std::map.
     /// \param[in]  input   map
@@ -177,6 +133,46 @@ class BazelMsgFactory {
         Logger::Log(LogLevel::Error, "failed to parse message from string");
         return std::nullopt;
     }
+};
+
+struct BazelMsgFactory::ActionDigestRequest final {
+    using BlobStoreFunc = std::function<void(BazelBlob&&)>;
+
+    template <typename T>
+    using VectorPtr = gsl::not_null<std::vector<T> const*>;
+
+    /// \brief The command line.
+    VectorPtr<std::string> const command_line;
+
+    /// \brief The workingg direcotry
+    gsl::not_null<std::string const*> const cwd;
+
+    /// \brief The paths of output files.
+    VectorPtr<std::string> const output_files;
+
+    /// \brief The paths of output directories.
+    VectorPtr<std::string> const output_dirs;
+
+    /// \brief The environment variables set.
+    VectorPtr<bazel_re::Command_EnvironmentVariable> const env_vars;
+
+    /// \brief The target platform's properties.
+    VectorPtr<bazel_re::Platform_Property> const properties;
+
+    /// \brief The Digest of the execution directory.
+    gsl::not_null<bazel_re::Digest const*> const exec_dir;
+
+    /// \brief Hash function to be used.
+    HashFunction const hash_function;
+
+    /// \brief The command execution timeout.
+    std::chrono::milliseconds const timeout;
+
+    /// \brief Skip action cache.
+    bool skip_action_cache;
+
+    /// \brief Function for storing action and cmd bundles.
+    std::optional<BlobStoreFunc> const store_blob = std::nullopt;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_BAZEL_MSG_BAZEL_MSG_FACTORY_HPP

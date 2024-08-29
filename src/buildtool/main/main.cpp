@@ -17,12 +17,15 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
@@ -31,10 +34,11 @@
 #include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/build_engine/target_map/target_map.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
+#include "src/buildtool/common/remote/remote_common.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
-#include "src/buildtool/execution_api/local/config.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/logging/log_config.hpp"
 #include "src/buildtool/logging/log_level.hpp"
@@ -43,18 +47,18 @@
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/main/add_to_cas.hpp"
 #include "src/buildtool/main/analyse.hpp"
+#include "src/buildtool/main/analyse_context.hpp"
 #include "src/buildtool/main/build_utils.hpp"
 #include "src/buildtool/main/cli.hpp"
 #include "src/buildtool/main/constants.hpp"
-#include "src/buildtool/main/describe.hpp"
 #include "src/buildtool/main/diagnose.hpp"
 #include "src/buildtool/main/exit_codes.hpp"
 #include "src/buildtool/main/install_cas.hpp"
-#include "src/buildtool/main/retry.hpp"
 #include "src/buildtool/main/version.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
 #include "src/buildtool/progress_reporting/progress.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/file_chunker.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
@@ -65,15 +69,24 @@
 #ifndef BOOTSTRAP_BUILD_TOOL
 #include "fmt/core.h"
 #include "src/buildtool/auth/authentication.hpp"
-#include "src/buildtool/execution_api/execution_service/operation_cache.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/execution_service/server_implementation.hpp"
+#include "src/buildtool/execution_api/local/config.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
+#include "src/buildtool/execution_engine/executor/context.hpp"
 #include "src/buildtool/graph_traverser/graph_traverser.hpp"
+#include "src/buildtool/main/describe.hpp"
+#include "src/buildtool/main/retry.hpp"
 #include "src/buildtool/main/serve.hpp"
 #include "src/buildtool/progress_reporting/progress_reporter.hpp"
 #include "src/buildtool/serve_api/remote/config.hpp"
 #include "src/buildtool/serve_api/serve_service/serve_server_implementation.hpp"
+#include "src/buildtool/storage/backend_description.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
+#include "src/utils/cpp/gsl.hpp"
 #endif  // BOOTSTRAP_BUILD_TOOL
 
 namespace {
@@ -98,235 +111,145 @@ void SetupLogging(LogArguments const& clargs) {
     }
 }
 
+[[nodiscard]] auto CreateStorageConfig(
+    EndpointArguments const& eargs,
+    bool is_compatible,
+    std::optional<ServerAddress> const& remote_address = std::nullopt,
+    ExecutionProperties const& remote_platform_properties = {},
+    std::vector<DispatchEndpoint> const& remote_dispatch = {}) noexcept
+    -> std::optional<StorageConfig> {
+    StorageConfig::Builder builder;
+    if (eargs.local_root.has_value()) {
+        builder.SetBuildRoot(*eargs.local_root);
+    }
+
+    auto config =
+        builder
+            .SetHashType(is_compatible ? HashFunction::Type::PlainSHA256
+                                       : HashFunction::Type::GitSHA1)
+            .SetRemoteExecutionArgs(
+                remote_address, remote_platform_properties, remote_dispatch)
+            .Build();
+    if (config) {
+        return *std::move(config);
+    }
+    Logger::Log(LogLevel::Error, config.error());
+    return std::nullopt;
+}
+
 #ifndef BOOTSTRAP_BUILD_TOOL
-void SetupExecutionConfig(EndpointArguments const& eargs,
-                          BuildArguments const& bargs,
-                          RebuildArguments const& rargs) {
-    using StorageConfig = StorageConfig;
-    using LocalConfig = LocalExecutionConfig;
-    using RemoteConfig = RemoteExecutionConfig;
-    if (not(not eargs.local_root or
-            (StorageConfig::SetBuildRoot(*eargs.local_root))) or
-        not(not bargs.local_launcher or
-            LocalConfig::SetLauncher(*bargs.local_launcher))) {
-        Logger::Log(LogLevel::Error, "Failed to configure local execution.");
-        std::exit(kExitFailure);
+[[nodiscard]] auto CreateLocalExecutionConfig(
+    BuildArguments const& bargs) noexcept
+    -> std::optional<LocalExecutionConfig> {
+    LocalExecutionConfig::Builder builder;
+    if (bargs.local_launcher.has_value()) {
+        builder.SetLauncher(*bargs.local_launcher);
     }
-    for (auto const& property : eargs.platform_properties) {
-        if (not RemoteConfig::AddPlatformProperty(property)) {
-            Logger::Log(LogLevel::Error,
-                        "Adding platform property '{}' failed.",
-                        property);
-            std::exit(kExitFailure);
-        }
+
+    auto config = builder.Build();
+    if (config) {
+        return *std::move(config);
     }
-    if (eargs.remote_execution_address) {
-        if (not RemoteConfig::SetRemoteAddress(
-                *eargs.remote_execution_address)) {
-            Logger::Log(LogLevel::Error,
-                        "Setting remote execution address '{}' failed.",
-                        *eargs.remote_execution_address);
-            std::exit(kExitFailure);
-        }
+    Logger::Log(LogLevel::Error, config.error());
+    return std::nullopt;
+}
+
+[[nodiscard]] auto CreateRemoteExecutionConfig(EndpointArguments const& eargs,
+                                               RebuildArguments const& rargs)
+    -> std::optional<RemoteExecutionConfig> {
+    RemoteExecutionConfig::Builder builder;
+    builder.SetRemoteAddress(eargs.remote_execution_address)
+        .SetRemoteExecutionDispatch(eargs.remote_execution_dispatch_file)
+        .SetPlatformProperties(eargs.platform_properties)
+        .SetCacheAddress(rargs.cache_endpoint);
+
+    auto config = builder.Build();
+    if (config) {
+        return *std::move(config);
     }
-    if (eargs.remote_execution_dispatch_file) {
-        if (not RemoteConfig::SetRemoteExecutionDispatch(
-                *eargs.remote_execution_dispatch_file)) {
+    Logger::Log(LogLevel::Error, config.error());
+    return std::nullopt;
+}
+
+[[nodiscard]] auto CreateServeConfig(ServeArguments const& srvargs,
+                                     CommonArguments const& cargs,
+                                     BuildArguments const& bargs,
+                                     TCArguments const& tc) noexcept
+    -> std::optional<RemoteServeConfig> {
+    RemoteServeConfig::Builder builder;
+    builder.SetRemoteAddress(srvargs.remote_serve_address)
+        .SetKnownRepositories(srvargs.repositories)
+        .SetJobs(cargs.jobs)
+        .SetActionTimeout(bargs.timeout)
+        .SetTCStrategy(tc.target_cache_write_strategy);
+
+    if (bargs.build_jobs > 0) {
+        builder.SetBuildJobs(bargs.build_jobs);
+    }
+
+    auto config = builder.Build();
+    if (config) {
+        if (config->tc_strategy == TargetCacheWriteStrategy::Disable) {
             Logger::Log(
-                LogLevel::Error,
-                "Setting remote execution dispatch based on file '{}' failed.",
-                eargs.remote_execution_dispatch_file->string());
-            std::exit(kExitFailure);
+                LogLevel::Info,
+                "Target-level cache writing of serve service is disabled.");
         }
+        return *std::move(config);
     }
-    if (rargs.cache_endpoint) {
-        if (not(RemoteConfig::SetCacheAddress(*rargs.cache_endpoint) ==
-                (*rargs.cache_endpoint != "local"))) {
-            Logger::Log(LogLevel::Error,
-                        "Setting cache endpoint address '{}' failed.",
-                        *rargs.cache_endpoint);
-            std::exit(kExitFailure);
-        }
-    }
+
+    Logger::Log(LogLevel::Error, config.error());
+    return std::nullopt;
 }
 
-void SetupServeConfig(ServeArguments const& srvargs,
-                      CommonArguments const& cargs,
-                      BuildArguments const& bargs,
-                      TCArguments const& tc) {
-    if (srvargs.remote_serve_address) {
-        if (not RemoteServeConfig::SetRemoteAddress(
-                *srvargs.remote_serve_address)) {
-            Logger::Log(LogLevel::Error,
-                        "Setting serve service address '{}' failed.",
-                        *srvargs.remote_serve_address);
-            std::exit(kExitFailure);
-        }
-    }
-    if (not srvargs.repositories.empty() and
-        not RemoteServeConfig::SetKnownRepositories(srvargs.repositories)) {
-        Logger::Log(LogLevel::Error,
-                    "Setting serve service repositories failed.");
-        std::exit(kExitFailure);
-    }
-    // make parallelism and build options available for remote builds
-    if (not RemoteServeConfig::SetJobs(cargs.jobs)) {
-        Logger::Log(LogLevel::Error, "Setting jobs failed.");
-        std::exit(kExitFailure);
-    }
-    if (bargs.build_jobs > 0 and
-        not RemoteServeConfig::SetBuildJobs(bargs.build_jobs)) {
-        Logger::Log(LogLevel::Error, "Setting build jobs failed.");
-        std::exit(kExitFailure);
-    }
-    if (not RemoteServeConfig::SetActionTimeout(bargs.timeout)) {
-        Logger::Log(LogLevel::Error, "Setting action timeout failed.");
-        std::exit(kExitFailure);
-    }
-    RemoteServeConfig::SetTCStrategy(tc.target_cache_write_strategy);
-    if (tc.target_cache_write_strategy == TargetCacheWriteStrategy::Disable) {
-        Logger::Log(LogLevel::Info,
-                    "Target-level cache writing of serve service is disabled.");
-    }
-}
+[[nodiscard]] auto CreateAuthConfig(
+    CommonAuthArguments const& authargs,
+    ClientAuthArguments const& client_authargs,
+    ServerAuthArguments const& server_authargs) noexcept
+    -> std::optional<Auth> {
+    Auth::TLS::Builder tls_builder;
+    tls_builder.SetCACertificate(authargs.tls_ca_cert)
+        .SetClientCertificate(client_authargs.tls_client_cert)
+        .SetClientKey(client_authargs.tls_client_key)
+        .SetServerCertificate(server_authargs.tls_server_cert)
+        .SetServerKey(server_authargs.tls_server_key);
 
-void SetupAuthConfig(CommonAuthArguments const& authargs,
-                     ClientAuthArguments const& client_authargs,
-                     ServerAuthArguments const& server_authargs) {
-    auto use_tls = false;
-    if (authargs.tls_ca_cert) {
-        use_tls = true;
-        if (not Auth::TLS::SetCACertificate(*authargs.tls_ca_cert)) {
-            Logger::Log(LogLevel::Error,
-                        "Could not read '{}' certificate.",
-                        authargs.tls_ca_cert->string());
-            std::exit(kExitFailure);
+    // create auth config (including validation)
+    auto result = tls_builder.Build();
+    if (result) {
+        if (*result) {
+            // correctly configured TLS/SSL certification
+            return *std::move(*result);
         }
-    }
-    if (client_authargs.tls_client_cert) {
-        use_tls = true;
-        if (not Auth::TLS::SetClientCertificate(
-                *client_authargs.tls_client_cert)) {
-            Logger::Log(LogLevel::Error,
-                        "Could not read '{}' certificate.",
-                        client_authargs.tls_client_cert->string());
-            std::exit(kExitFailure);
-        }
-    }
-    if (client_authargs.tls_client_key) {
-        use_tls = true;
-        if (not Auth::TLS::SetClientKey(*client_authargs.tls_client_key)) {
-            Logger::Log(LogLevel::Error,
-                        "Could not read '{}' key.",
-                        client_authargs.tls_client_key->string());
-            std::exit(kExitFailure);
-        }
+        Logger::Log(LogLevel::Error, result->error());
+        return std::nullopt;
     }
 
-    if (server_authargs.tls_server_cert) {
-        use_tls = true;
-        if (not Auth::TLS::SetServerCertificate(
-                *server_authargs.tls_server_cert)) {
-            Logger::Log(LogLevel::Error,
-                        "Could not read '{}' certificate.",
-                        server_authargs.tls_server_cert->string());
-            std::exit(kExitFailure);
-        }
-    }
-    if (server_authargs.tls_server_key) {
-        use_tls = true;
-        if (not Auth::TLS::SetServerKey(*server_authargs.tls_server_key)) {
-            Logger::Log(LogLevel::Error,
-                        "Could not read '{}' key.",
-                        server_authargs.tls_server_key->string());
-            std::exit(kExitFailure);
-        }
-    }
-
-    if (use_tls) {
-        if (not Auth::TLS::Validate()) {
-            std::exit(kExitFailure);
-        }
-    }
-}
-
-void SetupExecutionServiceConfig(ServiceArguments const& args) {
-    if (args.port) {
-        if (!ServerImpl::SetPort(*args.port)) {
-            Logger::Log(LogLevel::Error, "Invalid port '{}'", *args.port);
-            std::exit(kExitFailure);
-        }
-    }
-    if (args.info_file) {
-        if (!ServerImpl::SetInfoFile(*args.info_file)) {
-            Logger::Log(LogLevel::Error,
-                        "Invalid info-file '{}'",
-                        args.info_file->string());
-            std::exit(kExitFailure);
-        }
-    }
-    if (args.interface) {
-        if (!ServerImpl::SetInterface(*args.interface)) {
-            Logger::Log(LogLevel::Error,
-                        "Invalid interface '{}'",
-                        args.info_file->string());
-            std::exit(kExitFailure);
-        }
-    }
-    if (args.pid_file) {
-        if (!ServerImpl::SetPidFile(*args.pid_file)) {
-            Logger::Log(LogLevel::Error,
-                        "Invalid pid-file '{}'",
-                        args.info_file->string());
-            std::exit(kExitFailure);
-        }
-    }
-    if (args.op_exponent) {
-        OperationCache::SetExponent(*args.op_exponent);
-    }
-}
-
-void SetupServeServiceConfig(ServiceArguments const& args) {
-    if (args.port) {
-        if (!ServeServerImpl::SetPort(*args.port)) {
-            Logger::Log(LogLevel::Error, "Invalid port '{}'", *args.port);
-            std::exit(kExitFailure);
-        }
-    }
-    if (args.info_file) {
-        if (!ServeServerImpl::SetInfoFile(*args.info_file)) {
-            Logger::Log(LogLevel::Error,
-                        "Invalid info-file '{}'",
-                        args.info_file->string());
-            std::exit(kExitFailure);
-        }
-    }
-    if (args.interface) {
-        if (!ServeServerImpl::SetInterface(*args.interface)) {
-            Logger::Log(LogLevel::Error,
-                        "Invalid interface '{}'",
-                        args.info_file->string());
-            std::exit(kExitFailure);
-        }
-    }
-    if (args.pid_file) {
-        if (!ServeServerImpl::SetPidFile(*args.pid_file)) {
-            Logger::Log(LogLevel::Error,
-                        "Invalid pid-file '{}'",
-                        args.info_file->string());
-            std::exit(kExitFailure);
-        }
-    }
-}
-
-void SetupHashFunction() {
-    HashFunction::SetHashType(Compatibility::IsCompatible()
-                                  ? HashFunction::JustHash::Compatible
-                                  : HashFunction::JustHash::Native);
+    // no TLS/SSL configuration was given, and we currently support no other
+    // certification method, so return an empty config (no certification)
+    return Auth{};
 }
 
 void SetupFileChunker() {
     FileChunker::Initialize();
+}
+
+/// \brief Write backend description (which determines the target cache shard)
+/// to CAS.
+void StoreTargetCacheShard(
+    StorageConfig const& storage_config,
+    Storage const& storage,
+    RemoteExecutionConfig const& remote_exec_config) noexcept {
+    auto backend_description =
+        DescribeBackend(remote_exec_config.remote_address,
+                        remote_exec_config.platform_properties,
+                        remote_exec_config.dispatch);
+    if (not backend_description) {
+        Logger::Log(LogLevel::Error, backend_description.error());
+        std::exit(kExitFailure);
+    }
+    [[maybe_unused]] auto id = storage.CAS().StoreBlob(*backend_description);
+    EnsuresAudit(id and ArtifactDigest{*id}.hash() ==
+                            storage_config.backend_description_id);
 }
 
 #endif  // BOOTSTRAP_BUILD_TOOL
@@ -431,7 +354,7 @@ void SetupFileChunker() {
 [[nodiscard]] auto ReadConfiguredTarget(
     std::string const& main_repo,
     std::optional<std::filesystem::path> const& main_ws_root,
-    gsl::not_null<RepositoryConfig*> const& repo_config,
+    gsl::not_null<const RepositoryConfig*> const& repo_config,
     AnalysisArguments const& clargs) -> Target::ConfiguredTarget {
     auto const* target_root = repo_config->TargetRoot(main_repo);
     if (target_root == nullptr) {
@@ -676,7 +599,7 @@ auto DetermineRoots(gsl::not_null<RepositoryConfig*> const& repository_config,
                 }
             }
 
-            if (is_main_repo && keyword_carg) {
+            if (is_main_repo and keyword_carg) {
                 *keyword_root = FileRoot{*keyword_carg};
             }
         };
@@ -722,7 +645,7 @@ auto DetermineRoots(gsl::not_null<RepositoryConfig*> const& repository_config,
                 *keyword_file_name = *it;
             }
 
-            if (is_main_repo && keyword_carg) {
+            if (is_main_repo and keyword_carg) {
                 *keyword_file_name = *keyword_carg;
             }
         };
@@ -760,7 +683,7 @@ void ReportTaintedness(const AnalysisResult& result) {
 auto DetermineNonExplicitTarget(
     std::string const& main_repo,
     std::optional<std::filesystem::path> const& main_ws_root,
-    gsl::not_null<RepositoryConfig*> const& repo_config,
+    gsl::not_null<const RepositoryConfig*> const& repo_config,
     AnalysisArguments const& clargs)
     -> std::optional<BuildMaps::Target::ConfiguredTarget> {
     auto id =
@@ -838,54 +761,205 @@ auto main(int argc, char* argv[]) -> int {
          */
         GitContext::Create();
 
-        SetupHashFunction();
         SetupFileChunker();
-        SetupExecutionConfig(
-            arguments.endpoint, arguments.build, arguments.rebuild);
-        SetupServeConfig(
-            arguments.serve, arguments.common, arguments.build, arguments.tc);
-        SetupAuthConfig(arguments.auth, arguments.cauth, arguments.sauth);
 
         if (arguments.cmd == SubCommand::kGc) {
+            // Set up storage for GC, as we have all the config args we need.
+            auto const storage_config = CreateStorageConfig(
+                arguments.endpoint, Compatibility::IsCompatible());
+            if (not storage_config) {
+                return kExitFailure;
+            }
+
             if (GarbageCollector::TriggerGarbageCollection(
-                    arguments.gc.no_rotate)) {
+                    *storage_config, arguments.gc.no_rotate)) {
                 return kExitSuccess;
             }
             return kExitFailure;
         }
 
+        auto local_exec_config = CreateLocalExecutionConfig(arguments.build);
+        if (not local_exec_config) {
+            return kExitFailure;
+        }
+
+        auto auth_config =
+            CreateAuthConfig(arguments.auth, arguments.cauth, arguments.sauth);
+        if (not auth_config) {
+            return kExitFailure;
+        }
+
         if (arguments.cmd == SubCommand::kExecute) {
-            SetupExecutionServiceConfig(arguments.service);
-            if (!ServerImpl::Instance().Run()) {
-                return kExitFailure;
+            auto execution_server =
+                ServerImpl::Create(arguments.service.interface,
+                                   arguments.service.port,
+                                   arguments.service.info_file,
+                                   arguments.service.pid_file);
+
+            if (execution_server) {
+                RetryConfig
+                    retry_config{};  // default is enough, as remote is not used
+                // Use default remote configuration.
+                RemoteExecutionConfig remote_exec_config{};
+
+                // Set up storage for local execution.
+                auto const storage_config = CreateStorageConfig(
+                    arguments.endpoint, Compatibility::IsCompatible());
+                if (not storage_config) {
+                    return kExitFailure;
+                }
+                auto const storage = Storage::Create(&*storage_config);
+                StoreTargetCacheShard(
+                    *storage_config, storage, remote_exec_config);
+
+                // pack the local context instances to be passed as needed
+                LocalContext const local_context{
+                    .exec_config = &*local_exec_config,
+                    .storage_config = &*storage_config,
+                    .storage = &storage};
+                // pack the remote context instances to be passed as needed
+                RemoteContext const remote_context{
+                    .auth = &*auth_config,
+                    .retry_config = &retry_config,
+                    .exec_config = &remote_exec_config};
+
+                auto const exec_apis =
+                    ApiBundle::Create(&local_context,
+                                      &remote_context,
+                                      /*repo_config=*/nullptr);
+
+                return execution_server->Run(&local_context,
+                                             &remote_context,
+                                             exec_apis,
+                                             arguments.service.op_exponent)
+                           ? kExitSuccess
+                           : kExitFailure;
             }
-            return kExitSuccess;
+            return kExitFailure;
+        }
+
+        auto serve_config = CreateServeConfig(
+            arguments.serve, arguments.common, arguments.build, arguments.tc);
+        if (not serve_config) {
+            return kExitFailure;
+        }
+
+        // Set up the retry arguments, needed only for the client-side logic of
+        // remote execution, i.e., just serve and the regular just client.
+        auto retry_config = CreateRetryConfig(arguments.retry);
+        if (not retry_config) {
+            return kExitFailure;
         }
 
         if (arguments.cmd == SubCommand::kServe) {
-            SetupServeServiceConfig(arguments.service);
-            if (!ServeServerImpl::Instance().Run(
-                    !RemoteExecutionConfig::RemoteAddress())) {
-                return kExitFailure;
+            auto serve_server =
+                ServeServerImpl::Create(arguments.service.interface,
+                                        arguments.service.port,
+                                        arguments.service.info_file,
+                                        arguments.service.pid_file);
+            if (serve_server) {
+                // Set up remote execution config.
+                auto remote_exec_config = CreateRemoteExecutionConfig(
+                    arguments.endpoint, arguments.rebuild);
+                if (not remote_exec_config) {
+                    return kExitFailure;
+                }
+
+                // Set up storage for serve operation.
+                auto const storage_config =
+                    CreateStorageConfig(arguments.endpoint,
+                                        Compatibility::IsCompatible(),
+                                        remote_exec_config->remote_address,
+                                        remote_exec_config->platform_properties,
+                                        remote_exec_config->dispatch);
+                if (not storage_config) {
+                    return kExitFailure;
+                }
+                auto const storage = Storage::Create(&*storage_config);
+                StoreTargetCacheShard(
+                    *storage_config, storage, *remote_exec_config);
+
+                // pack the local context instances to be passed as needed
+                LocalContext const local_context{
+                    .exec_config = &*local_exec_config,
+                    .storage_config = &*storage_config,
+                    .storage = &storage};
+                // pack the remote context instances to be passed as needed
+                RemoteContext const remote_context{
+                    .auth = &*auth_config,
+                    .retry_config = &*retry_config,
+                    .exec_config = &*remote_exec_config};
+
+                auto const serve_apis =
+                    ApiBundle::Create(&local_context,
+                                      &remote_context,
+                                      /*repo_config=*/nullptr);
+                auto serve = ServeApi::Create(*serve_config,
+                                              &local_context,
+                                              &remote_context,
+                                              &serve_apis);
+
+                bool with_execute =
+                    not remote_exec_config->remote_address.has_value();
+                // Operation cache only relevant for just execute
+                auto const op_exponent =
+                    with_execute ? arguments.service.op_exponent : std::nullopt;
+
+                return serve_server->Run(*serve_config,
+                                         &local_context,
+                                         &remote_context,
+                                         serve,
+                                         serve_apis,
+                                         op_exponent,
+                                         with_execute)
+                           ? kExitSuccess
+                           : kExitFailure;
             }
-            return kExitSuccess;
+            return kExitFailure;
         }
 
         // If no execution endpoint was given, the client should default to the
-        // serve endpoint, if given
-        if (not RemoteExecutionConfig::RemoteAddress() and
-            arguments.serve.remote_serve_address) {
-            if (!RemoteExecutionConfig::SetRemoteAddress(
-                    *arguments.serve.remote_serve_address)) {
-                Logger::Log(LogLevel::Error,
-                            "Setting remote execution address '{}' failed.",
-                            *arguments.serve.remote_serve_address);
-                std::exit(kExitFailure);
-            }
+        // serve endpoint, if given.
+        if (not arguments.endpoint.remote_execution_address.has_value() and
+            arguments.serve.remote_serve_address.has_value()) {
+            // replace the remote execution address
+            arguments.endpoint.remote_execution_address =
+                *arguments.serve.remote_serve_address;
+            // Inform user of the change
             Logger::Log(LogLevel::Info,
                         "Using '{}' as the remote execution endpoint.",
                         *arguments.serve.remote_serve_address);
         }
+
+        // Set up remote execution config.
+        auto remote_exec_config =
+            CreateRemoteExecutionConfig(arguments.endpoint, arguments.rebuild);
+        if (not remote_exec_config) {
+            return kExitFailure;
+        }
+
+        // Set up storage for client-side operation. This needs to have all the
+        // correct remote endpoint info in order to instantiate the
+        // correctly-sharded target cache.
+        auto const storage_config =
+            CreateStorageConfig(arguments.endpoint,
+                                Compatibility::IsCompatible(),
+                                remote_exec_config->remote_address,
+                                remote_exec_config->platform_properties,
+                                remote_exec_config->dispatch);
+#else
+        // For bootstrapping the TargetCache sharding is not needed, so we can
+        // default all execution arguments.
+        auto const storage_config = CreateStorageConfig(
+            arguments.endpoint, Compatibility::IsCompatible());
+#endif  // BOOTSTRAP_BUILD_TOOL
+        if (not storage_config) {
+            return kExitFailure;
+        }
+        auto const storage = Storage::Create(&*storage_config);
+
+#ifndef BOOTSTRAP_BUILD_TOOL
+        StoreTargetCacheShard(*storage_config, storage, *remote_exec_config);
 #endif  // BOOTSTRAP_BUILD_TOOL
 
         auto jobs = arguments.build.build_jobs > 0 ? arguments.build.build_jobs
@@ -908,35 +982,43 @@ auto main(int argc, char* argv[]) -> int {
         Progress progress{};
 
 #ifndef BOOTSTRAP_BUILD_TOOL
-        if (not SetupRetryConfig(arguments.retry)) {
-            std::exit(kExitFailure);
-        }
+        // pack the local context instances to be passed to ApiBundle
+        LocalContext const local_context{.exec_config = &*local_exec_config,
+                                         .storage_config = &*storage_config,
+                                         .storage = &storage};
+        // pack the remote context instances to be passed as needed
+        RemoteContext const remote_context{.auth = &*auth_config,
+                                           .retry_config = &*retry_config,
+                                           .exec_config = &*remote_exec_config};
+
+        auto const main_apis =
+            ApiBundle::Create(&local_context, &remote_context, &repo_config);
+        ExecutionContext const exec_context{.repo_config = &repo_config,
+                                            .apis = &main_apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = &stats,
+                                            .progress = &progress};
         GraphTraverser const traverser{
             {jobs,
              std::move(arguments.build),
              std::move(stage_args),
              std::move(rebuild_args)},
-            &repo_config,
-            RemoteExecutionConfig::PlatformProperties(),
-            RemoteExecutionConfig::DispatchList(),
-            &stats,
-            &progress,
+            &exec_context,
             ProgressReporter::Reporter(&stats, &progress)};
 
         if (arguments.cmd == SubCommand::kInstallCas) {
-            if (not repo_config.SetGitCAS(StorageConfig::GitRoot())) {
+            if (not repo_config.SetGitCAS(storage_config->GitRoot())) {
                 Logger::Log(LogLevel::Debug,
                             "Failed set Git CAS {}.",
-                            StorageConfig::GitRoot().string());
+                            storage_config->GitRoot().string());
             }
-            return FetchAndInstallArtifacts(traverser.GetRemoteApi(),
-                                            traverser.GetLocalApi(),
-                                            arguments.fetch)
+            return FetchAndInstallArtifacts(
+                       main_apis, arguments.fetch, remote_context)
                        ? kExitSuccess
                        : kExitFailure;
         }
         if (arguments.cmd == SubCommand::kAddToCas) {
-            return AddArtifactsToCas(arguments.to_add, traverser.GetRemoteApi())
+            return AddArtifactsToCas(arguments.to_add, storage, main_apis)
                        ? kExitSuccess
                        : kExitFailure;
         }
@@ -946,7 +1028,14 @@ auto main(int argc, char* argv[]) -> int {
             DetermineRoots(&repo_config, arguments.common, arguments.analysis);
 
 #ifndef BOOTSTRAP_BUILD_TOOL
-        auto lock = GarbageCollector::SharedLock();
+        std::optional<ServeApi> serve = ServeApi::Create(
+            *serve_config, &local_context, &remote_context, &main_apis);
+#else
+        std::optional<ServeApi> serve;
+#endif  // BOOTSTRAP_BUILD_TOOL
+
+#ifndef BOOTSTRAP_BUILD_TOOL
+        auto lock = GarbageCollector::SharedLock(*storage_config);
         if (not lock) {
             return kExitFailure;
         }
@@ -985,6 +1074,8 @@ auto main(int argc, char* argv[]) -> int {
                                  arguments.describe.print_json)
                            : DescribeTarget(*id,
                                             &repo_config,
+                                            serve,
+                                            main_apis,
                                             arguments.common.jobs,
                                             arguments.describe.print_json);
             }
@@ -1010,11 +1101,18 @@ auto main(int argc, char* argv[]) -> int {
                     entry.push_back(blob);
                     serve_errors.push_back(entry);
                 };
-            auto result = AnalyseTarget(id,
+
+            // create progress tracker for export targets
+            Progress exports_progress{};
+            AnalyseContext analyse_ctx{.repo_config = &repo_config,
+                                       .storage = &storage,
+                                       .statistics = &stats,
+                                       .progress = &exports_progress,
+                                       .serve = serve ? &*serve : nullptr};
+
+            auto result = AnalyseTarget(&analyse_ctx,
+                                        id,
                                         &result_map,
-                                        &repo_config,
-                                        Storage::Instance().TargetCache(),
-                                        &stats,
                                         arguments.common.jobs,
                                         arguments.analysis.request_action_input,
                                         /*logger=*/nullptr,
@@ -1028,6 +1126,27 @@ auto main(int argc, char* argv[]) -> int {
                 os << serve_errors.dump() << std::endl;
             }
             if (result) {
+                Logger::Log(LogLevel::Info,
+                            "Analysed target {}",
+                            result->id.ToShortString());
+
+                {
+                    auto cached = stats.ExportsCachedCounter();
+                    auto served = stats.ExportsServedCounter();
+                    auto uncached = stats.ExportsUncachedCounter();
+                    auto not_eligible = stats.ExportsNotEligibleCounter();
+                    Logger::Log(
+                        served + cached + uncached + not_eligible > 0
+                            ? LogLevel::Info
+                            : LogLevel::Debug,
+                        "Export targets found: {} cached, {}{} uncached, "
+                        "{} not eligible for caching",
+                        cached,
+                        served > 0 ? fmt::format("{} served, ", served) : "",
+                        uncached,
+                        not_eligible);
+                }
+
                 if (arguments.analysis.graph_file) {
                     result_map.ToFile(
                         *arguments.analysis.graph_file, &stats, &progress);
@@ -1051,27 +1170,6 @@ auto main(int argc, char* argv[]) -> int {
                     return kExitSuccess;
                 }
 #ifndef BOOTSTRAP_BUILD_TOOL
-                Logger::Log(LogLevel::Info,
-                            "Analysed target {}",
-                            result->id.ToString());
-
-                {
-                    auto cached = stats.ExportsCachedCounter();
-                    auto served = stats.ExportsServedCounter();
-                    auto uncached = stats.ExportsUncachedCounter();
-                    auto not_eligible = stats.ExportsNotEligibleCounter();
-                    Logger::Log(
-                        served + cached + uncached + not_eligible > 0
-                            ? LogLevel::Info
-                            : LogLevel::Debug,
-                        "Export targets found: {} cached, {}{} uncached, "
-                        "{} not eligible for caching",
-                        cached,
-                        served > 0 ? fmt::format("{} served, ", served) : "",
-                        uncached,
-                        not_eligible);
-                }
-
                 ReportTaintedness(*result);
                 auto const& [actions, blobs, trees] =
                     result_map.ToResult(&stats, &progress);
@@ -1093,7 +1191,7 @@ auto main(int argc, char* argv[]) -> int {
                     result->modified ? fmt::format(" input of action {} of",
                                                    *(result->modified))
                                      : "",
-                    result->id.ToString());
+                    result->id.ToShortString());
 
                 auto build_result =
                     traverser.BuildAndStage(artifacts,
@@ -1107,9 +1205,13 @@ auto main(int argc, char* argv[]) -> int {
                         cache_targets,
                         build_result->extra_infos,
                         jobs,
-                        traverser.GetLocalApi(),
-                        traverser.GetRemoteApi(),
-                        arguments.tc.target_cache_write_strategy);
+                        main_apis,
+                        arguments.tc.target_cache_write_strategy,
+                        storage.TargetCache(),
+                        nullptr,
+                        arguments.serve.remote_serve_address
+                            ? LogLevel::Performance
+                            : LogLevel::Warning);
 
                     // Repeat taintedness message to make the user aware that
                     // the artifacts are not for production use.

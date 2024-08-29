@@ -15,201 +15,246 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_STORAGE_CONFIG_HPP
 #define INCLUDED_SRC_BUILDTOOL_STORAGE_CONFIG_HPP
 
-#ifdef __unix__
-#include <pwd.h>
-#include <sys/types.h>
-#include <unistd.h>
-#else
-#error "Non-unix is not supported yet"
-#endif
-
 #include <cstddef>
 #include <filesystem>
-#include <functional>
+#include <map>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "gsl/gsl"
-#include "nlohmann/json.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/remote/remote_common.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
-#include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/backend_description.hpp"
+#include "src/utils/cpp/expected.hpp"
 #include "src/utils/cpp/gsl.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
-/// \brief Global storage configuration.
-class StorageConfig {
-    struct ConfigData {
-        // Build root directory. All the storage dirs are subdirs of build_root.
-        // By default, build_root is set to $HOME/.cache/just.
-        // If the user uses --local-build-root PATH,
-        // then build_root will be set to PATH.
-        std::filesystem::path build_root{kDefaultBuildRoot};
+class StorageConfig;
 
-        // Number of total storage generations (default: two generations).
-        std::size_t num_generations{2};
-    };
+struct GenerationConfig final {
+    gsl::not_null<StorageConfig const*> const storage_config;
+    std::filesystem::path const cas_f;
+    std::filesystem::path const cas_x;
+    std::filesystem::path const cas_t;
+    std::filesystem::path const cas_large_f;
+    std::filesystem::path const cas_large_t;
+    std::filesystem::path const action_cache;
+    std::filesystem::path const target_cache;
+};
 
-  public:
-    /// \brief Determine user home directory
-    [[nodiscard]] static auto GetUserHome() noexcept -> std::filesystem::path {
-        char const* root{nullptr};
-
-#ifdef __unix__
-        root = std::getenv("HOME");
-        if (root == nullptr) {
-            root = getpwuid(getuid())->pw_dir;
-        }
-#endif
-
-        if (root == nullptr) {
-            Logger::Log(LogLevel::Error,
-                        "Cannot determine user home directory.");
-            std::exit(EXIT_FAILURE);
-        }
-
-        return root;
-    }
+struct StorageConfig final {
+    class Builder;
 
     static inline auto const kDefaultBuildRoot =
-        GetUserHome() / ".cache" / "just";
+        FileSystemManager::GetUserHome() / ".cache" / "just";
 
-    [[nodiscard]] static auto SetBuildRoot(
-        std::filesystem::path const& dir) noexcept -> bool {
-        if (FileSystemManager::IsRelativePath(dir)) {
-            Logger::Log(LogLevel::Error,
-                        "Build root must be absolute path but got '{}'.",
-                        dir.string());
-            return false;
-        }
-        Data().build_root = dir;
-        return true;
-    }
+    // Build root directory. All the storage dirs are subdirs of build_root.
+    // By default, build_root is set to $HOME/.cache/just.
+    // If the user uses --local-build-root PATH,
+    // then build_root will be set to PATH.
+    std::filesystem::path const build_root = kDefaultBuildRoot;
 
-    /// \brief Specifies the number of storage generations.
-    static auto SetNumGenerations(std::size_t num_generations) noexcept
-        -> void {
-        Data().num_generations = num_generations;
-    }
+    // Number of total storage generations (default: two generations).
+    std::size_t const num_generations = 2;
 
-    /// \brief Number of storage generations.
-    [[nodiscard]] static auto NumGenerations() noexcept -> std::size_t {
-        return Data().num_generations;
-    }
+    HashFunction const hash_function{HashFunction::Type::GitSHA1};
 
-    /// \brief Build directory, defaults to user directory if not set
-    [[nodiscard]] static auto BuildRoot() noexcept -> std::filesystem::path {
-        return Data().build_root;
-    }
+    // Hash of the execution backend description
+    std::string const backend_description_id = DefaultBackendDescriptionId();
 
     /// \brief Root directory of all storage generations.
-    [[nodiscard]] static auto CacheRoot() noexcept -> std::filesystem::path {
-        return BuildRoot() / "protocol-dependent";
+    [[nodiscard]] auto CacheRoot() const noexcept -> std::filesystem::path {
+        return build_root / "protocol-dependent";
+    }
+
+    /// \brief Root directory of all repository generations.
+    [[nodiscard]] auto RepositoryRoot() const noexcept
+        -> std::filesystem::path {
+        return build_root / "repositories";
+    }
+
+    /// \brief Directory for the given generation of stored repositories
+    [[nodiscard]] auto RepositoryGenerationRoot(
+        std::size_t index) const noexcept -> std::filesystem::path {
+        ExpectsAudit(index < num_generations);
+        auto generation = std::string{"generation-"} + std::to_string(index);
+        return RepositoryRoot() / generation;
+    }
+
+    /// \brief Directory for the git repository of the given generation
+    [[nodiscard]] auto GitGenerationRoot(std::size_t index) const noexcept
+        -> std::filesystem::path {
+        return RepositoryGenerationRoot(index) / "git";
     }
 
     /// \brief Directory for the git repository storing various roots
-    [[nodiscard]] static auto GitRoot() noexcept -> std::filesystem::path {
-        return BuildRoot() / "git";
+    [[nodiscard]] auto GitRoot() const noexcept -> std::filesystem::path {
+        return GitGenerationRoot(0);
     }
 
-    /// \brief Root directory of specific storage generation for compatible and
-    /// non-compatible protocol types.
-    [[nodiscard]] static auto GenerationCacheRoot(std::size_t index) noexcept
+    /// \brief Root directory of specific storage generation
+    [[nodiscard]] auto GenerationCacheRoot(std::size_t index) const noexcept
         -> std::filesystem::path {
-        ExpectsAudit(index < Data().num_generations);
+        ExpectsAudit(index < num_generations);
         auto generation = std::string{"generation-"} + std::to_string(index);
         return CacheRoot() / generation;
     }
 
-    /// \brief Storage directory of specific generation and protocol type.
-    [[nodiscard]] static auto GenerationCacheDir(
-        std::size_t index,
-        bool is_compatible = Compatibility::IsCompatible()) noexcept
-        -> std::filesystem::path {
-        return UpdatePathForCompatibility(GenerationCacheRoot(index),
-                                          is_compatible);
-    }
-
-    /// \brief String representation of the used execution backend.
-    [[nodiscard]] static auto ExecutionBackendDescription() noexcept
-        -> std::string {
-        auto address = RemoteExecutionConfig::RemoteAddress();
-        auto properties = RemoteExecutionConfig::PlatformProperties();
-        auto dispatch = RemoteExecutionConfig::DispatchList();
-        auto description = nlohmann::json{
-            {"remote_address", address ? address->ToJson() : nlohmann::json{}},
-            {"platform_properties", properties}};
-        if (!dispatch.empty()) {
-            try {
-                // only add the dispatch list, if not empty, so that keys remain
-                // not only more readable, but also backwards compatible with
-                // earlier versions.
-                auto dispatch_list = nlohmann::json::array();
-                for (auto const& [props, endpoint] : dispatch) {
-                    auto entry = nlohmann::json::array();
-                    entry.push_back(nlohmann::json(props));
-                    entry.push_back(endpoint.ToJson());
-                    dispatch_list.push_back(entry);
-                }
-                description["endpoint dispatch list"] = dispatch_list;
-            } catch (std::exception const& e) {
-                Logger::Log(LogLevel::Error,
-                            "Failed to serialize endpoint dispatch list: {}",
-                            e.what());
-            }
-        }
-        try {
-            // json::dump with json::error_handler_t::replace will not throw an
-            // exception if invalid UTF-8 sequences are detected in the input.
-            // Instead, it will replace them with the UTF-8 replacement
-            // character, but still it needs to be inside a try-catch clause to
-            // ensure the noexcept modifier of the enclosing function.
-            return description.dump(
-                2, ' ', false, nlohmann::json::error_handler_t::replace);
-        } catch (...) {
-            return "";
-        }
-    }
-
     /// \brief Root directory for all ephemeral directories, i.e., directories
     /// that can (and should) be removed immediately by garbage collection.
-    [[nodiscard]] static auto EphemeralRoot() noexcept
-        -> std::filesystem::path {
+    [[nodiscard]] auto EphemeralRoot() const noexcept -> std::filesystem::path {
         return GenerationCacheRoot(0) / "ephemeral";
     }
 
     /// \brief Root directory for local action executions; individual actions
     /// create a working directory below this root.
-    [[nodiscard]] static auto ExecutionRoot() noexcept
-        -> std::filesystem::path {
+    [[nodiscard]] auto ExecutionRoot() const noexcept -> std::filesystem::path {
         return EphemeralRoot() / "exec_root";
     }
 
     /// \brief Create a tmp directory with controlled lifetime for specific
     /// operations (archive, zip, file, distdir checkouts; fetch; update).
-    [[nodiscard]] static auto CreateTypedTmpDir(
-        std::string const& type) noexcept -> TmpDirPtr {
+    [[nodiscard]] auto CreateTypedTmpDir(std::string const& type) const noexcept
+        -> TmpDirPtr {
         // try to create parent dir
         auto parent_path = EphemeralRoot() / "tmp-workspaces" / type;
         return TmpDir::Create(parent_path);
     }
 
-  private:
-    [[nodiscard]] static auto Data() noexcept -> ConfigData& {
-        static ConfigData instance{};
-        return instance;
-    }
+    [[nodiscard]] auto CreateGenerationConfig(
+        std::size_t generation) const noexcept -> GenerationConfig {
+        bool const compatible = Compatibility::IsCompatible();
+        auto const cache_root = GenerationCacheRoot(generation);
+        auto const cache_dir =
+            UpdatePathForCompatibility(cache_root, compatible);
 
+        return GenerationConfig{
+            .storage_config = this,
+            .cas_f = cache_dir / "casf",
+            .cas_x = cache_dir / "casx",
+            .cas_t = cache_dir / (compatible ? "casf" : "cast"),
+            .cas_large_f = cache_dir / "cas-large-f",
+            .cas_large_t =
+                cache_dir / (compatible ? "cas-large-f" : "cas-large-t"),
+            .action_cache = cache_dir / "ac",
+            .target_cache = cache_dir / "tc"};
+    };
+
+  private:
     // different folder for different caching protocol
     [[nodiscard]] static auto UpdatePathForCompatibility(
         std::filesystem::path const& dir,
         bool is_compatible) -> std::filesystem::path {
         return dir / (is_compatible ? "compatible-sha256" : "git-sha1");
+    };
+
+    [[nodiscard]] auto DefaultBackendDescriptionId() noexcept -> std::string {
+        try {
+            return ArtifactDigest::Create<ObjectType::File>(
+                       hash_function,
+                       DescribeBackend(std::nullopt, {}, {}).value())
+                .hash();
+        } catch (...) {
+            return std::string();
+        }
     }
+};
+
+class StorageConfig::Builder final {
+  public:
+    auto SetBuildRoot(std::filesystem::path value) noexcept -> Builder& {
+        build_root_ = std::move(value);
+        return *this;
+    }
+
+    /// \brief Specifies the number of storage generations.
+    auto SetNumGenerations(std::size_t value) noexcept -> Builder& {
+        num_generations_ = value;
+        return *this;
+    }
+
+    /// \brief Specify the type of the hash function
+    auto SetHashType(HashFunction::Type value) noexcept -> Builder& {
+        hash_type_ = value;
+        return *this;
+    }
+
+    auto SetRemoteExecutionArgs(std::optional<ServerAddress> address,
+                                ExecutionProperties properties,
+                                std::vector<DispatchEndpoint> dispatch) noexcept
+        -> Builder& {
+        remote_address_ = std::move(address);
+        remote_platform_properties_ = std::move(properties);
+        remote_dispatch_ = std::move(dispatch);
+        return *this;
+    }
+
+    [[nodiscard]] auto Build() const noexcept
+        -> expected<StorageConfig, std::string> {
+        // To not duplicate default arguments of StorageConfig in builder,
+        // create a default config and copy default arguments from there.
+        StorageConfig const default_config;
+
+        auto build_root = default_config.build_root;
+        if (build_root_.has_value()) {
+            build_root = *build_root_;
+            if (FileSystemManager::IsRelativePath(build_root)) {
+                return unexpected(fmt::format(
+                    "Build root must be absolute path but got '{}'.",
+                    build_root.string()));
+            }
+        }
+
+        auto num_generations = default_config.num_generations;
+        if (num_generations_.has_value()) {
+            num_generations = *num_generations_;
+            if (num_generations == 0) {
+                return unexpected(std::string{
+                    "The number of generations must be greater than 0."});
+            }
+        }
+
+        auto const hash_function = hash_type_.has_value()
+                                       ? HashFunction{*hash_type_}
+                                       : default_config.hash_function;
+
+        // Hash the execution backend description
+        auto backend_description_id = default_config.backend_description_id;
+        auto desc = DescribeBackend(
+            remote_address_, remote_platform_properties_, remote_dispatch_);
+        if (desc) {
+            backend_description_id =
+                ArtifactDigest::Create<ObjectType::File>(hash_function, *desc)
+                    .hash();
+        }
+        else {
+            return unexpected{desc.error()};
+        }
+
+        return StorageConfig{
+            .build_root = std::move(build_root),
+            .num_generations = num_generations,
+            .hash_function = hash_function,
+            .backend_description_id = std::move(backend_description_id)};
+    }
+
+  private:
+    std::optional<std::filesystem::path> build_root_;
+    std::optional<std::size_t> num_generations_;
+    std::optional<HashFunction::Type> hash_type_;
+
+    // Fields for computing remote execution backend description
+    std::optional<ServerAddress> remote_address_;
+    ExecutionProperties remote_platform_properties_;
+    std::vector<DispatchEndpoint> remote_dispatch_;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_STORAGE_CONFIG_HPP

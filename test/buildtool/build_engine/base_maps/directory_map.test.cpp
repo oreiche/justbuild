@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/build_engine/base_maps/directory_map.hpp"
+
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>  // std::move
 
 #include "catch2/catch_test_macros.hpp"
-#include "src/buildtool/build_engine/base_maps/directory_map.hpp"
 #include "src/buildtool/build_engine/base_maps/module_name.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
@@ -68,7 +69,7 @@ TEST_CASE("simple usage") {
     bool as_expected{false};
     auto name = ModuleName{"", "."};
     auto consumer = [&as_expected](auto values) {
-        if (values[0]->ContainsBlob("file") &&
+        if (values[0]->ContainsBlob("file") and
             not values[0]->ContainsBlob("does_not_exist")) {
             as_expected = true;
         };

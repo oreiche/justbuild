@@ -25,18 +25,20 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/multithreading/async_map_utils.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
-#include "src/buildtool/storage/config.hpp"
 #include "src/other_tools/git_operations/git_repo_remote.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress_reporter.hpp"
+#include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
 #include "src/other_tools/just_mr/utils.hpp"
 #include "src/other_tools/ops_maps/git_update_map.hpp"
 
 auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
                      MultiRepoCommonArguments const& common_args,
                      MultiRepoUpdateArguments const& update_args,
+                     StorageConfig const& storage_config,
                      std::string multi_repo_tool_name) -> int {
     // provide report
     Logger::Log(LogLevel::Info, "Performing repositories update");
@@ -191,7 +193,7 @@ auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
         }
     }
     // Create fake repo for the anonymous remotes
-    auto tmp_dir = StorageConfig::CreateTypedTmpDir("update");
+    auto tmp_dir = storage_config.CreateTypedTmpDir("update");
     if (not tmp_dir) {
         Logger::Log(LogLevel::Error, "Failed to create commit update tmp dir");
         return kExitUpdateError;
@@ -216,32 +218,42 @@ auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
 
     // Initialize resulting config to be updated
     auto mr_config = config->ToJson();
+
+    // Setup progress and statistics instances
+    JustMRStatistics stats{};
+    JustMRProgress progress{repos_to_update.size()};
+
     // Create async map
     auto git_update_map = CreateGitUpdateMap(git_repo->GetGitCAS(),
                                              common_args.git_path->string(),
                                              *common_args.local_launcher,
+                                             &storage_config,
+                                             &stats,
+                                             &progress,
                                              common_args.jobs);
 
     // set up progress observer
-    JustMRProgress::Instance().SetTotal(repos_to_update.size());
     std::atomic<bool> done{false};
     std::condition_variable cv{};
-    auto reporter = JustMRProgressReporter::Reporter();
+    auto reporter = JustMRProgressReporter::Reporter(&stats, &progress);
     auto observer =
         std::thread([reporter, &done, &cv]() { reporter(&done, &cv); });
 
     // do the update
     bool failed{false};
+    bool has_value{false};
     {
         TaskSystem ts{common_args.jobs};
         git_update_map.ConsumeAfterKeysReady(
             &ts,
             repos_to_update,
             [&failed,
+             &has_value,
              &mr_config,
              repos_to_update_names = update_args.repos_to_update,
              multi_repo_tool_name](auto const& values) noexcept {
                 try {
+                    has_value = true;
                     for (auto const& repo_name : repos_to_update_names) {
                         auto i = static_cast<std::size_t>(
                             &repo_name -
@@ -277,6 +289,11 @@ auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
     observer.join();
 
     if (failed) {
+        return kExitUpdateError;
+    }
+    if (not has_value) {
+        DetectAndReportPending(
+            "update", git_update_map, kRepoDescriptionPrinter);
         return kExitUpdateError;
     }
     // report success

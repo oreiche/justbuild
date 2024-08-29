@@ -17,23 +17,27 @@
 
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <unordered_set>
-#include <variant>
 #include <vector>
 
 #include "gsl/gsl"
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/file_system/object_cas.hpp"
-#include "src/buildtool/storage/garbage_collector.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/large_object_cas.hpp"
+#include "src/buildtool/storage/uplinker.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 /// \brief The local (logical) CAS for storing blobs and trees.
 /// Blobs can be stored/queried as executable or non-executable. Trees might be
 /// treated differently depending on the compatibility mode. Supports global
-/// uplinking across all generations using the garbage collector. The uplink
-/// is automatically performed for every entry that is read and every entry that
-/// is stored and already exists in an older generation.
-/// \tparam kDoGlobalUplink     Enable global uplinking via garbage collector.
+/// uplinking across all generations. The uplink is automatically performed for
+/// every entry that is read and every entry that is stored and already exists
+/// in an older generation.
+/// \tparam kDoGlobalUplink     Enable global uplinking.
 template <bool kDoGlobalUplink>
 class LocalCAS {
   public:
@@ -44,22 +48,31 @@ class LocalCAS {
     /// Note that the base path is concatenated by a single character
     /// 'f'/'x'/'t' for each internally used physical CAS.
     /// \param base     The base path for the CAS.
-    explicit LocalCAS(std::filesystem::path const& base)
-        : cas_file_{base.string() + 'f', Uplinker<ObjectType::File>()},
-          cas_exec_{base.string() + 'x', Uplinker<ObjectType::Executable>()},
-          cas_tree_{base.string() + (Compatibility::IsCompatible() ? 'f' : 't'),
-                    Uplinker<ObjectType::Tree>()},
-          cas_file_large_{*this, base.string() + "-large-f"},
-          cas_tree_large_{*this,
-                          base.string() + "-large-" +
-                              (Compatibility::IsCompatible() ? 'f' : 't')} {}
+    explicit LocalCAS(
+        GenerationConfig const& config,
+        gsl::not_null<Uplinker<kDoGlobalUplink> const*> const& uplinker)
+        : cas_file_{config.storage_config->hash_function,
+                    config.cas_f,
+                    MakeUplinker<ObjectType::File>(uplinker)},
+          cas_exec_{config.storage_config->hash_function,
+                    config.cas_x,
+                    MakeUplinker<ObjectType::Executable>(uplinker)},
+          cas_tree_{config.storage_config->hash_function,
+                    config.cas_t,
+                    MakeUplinker<ObjectType::Tree>(uplinker)},
+          cas_file_large_{this, config, uplinker},
+          cas_tree_large_{this, config, uplinker},
+          hash_function_{config.storage_config->hash_function} {}
+
+    [[nodiscard]] auto GetHashFunction() const noexcept -> HashFunction {
+        return hash_function_;
+    }
 
     /// \brief Obtain path to the storage root.
     /// \param type             Type of the storage to be obtained.
     /// \param large            True if a large storage is needed.
-    [[nodiscard]] auto StorageRoot(ObjectType type,
-                                   bool large = false) const noexcept
-        -> std::filesystem::path const& {
+    [[nodiscard]] auto StorageRoot(ObjectType type, bool large = false)
+        const noexcept -> std::filesystem::path const& {
         if (large) {
             return IsTreeObject(type) ? cas_tree_large_.StorageRoot()
                                       : cas_file_large_.StorageRoot();
@@ -145,7 +158,7 @@ class LocalCAS {
     /// \returns                Digests of the parts of the large object or an
     /// error code on failure.
     [[nodiscard]] auto SplitBlob(bazel_re::Digest const& digest) const noexcept
-        -> std::variant<LargeObjectError, std::vector<bazel_re::Digest>> {
+        -> expected<std::vector<bazel_re::Digest>, LargeObjectError> {
         return cas_file_large_.Split(digest);
     }
 
@@ -158,7 +171,7 @@ class LocalCAS {
     [[nodiscard]] auto SpliceBlob(bazel_re::Digest const& digest,
                                   std::vector<bazel_re::Digest> const& parts,
                                   bool is_executable) const noexcept
-        -> std::variant<LargeObjectError, bazel_re::Digest> {
+        -> expected<bazel_re::Digest, LargeObjectError> {
         return is_executable ? Splice<ObjectType::Executable>(digest, parts)
                              : Splice<ObjectType::File>(digest, parts);
     }
@@ -176,7 +189,7 @@ class LocalCAS {
     /// \returns                Digests of the parts of the large object or an
     /// error code on failure.
     [[nodiscard]] auto SplitTree(bazel_re::Digest const& digest) const noexcept
-        -> std::variant<LargeObjectError, std::vector<bazel_re::Digest>> {
+        -> expected<std::vector<bazel_re::Digest>, LargeObjectError> {
         return cas_tree_large_.Split(digest);
     }
 
@@ -187,36 +200,9 @@ class LocalCAS {
     /// failure.
     [[nodiscard]] auto SpliceTree(bazel_re::Digest const& digest,
                                   std::vector<bazel_re::Digest> const& parts)
-        const noexcept -> std::variant<LargeObjectError, bazel_re::Digest> {
+        const noexcept -> expected<bazel_re::Digest, LargeObjectError> {
         return Splice<ObjectType::Tree>(digest, parts);
     }
-
-    /// \brief Traverses a tree recursively and retrieves object infos of all
-    /// found blobs (leafs). Tree objects are by default not added to the result
-    /// list, but converted to a path name.
-    /// \param tree_digest      Digest of the tree.
-    /// \param parent           Local parent path.
-    /// \param include_trees    Include leaf tree objects (empty trees).
-    /// \returns Pair of vectors, first containing filesystem paths, second
-    /// containing object infos.
-    [[nodiscard]] auto RecursivelyReadTreeLeafs(
-        bazel_re::Digest const& tree_digest,
-        std::filesystem::path const& parent,
-        bool include_trees = false) const noexcept
-        -> std::optional<std::pair<std::vector<std::filesystem::path>,
-                                   std::vector<Artifact::ObjectInfo>>>;
-
-    /// \brief Reads the flat content of a tree and returns object infos of all
-    /// its direct entries (trees and blobs).
-    /// \param tree_digest      Digest of the tree.
-    /// \param parent           Local parent path.
-    /// \returns Pair of vectors, first containing filesystem paths, second
-    /// containing object infos.
-    [[nodiscard]] auto ReadDirectTreeEntries(
-        bazel_re::Digest const& tree_digest,
-        std::filesystem::path const& parent) const noexcept
-        -> std::optional<std::pair<std::vector<std::filesystem::path>,
-                                   std::vector<Artifact::ObjectInfo>>>;
 
     /// \brief Check whether all parts of the tree are in the storage.
     /// \param tree_digest      Digest of the tree to be checked.
@@ -225,17 +211,6 @@ class LocalCAS {
     [[nodiscard]] auto CheckTreeInvariant(bazel_re::Digest const& tree_digest,
                                           std::string const& tree_data)
         const noexcept -> std::optional<LargeObjectError>;
-
-    /// \brief Dump artifact to file stream.
-    /// Tree artifacts are pretty-printed (i.e., contents are listed) unless
-    /// raw_tree is set, then the raw tree will be written to the file stream.
-    /// \param info         The object info of the artifact to dump.
-    /// \param stream       The file stream to dump to.
-    /// \param raw_tree     Dump tree as raw blob.
-    /// \returns true on success.
-    [[nodiscard]] auto DumpToStream(Artifact::ObjectInfo const& info,
-                                    gsl::not_null<FILE*> const& stream,
-                                    bool raw_tree) const noexcept -> bool;
 
     /// \brief Uplink blob from this generation to latest LocalCAS generation.
     /// Performs a synchronization if requested and if blob is only available
@@ -250,7 +225,8 @@ class LocalCAS {
     /// generation.
     /// \returns True if blob was successfully uplinked.
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
-    requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkBlob(
+        requires(kIsLocalGeneration)
+    [[nodiscard]] auto LocalUplinkBlob(
         LocalGenerationCAS const& latest,
         bazel_re::Digest const& digest,
         bool is_executable,
@@ -272,7 +248,8 @@ class LocalCAS {
     /// generation.
     /// \returns True if tree was successfully uplinked.
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
-    requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkTree(
+        requires(kIsLocalGeneration)
+    [[nodiscard]] auto LocalUplinkTree(
         LocalGenerationCAS const& latest,
         bazel_re::Digest const& digest,
         bool splice_result = false) const noexcept -> bool;
@@ -287,7 +264,8 @@ class LocalCAS {
     /// \param digest       The digest of the large entry to uplink.
     /// \returns True if the large entry was successfully uplinked.
     template <ObjectType kType, bool kIsLocalGeneration = not kDoGlobalUplink>
-    requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkLargeObject(
+        requires(kIsLocalGeneration)
+    [[nodiscard]] auto LocalUplinkLargeObject(
         LocalGenerationCAS const& latest,
         bazel_re::Digest const& digest) const noexcept -> bool;
 
@@ -297,25 +275,27 @@ class LocalCAS {
     ObjectCAS<ObjectType::Tree> cas_tree_;
     LargeObjectCAS<kDoGlobalUplink, ObjectType::File> cas_file_large_;
     LargeObjectCAS<kDoGlobalUplink, ObjectType::Tree> cas_tree_large_;
+    HashFunction const hash_function_;
 
     /// \brief Provides uplink via "exists callback" for physical object CAS.
     template <ObjectType kType>
-    [[nodiscard]] static auto Uplinker() ->
-        typename ObjectCAS<kType>::ExistsFunc {
+    [[nodiscard]] static auto MakeUplinker(
+        gsl::not_null<Uplinker<kDoGlobalUplink> const*> const& uplinker) {
         if constexpr (kDoGlobalUplink) {
-            return [](auto digest, auto /*path*/) {
-                if (not Compatibility::IsCompatible()) {
+            return [uplinker](auto const& digest, auto const& /*path*/) {
+                if constexpr (IsTreeObject(kType)) {
                     // in non-compatible mode, do explicit deep tree uplink
-                    if constexpr (IsTreeObject(kType)) {
-                        return GarbageCollector::GlobalUplinkTree(digest);
+                    // in compatible mode, treat all trees as blobs
+                    if (not Compatibility::IsCompatible()) {
+                        return uplinker->UplinkTree(digest);
                     }
                 }
-                // in compatible mode, treat all trees as blobs
-                return GarbageCollector::GlobalUplinkBlob(
-                    digest, IsExecutableObject(kType));
+                return uplinker->UplinkBlob(digest, IsExecutableObject(kType));
             };
         }
-        return ObjectCAS<kType>::kDefaultExists;
+        else {
+            return std::nullopt;
+        }
     }
 
     /// \brief Try to sync blob between file CAS and executable CAS.
@@ -333,27 +313,29 @@ class LocalCAS {
     }
 
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
-    requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkGitTree(
+        requires(kIsLocalGeneration)
+    [[nodiscard]] auto LocalUplinkGitTree(
         LocalGenerationCAS const& latest,
         bazel_re::Digest const& digest,
         bool splice_result = false) const noexcept -> bool;
 
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
-    requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkBazelDirectory(
+        requires(kIsLocalGeneration)
+    [[nodiscard]] auto LocalUplinkBazelDirectory(
         LocalGenerationCAS const& latest,
         bazel_re::Digest const& digest,
         gsl::not_null<std::unordered_set<bazel_re::Digest>*> const& seen,
         bool splice_result = false) const noexcept -> bool;
 
     template <ObjectType kType, bool kIsLocalGeneration = not kDoGlobalUplink>
-    requires(kIsLocalGeneration) [[nodiscard]] auto TrySplice(
-        bazel_re::Digest const& digest) const noexcept
+        requires(kIsLocalGeneration)
+    [[nodiscard]] auto TrySplice(bazel_re::Digest const& digest) const noexcept
         -> std::optional<LargeObject>;
 
     template <ObjectType kType>
     [[nodiscard]] auto Splice(bazel_re::Digest const& digest,
                               std::vector<bazel_re::Digest> const& parts)
-        const noexcept -> std::variant<LargeObjectError, bazel_re::Digest>;
+        const noexcept -> expected<bazel_re::Digest, LargeObjectError>;
 };
 
 #ifndef BOOTSTRAP_BUILD_TOOL
@@ -372,8 +354,9 @@ template <ObjectType kType>
 auto LocalCAS<kDoGlobalUplink>::Splice(
     bazel_re::Digest const& digest,
     std::vector<bazel_re::Digest> const& parts) const noexcept
-    -> std::variant<LargeObjectError, bazel_re::Digest> {
-    return LargeObjectError{LargeObjectErrorCode::Internal, "not allowed"};
+    -> expected<bazel_re::Digest, LargeObjectError> {
+    return unexpected{
+        LargeObjectError{LargeObjectErrorCode::Internal, "not allowed"}};
 }
 #endif
 

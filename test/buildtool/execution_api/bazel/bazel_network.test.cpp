@@ -12,62 +12,88 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/execution_api/remote/bazel/bazel_network.hpp"
+
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "catch2/catch_test_macros.hpp"
+#include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_execution_client.hpp"
-#include "src/buildtool/execution_api/remote/bazel/bazel_network.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "test/utils/remote_execution/test_auth_config.hpp"
+#include "test/utils/remote_execution/test_remote_config.hpp"
 
 constexpr std::size_t kLargeSize = GRPC_DEFAULT_MAX_RECV_MESSAGE_LENGTH + 1;
 
 TEST_CASE("Bazel network: write/read blobs", "[execution_api]") {
-    auto const& info = RemoteExecutionConfig::RemoteAddress();
     std::string instance_name{"remote-execution"};
-    auto network = BazelNetwork{instance_name, info->host, info->port, {}};
+
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+
+    RetryConfig retry_config{};  // default retry config
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    auto network = BazelNetwork{instance_name,
+                                remote_config->remote_address->host,
+                                remote_config->remote_address->port,
+                                &*auth_config,
+                                &retry_config,
+                                {},
+                                hash_function};
 
     std::string content_foo("foo");
     std::string content_bar("bar");
     std::string content_baz(kLargeSize, 'x');  // single larger blob
 
-    BazelBlob foo{ArtifactDigest::Create<ObjectType::File>(content_foo),
-                  content_foo,
-                  /*is_exec=*/false};
-    BazelBlob bar{ArtifactDigest::Create<ObjectType::File>(content_bar),
-                  content_bar,
-                  /*is_exec=*/false};
-    BazelBlob baz{ArtifactDigest::Create<ObjectType::File>(content_baz),
-                  content_baz,
-                  /*is_exec=*/false};
+    BazelBlob foo{
+        ArtifactDigest::Create<ObjectType::File>(hash_function, content_foo),
+        content_foo,
+        /*is_exec=*/false};
+    BazelBlob bar{
+        ArtifactDigest::Create<ObjectType::File>(hash_function, content_bar),
+        content_bar,
+        /*is_exec=*/false};
+    BazelBlob baz{
+        ArtifactDigest::Create<ObjectType::File>(hash_function, content_baz),
+        content_baz,
+        /*is_exec=*/false};
 
     // Search blobs via digest
-    REQUIRE(network.UploadBlobs(BlobContainer{{foo, bar, baz}}));
+    REQUIRE(network.UploadBlobs(BazelBlobContainer{{foo, bar, baz}}));
 
     // Read blobs in order
-    auto reader = network.ReadBlobs(
-        {foo.digest, bar.digest, baz.digest, bar.digest, foo.digest});
-    std::vector<BazelBlob> blobs{};
-    while (true) {
-        auto next = reader.Next();
-        if (next.empty()) {
-            break;
-        }
+    auto reader = network.CreateReader();
+    std::vector<bazel_re::Digest> to_read{
+        foo.digest, bar.digest, baz.digest, bar.digest, foo.digest};
+    std::vector<ArtifactBlob> blobs{};
+    for (auto next : reader.ReadIncrementally(to_read)) {
         blobs.insert(blobs.end(), next.begin(), next.end());
     }
 
     // Check order maintained
     REQUIRE(blobs.size() == 5);
-    CHECK(blobs[0].data == content_foo);
-    CHECK(blobs[1].data == content_bar);
-    CHECK(blobs[2].data == content_baz);
-    CHECK(blobs[3].data == content_bar);
-    CHECK(blobs[4].data == content_foo);
+    CHECK(*blobs[0].data == content_foo);
+    CHECK(*blobs[1].data == content_bar);
+    CHECK(*blobs[2].data == content_baz);
+    CHECK(*blobs[3].data == content_bar);
+    CHECK(*blobs[4].data == content_foo);
 }
 
 TEST_CASE("Bazel network: read blobs with unknown size", "[execution_api]") {
@@ -76,40 +102,58 @@ TEST_CASE("Bazel network: read blobs with unknown size", "[execution_api]") {
         return;
     }
 
-    auto const& info = RemoteExecutionConfig::RemoteAddress();
     std::string instance_name{"remote-execution"};
-    auto network = BazelNetwork{instance_name, info->host, info->port, {}};
+
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+
+    RetryConfig retry_config{};  // default retry config
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    auto network = BazelNetwork{instance_name,
+                                remote_config->remote_address->host,
+                                remote_config->remote_address->port,
+                                &*auth_config,
+                                &retry_config,
+                                {},
+                                hash_function};
 
     std::string content_foo("foo");
     std::string content_bar(kLargeSize, 'x');  // single larger blob
 
-    BazelBlob foo{ArtifactDigest::Create<ObjectType::File>(content_foo),
-                  content_foo,
-                  /*is_exec=*/false};
-    BazelBlob bar{ArtifactDigest::Create<ObjectType::File>(content_bar),
-                  content_bar,
-                  /*is_exec=*/false};
+    BazelBlob foo{
+        ArtifactDigest::Create<ObjectType::File>(hash_function, content_foo),
+        content_foo,
+        /*is_exec=*/false};
+    BazelBlob bar{
+        ArtifactDigest::Create<ObjectType::File>(hash_function, content_bar),
+        content_bar,
+        /*is_exec=*/false};
 
     // Upload blobs
-    REQUIRE(network.UploadBlobs(BlobContainer{{foo, bar}}));
+    REQUIRE(network.UploadBlobs(BazelBlobContainer{{foo, bar}}));
 
     // Set size to unknown
     foo.digest.set_size_bytes(0);
     bar.digest.set_size_bytes(0);
 
     // Read blobs
-    auto reader = network.ReadBlobs({foo.digest, bar.digest});
-    std::vector<BazelBlob> blobs{};
-    while (true) {
-        auto next = reader.Next();
-        if (next.empty()) {
-            break;
-        }
+    auto reader = network.CreateReader();
+    std::vector<bazel_re::Digest> to_read{foo.digest, bar.digest};
+    std::vector<ArtifactBlob> blobs{};
+    for (auto next : reader.ReadIncrementally(to_read)) {
         blobs.insert(blobs.end(), next.begin(), next.end());
     }
 
     // Check order maintained
     REQUIRE(blobs.size() == 2);
-    CHECK(blobs[0].data == content_foo);
-    CHECK(blobs[1].data == content_bar);
+    CHECK(*blobs[0].data == content_foo);
+    CHECK(*blobs[1].data == content_bar);
 }

@@ -15,16 +15,39 @@
 #ifndef EXECUTION_SERVER_HPP
 #define EXECUTION_SERVER_HPP
 
+#include <cstdint>
+#include <optional>
+#include <string>
+
 #include "build/bazel/remote/execution/v2/remote_execution.grpc.pb.h"
 #include "gsl/gsl"
 #include "src/buildtool/common/bazel_types.hpp"
-#include "src/buildtool/execution_api/local/local_api.hpp"
+#include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/execution_api/execution_service/operation_cache.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 class ExecutionServiceImpl final : public bazel_re::Execution::Service {
   public:
-    ExecutionServiceImpl() = default;
+    explicit ExecutionServiceImpl(
+        gsl::not_null<LocalContext const*> const& local_context,
+        gsl::not_null<IExecutionApi const*> const& local_api,
+        std::optional<std::uint8_t> op_exponent) noexcept
+        : storage_config_{*local_context->storage_config},
+          storage_{*local_context->storage},
+          api_{*local_api} {
+        if (op_exponent) {
+            op_cache_.SetExponent(*op_exponent);
+        }
+    }
+
+    [[nodiscard]] auto GetOpCache() const noexcept -> OperationCache const& {
+        return op_cache_;
+    }
+
     // Execute an action remotely.
     //
     // In order to execute an action, the client must first upload all of the
@@ -101,47 +124,30 @@ class ExecutionServiceImpl final : public bazel_re::Execution::Service {
     // operation. The server MAY choose to stream additional updates as
     // execution progresses, such as to provide an update as to the state of the
     // execution.
-    auto WaitExecution(
-        ::grpc::ServerContext* context,
-        const ::bazel_re::WaitExecutionRequest* request,
-        ::grpc::ServerWriter<::google::longrunning::Operation>* writer)
-        -> ::grpc::Status override;
+    auto WaitExecution(::grpc::ServerContext* context,
+                       const ::bazel_re::WaitExecutionRequest* request,
+                       ::grpc::ServerWriter<::google::longrunning::Operation>*
+                           writer) -> ::grpc::Status override;
 
   private:
-    gsl::not_null<Storage const*> storage_ = &Storage::Instance();
-    IExecutionApi::Ptr api_{new LocalApi()};
+    StorageConfig const& storage_config_;
+    Storage const& storage_;
+    IExecutionApi const& api_;
+    OperationCache op_cache_;
     Logger logger_{"execution-service"};
 
-    [[nodiscard]] auto GetAction(::bazel_re::ExecuteRequest const* request)
-        const noexcept -> std::pair<std::optional<::bazel_re::Action>,
-                                    std::optional<std::string>>;
-    [[nodiscard]] auto GetCommand(::bazel_re::Action const& action)
-        const noexcept -> std::pair<std::optional<::bazel_re::Command>,
-                                    std::optional<std::string>>;
+    [[nodiscard]] auto ToIExecutionAction(::bazel_re::Action const& action,
+                                          ::bazel_re::Command const& command)
+        const noexcept -> std::optional<IExecutionAction::Ptr>;
 
-    [[nodiscard]] auto GetIExecutionAction(
-        ::bazel_re::ExecuteRequest const* request,
-        ::bazel_re::Action const& action) const
-        -> std::pair<std::optional<IExecutionAction::Ptr>,
-                     std::optional<std::string>>;
-
-    [[nodiscard]] auto GetResponse(
-        ::bazel_re::ExecuteRequest const* request,
+    [[nodiscard]] auto ToBazelExecuteResponse(
         IExecutionResponse::Ptr const& i_execution_response) const noexcept
-        -> std::pair<std::optional<::bazel_re::ExecuteResponse>,
-                     std::optional<std::string>>;
+        -> expected<::bazel_re::ExecuteResponse, std::string>;
 
-    [[nodiscard]] auto StoreActionResult(
-        ::bazel_re::ExecuteRequest const* request,
-        IExecutionResponse::Ptr const& i_execution_response,
+    void WriteResponse(
         ::bazel_re::ExecuteResponse const& execute_response,
-        ::bazel_re::Action const& action) const noexcept
-        -> std::optional<std::string>;
-
-    [[nodiscard]] auto AddResult(
-        ::bazel_re::ExecuteResponse* response,
-        IExecutionResponse::Ptr const& i_execution_response,
-        std::string const& hash) const noexcept -> std::optional<std::string>;
+        ::grpc::ServerWriter<::google::longrunning::Operation>* writer,
+        ::google::longrunning::Operation&& op) noexcept;
 };
 
 #endif

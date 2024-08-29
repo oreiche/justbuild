@@ -12,25 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/file_system/object_cas.hpp"
+
 #include <functional>  // std::equal_to
 #include <string>
 
 #include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
-#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
-#include "src/buildtool/file_system/object_cas.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
-#include "test/utils/hermeticity/local.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "test/utils/hermeticity/test_storage_config.hpp"
 
-TEST_CASE_METHOD(HermeticLocalTestFixture, "ObjectCAS", "[file_system]") {
+TEST_CASE("ObjectCAS", "[file_system]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto gen_config = storage_config.Get().CreateGenerationConfig(0);
+
     std::string test_content{"test"};
-    auto test_digest = ArtifactDigest::Create<ObjectType::File>(test_content);
+    auto test_digest = ArtifactDigest::Create<ObjectType::File>(
+        storage_config.Get().hash_function, test_content);
 
     SECTION("CAS for files") {
-        ObjectCAS<ObjectType::File> cas{StorageConfig::GenerationCacheDir(0) /
-                                        "casf"};
+        ObjectCAS<ObjectType::File> cas{storage_config.Get().hash_function,
+                                        gen_config.cas_f};
         CHECK(not cas.BlobPath(test_digest));
 
         SECTION("Add blob from bytes and verify") {
@@ -69,7 +74,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture, "ObjectCAS", "[file_system]") {
 
     SECTION("CAS for executables") {
         ObjectCAS<ObjectType::Executable> cas{
-            StorageConfig::GenerationCacheDir(0) / "casx"};
+            storage_config.Get().hash_function, gen_config.cas_x};
         CHECK(not cas.BlobPath(test_digest));
 
         SECTION("Add blob from bytes and verify") {

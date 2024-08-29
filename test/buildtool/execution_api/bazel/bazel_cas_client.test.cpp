@@ -12,30 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/execution_api/remote/bazel/bazel_cas_client.hpp"
+
 #include <functional>  // std::equal_to
 #include <string>
 #include <vector>
 
 #include "catch2/catch_test_macros.hpp"
+#include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob.hpp"
-#include "src/buildtool/execution_api/remote/bazel/bazel_cas_client.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_execution_client.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "test/utils/remote_execution/test_auth_config.hpp"
+#include "test/utils/remote_execution/test_remote_config.hpp"
 
 TEST_CASE("Bazel internals: CAS Client", "[execution_api]") {
-    auto const& info = RemoteExecutionConfig::RemoteAddress();
-
     std::string instance_name{"remote-execution"};
     std::string content("test");
 
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
     // Create CAS client
-    BazelCasClient cas_client(info->host, info->port);
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+    RetryConfig retry_config{};  // default retry config
+    BazelCasClient cas_client(remote_config->remote_address->host,
+                              remote_config->remote_address->port,
+                              &*auth_config,
+                              &retry_config);
 
     SECTION("Valid digest and blob") {
         // digest of "test"
-        auto digest = ArtifactDigest::Create<ObjectType::File>(content);
+        HashFunction const hash_function{Compatibility::IsCompatible()
+                                             ? HashFunction::Type::PlainSHA256
+                                             : HashFunction::Type::GitSHA1};
+        auto digest =
+            ArtifactDigest::Create<ObjectType::File>(hash_function, content);
 
         // Valid blob
         BazelBlob blob{digest, content, /*is_exec=*/false};
@@ -44,9 +62,9 @@ TEST_CASE("Bazel internals: CAS Client", "[execution_api]") {
         auto digests = cas_client.FindMissingBlobs(instance_name, {digest});
         CHECK(digests.size() <= 1);
 
-        if (!digests.empty()) {
+        if (not digests.empty()) {
             // Upload blob, if not found
-            std::vector<BazelBlob> to_upload{blob};
+            std::vector<gsl::not_null<BazelBlob const*>> to_upload{&blob};
             CHECK(cas_client.BatchUpdateBlobs(
                       instance_name, to_upload.begin(), to_upload.end()) == 1U);
         }
@@ -57,7 +75,7 @@ TEST_CASE("Bazel internals: CAS Client", "[execution_api]") {
             instance_name, to_read.begin(), to_read.end());
         REQUIRE(blobs.size() == 1);
         CHECK(std::equal_to<bazel_re::Digest>{}(blobs[0].digest, digest));
-        CHECK(blobs[0].data == content);
+        CHECK(*blobs[0].data == content);
     }
 
     SECTION("Invalid digest and blob") {
@@ -75,7 +93,7 @@ TEST_CASE("Bazel internals: CAS Client", "[execution_api]") {
                   .size() == 1);
 
         // Try upload faulty blob
-        std::vector<BazelBlob> to_upload{faulty_blob};
+        std::vector<gsl::not_null<BazelBlob const*>> to_upload{&faulty_blob};
         CHECK(cas_client.BatchUpdateBlobs(
                   instance_name, to_upload.begin(), to_upload.end()) == 0U);
 

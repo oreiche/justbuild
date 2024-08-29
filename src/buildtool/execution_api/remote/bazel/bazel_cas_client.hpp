@@ -24,8 +24,11 @@
 #include <vector>
 
 #include "build/bazel/remote/execution/v2/remote_execution.grpc.pb.h"
+#include "gsl/gsl"
+#include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/common/remote/port.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bytestream_client.hpp"
@@ -36,7 +39,11 @@
 /// https://github.com/bazelbuild/remote-apis/blob/e1fe21be4c9ae76269a5a63215bb3c72ed9ab3f0/build/bazel/remote/execution/v2/remote_execution.proto#L317
 class BazelCasClient {
   public:
-    BazelCasClient(std::string const& server, Port port) noexcept;
+    explicit BazelCasClient(
+        std::string const& server,
+        Port port,
+        gsl::not_null<Auth const*> const& auth,
+        gsl::not_null<RetryConfig const*> const& retry_config) noexcept;
 
     /// \brief Find missing blobs
     /// \param[in] instance_name Name of the CAS instance
@@ -44,7 +51,7 @@ class BazelCasClient {
     /// \returns The digests of blobs not found in CAS
     [[nodiscard]] auto FindMissingBlobs(
         std::string const& instance_name,
-        std::vector<bazel_re::Digest> const& digests) noexcept
+        std::vector<bazel_re::Digest> const& digests) const noexcept
         -> std::vector<bazel_re::Digest>;
 
     /// \brief Find missing blobs
@@ -53,7 +60,7 @@ class BazelCasClient {
     /// \returns The digests of blobs not found in CAS
     [[nodiscard]] auto FindMissingBlobs(
         std::string const& instance_name,
-        BlobContainer::DigestList const& digests) noexcept
+        BazelBlobContainer const& blob_container) const noexcept
         -> std::vector<bazel_re::Digest>;
 
     /// \brief Upload multiple blobs in batch transfer
@@ -63,30 +70,10 @@ class BazelCasClient {
     /// \returns The digests of blobs successfully updated
     [[nodiscard]] auto BatchUpdateBlobs(
         std::string const& instance_name,
-        std::vector<BazelBlob>::const_iterator const& begin,
-        std::vector<BazelBlob>::const_iterator const& end) noexcept
-        -> std::size_t;
-
-    /// \brief Upload multiple blobs in batch transfer
-    /// \param[in] instance_name Name of the CAS instance
-    /// \param[in] begin         Start of the blobs to upload
-    /// \param[in] end           End of the blobs to upload
-    /// \returns The digests of blobs successfully updated
-    [[nodiscard]] auto BatchUpdateBlobs(
-        std::string const& instance_name,
-        BlobContainer::iterator const& begin,
-        BlobContainer::iterator const& end) noexcept -> std::size_t;
-
-    /// \brief Upload multiple blobs in batch transfer
-    /// \param[in] instance_name Name of the CAS instance
-    /// \param[in] begin         Start of the blobs to upload
-    /// \param[in] end           End of the blobs to upload
-    /// \returns The digests of blobs successfully updated
-    [[nodiscard]] auto BatchUpdateBlobs(
-        std::string const& instance_name,
-        BlobContainer::RelatedBlobList::iterator const& begin,
-        BlobContainer::RelatedBlobList::iterator const& end) noexcept
-        -> std::size_t;
+        std::vector<gsl::not_null<BazelBlob const*>>::const_iterator const&
+            begin,
+        std::vector<gsl::not_null<BazelBlob const*>>::const_iterator const& end)
+        const noexcept -> std::size_t;
 
     /// \brief Read multiple blobs in batch transfer
     /// \param[in] instance_name Name of the CAS instance
@@ -96,21 +83,22 @@ class BazelCasClient {
     [[nodiscard]] auto BatchReadBlobs(
         std::string const& instance_name,
         std::vector<bazel_re::Digest>::const_iterator const& begin,
-        std::vector<bazel_re::Digest>::const_iterator const& end) noexcept
+        std::vector<bazel_re::Digest>::const_iterator const& end) const noexcept
         -> std::vector<BazelBlob>;
 
     [[nodiscard]] auto GetTree(std::string const& instance_name,
                                bazel_re::Digest const& root_digest,
                                std::int32_t page_size,
-                               std::string const& page_token = "") noexcept
-        -> std::vector<bazel_re::Directory>;
+                               std::string const& page_token = "")
+        const noexcept -> std::vector<bazel_re::Directory>;
 
     /// \brief Upload single blob via bytestream
     /// \param[in] instance_name Name of the CAS instance
     /// \param[in] blob          The blob to upload
     /// \returns Boolean indicating successful upload
     [[nodiscard]] auto UpdateSingleBlob(std::string const& instance_name,
-                                        BazelBlob const& blob) noexcept -> bool;
+                                        BazelBlob const& blob) const noexcept
+        -> bool;
 
     /// \brief Read single blob via incremental bytestream reader
     /// \param[in] instance_name Name of the CAS instance
@@ -118,7 +106,7 @@ class BazelCasClient {
     /// \returns Incremental bytestream reader.
     [[nodiscard]] auto IncrementalReadSingleBlob(
         std::string const& instance_name,
-        bazel_re::Digest const& digest) noexcept
+        bazel_re::Digest const& digest) const noexcept
         -> ByteStreamClient::IncrementalReader;
 
     /// \brief Read single blob via bytestream
@@ -126,8 +114,8 @@ class BazelCasClient {
     /// \param[in] digest        Blob digest to read
     /// \returns The blob successfully read
     [[nodiscard]] auto ReadSingleBlob(std::string const& instance_name,
-                                      bazel_re::Digest const& digest) noexcept
-        -> std::optional<BazelBlob>;
+                                      bazel_re::Digest const& digest)
+        const noexcept -> std::optional<BazelBlob>;
 
     /// @brief Split single blob into chunks
     /// @param[in] instance_name    Name of the CAS instance
@@ -156,20 +144,15 @@ class BazelCasClient {
 
   private:
     std::unique_ptr<ByteStreamClient> stream_{};
+    RetryConfig const& retry_config_;
     std::unique_ptr<bazel_re::ContentAddressableStorage::Stub> stub_;
     Logger logger_{"RemoteCasClient"};
 
     template <class T_OutputIter>
     [[nodiscard]] auto FindMissingBlobs(std::string const& instance_name,
                                         T_OutputIter const& start,
-                                        T_OutputIter const& end) noexcept
+                                        T_OutputIter const& end) const noexcept
         -> std::vector<bazel_re::Digest>;
-
-    template <class T_OutputIter>
-    [[nodiscard]] auto DoBatchUpdateBlobs(std::string const& instance_name,
-                                          T_OutputIter const& start,
-                                          T_OutputIter const& end) noexcept
-        -> std::size_t;
 
     template <typename T_Request, typename T_ForwardIter>
     [[nodiscard]] auto CreateBatchRequestsMaxSize(

@@ -15,51 +15,56 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_EXECUTION_API_LOCAL_CONFIG_HPP
 #define INCLUDED_SRC_BUILDTOOL_EXECUTION_API_LOCAL_CONFIG_HPP
 
-#include <filesystem>
-#include <functional>
+#include <exception>
+#include <optional>
 #include <string>
+#include <utility>  // std::move
 #include <vector>
 
-#include "gsl/gsl"
+#include "fmt/core.h"
 #include "nlohmann/json.hpp"
-#include "src/buildtool/common/artifact_digest.hpp"
-#include "src/buildtool/file_system/file_system_manager.hpp"
-#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/utils/cpp/expected.hpp"
 
-/// \brief Store global build system configuration.
-class LocalExecutionConfig {
-    struct ConfigData {
-        // Launcher to be prepended to action's command before executed.
-        // Default: ["env", "--"]
-        std::vector<std::string> launcher{"env", "--"};
-    };
+/// \brief Store local execution configuration.
+struct LocalExecutionConfig final {
+    class Builder;
 
+    // Launcher to be prepended to action's command before executed.
+    // Default: ["env", "--"]
+    std::vector<std::string> const launcher = {"env", "--"};
+};
+
+class LocalExecutionConfig::Builder final {
   public:
-    [[nodiscard]] static auto SetLauncher(
-        std::vector<std::string> const& launcher) noexcept -> bool {
-        try {
-            Data().launcher = launcher;
-        } catch (std::exception const& e) {
-            Logger::Log(LogLevel::Error,
-                        "when setting the local launcher\n{}",
-                        e.what());
-            return false;
-        }
-        return true;
+    auto SetLauncher(std::vector<std::string> launcher) noexcept -> Builder& {
+        launcher_ = std::move(launcher);
+        return *this;
     }
 
-    [[nodiscard]] static auto GetLauncher() noexcept
-        -> std::vector<std::string> {
-        return Data().launcher;
+    /// \brief Finalize building and create LocalExecutionConfig.
+    /// \return LocalExecutionConfig on success, an error string on failure.
+    [[nodiscard]] auto Build() const noexcept
+        -> expected<LocalExecutionConfig, std::string> {
+        // To not duplicate default arguments in builder, create a default
+        // config and copy arguments from there.
+        LocalExecutionConfig const default_config;
+        auto launcher = default_config.launcher;
+        if (launcher_.has_value()) {
+            try {
+                launcher = *launcher_;
+            } catch (std::exception const& ex) {
+                return unexpected{
+                    fmt::format("Failed to set launcher:\n{}", ex.what())};
+            }
+        }
+
+        return LocalExecutionConfig{.launcher = std::move(launcher)};
     }
 
   private:
-    [[nodiscard]] static auto Data() noexcept -> ConfigData& {
-        static ConfigData instance{};
-        return instance;
-    }
+    std::optional<std::vector<std::string>> launcher_;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_LOCAL_CONFIG_HPP

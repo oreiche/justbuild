@@ -3,10 +3,14 @@
   , "name": ["upload"]
   , "test": ["upload.sh"]
   , "deps":
-    [ ["end-to-end", "mr-tool-under-test"]
-    , ["end-to-end", "tool-under-test"]
+    [ ["", "mr-tool-under-test"]
+    , ["", "tool-under-test"]
     , ["end-to-end/serve-service", "serve-tree (archive)"]
     ]
   }
-, "TESTS": {"type": "install", "tainted": ["test"], "deps": ["upload"]}
+, "TESTS":
+  { "type": ["@", "rules", "test", "suite"]
+  , "stage": ["serve-file-root"]
+  , "deps": ["upload"]
+  }
 }

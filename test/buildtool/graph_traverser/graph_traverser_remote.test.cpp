@@ -13,43 +13,185 @@
 // limitations under the License.
 
 #include "catch2/catch_test_macros.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
 #include "test/buildtool/graph_traverser/graph_traverser.test.hpp"
+#include "test/utils/remote_execution/test_auth_config.hpp"
+#include "test/utils/remote_execution/test_remote_config.hpp"
+
+[[nodiscard]] static auto CreateStorageConfig(
+    RemoteExecutionConfig const& remote_config) -> StorageConfig {
+    auto cache_dir = FileSystemManager::GetCurrentDirectory() / "cache";
+    if (not FileSystemManager::RemoveDirectory(cache_dir, true) or
+        not FileSystemManager::CreateDirectoryExclusive(cache_dir)) {
+        Logger::Log(LogLevel::Error,
+                    "failed to create a test-local cache dir {}",
+                    cache_dir.string());
+        std::exit(EXIT_FAILURE);
+    }
+
+    StorageConfig::Builder builder;
+    auto config = builder.SetBuildRoot(cache_dir)
+                      .SetHashType(Compatibility::IsCompatible()
+                                       ? HashFunction::Type::PlainSHA256
+                                       : HashFunction::Type::GitSHA1)
+                      .SetRemoteExecutionArgs(remote_config.remote_address,
+                                              remote_config.platform_properties,
+                                              remote_config.dispatch)
+                      .Build();
+    if (not config) {
+        Logger::Log(LogLevel::Error, config.error());
+        std::exit(EXIT_FAILURE);
+    }
+    return *std::move(config);
+}
 
 TEST_CASE("Remote: Output created and contents are correct",
           "[graph_traverser]") {
-    TestHelloWorldCopyMessage(false /* not hermetic */);
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    StorageConfig const storage_config = CreateStorageConfig(*remote_config);
+    auto const storage = Storage::Create(&storage_config);
+
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    TestHelloWorldCopyMessage(storage_config,
+                              storage,
+                              &*auth_config,
+                              &*remote_config,
+                              false /* not hermetic */);
 }
 
 TEST_CASE("Remote: Output created when entry point is local artifact",
           "[graph_traverser]") {
-    TestCopyLocalFile(false /* not hermetic */);
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    StorageConfig const storage_config = CreateStorageConfig(*remote_config);
+    auto const storage = Storage::Create(&storage_config);
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    TestCopyLocalFile(storage_config,
+                      storage,
+                      &*auth_config,
+                      &*remote_config,
+                      false /* not hermetic */);
 }
 
 TEST_CASE("Remote: Actions are not re-run", "[graph_traverser]") {
-    TestSequencePrinterBuildLibraryOnly(false /* not hermetic */);
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    StorageConfig const storage_config = CreateStorageConfig(*remote_config);
+    auto const storage = Storage::Create(&storage_config);
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    TestSequencePrinterBuildLibraryOnly(storage_config,
+                                        storage,
+                                        &*auth_config,
+                                        &*remote_config,
+                                        false /* not hermetic */);
 }
 
 TEST_CASE("Remote: KNOWN artifact", "[graph_traverser]") {
-    TestHelloWorldWithKnownSource(false /* not hermetic */);
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    StorageConfig const storage_config = CreateStorageConfig(*remote_config);
+    auto const storage = Storage::Create(&storage_config);
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    TestHelloWorldWithKnownSource(storage_config,
+                                  storage,
+                                  &*auth_config,
+                                  &*remote_config,
+                                  false /* not hermetic */);
 }
 
 TEST_CASE("Remote: Blobs uploaded and correctly used", "[graph_traverser]") {
-    TestBlobsUploadedAndUsed(false /* not hermetic */);
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    StorageConfig const storage_config = CreateStorageConfig(*remote_config);
+    auto const storage = Storage::Create(&storage_config);
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    TestBlobsUploadedAndUsed(storage_config,
+                             storage,
+                             &*auth_config,
+                             &*remote_config,
+                             false /* not hermetic */);
 }
 
 TEST_CASE("Remote: Environment variables are set and used",
           "[graph_traverser]") {
-    TestEnvironmentVariablesSetAndUsed(false /* not hermetic */);
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    StorageConfig const storage_config = CreateStorageConfig(*remote_config);
+    auto const storage = Storage::Create(&storage_config);
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    TestEnvironmentVariablesSetAndUsed(storage_config,
+                                       storage,
+                                       &*auth_config,
+                                       &*remote_config,
+                                       false /* not hermetic */);
 }
 
 TEST_CASE("Remote: Trees correctly used", "[graph_traverser]") {
-    TestTreesUsed(false /* not hermetic */);
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    StorageConfig const storage_config = CreateStorageConfig(*remote_config);
+    auto const storage = Storage::Create(&storage_config);
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    TestTreesUsed(storage_config,
+                  storage,
+                  &*auth_config,
+                  &*remote_config,
+                  false /* not hermetic */);
 }
 
 TEST_CASE("Remote: Nested trees correctly used", "[graph_traverser]") {
-    TestNestedTreesUsed(false /* not hermetic */);
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    StorageConfig const storage_config = CreateStorageConfig(*remote_config);
+    auto const storage = Storage::Create(&storage_config);
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    TestNestedTreesUsed(storage_config,
+                        storage,
+                        &*auth_config,
+                        &*remote_config,
+                        false /* not hermetic */);
 }
 
 TEST_CASE("Remote: Detect flaky actions", "[graph_traverser]") {
-    TestFlakyHelloWorldDetected(false /* not hermetic */);
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+
+    StorageConfig const storage_config = CreateStorageConfig(*remote_config);
+    auto const storage = Storage::Create(&storage_config);
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    TestFlakyHelloWorldDetected(storage_config,
+                                storage,
+                                &*auth_config,
+                                &*remote_config,
+                                false /* not hermetic */);
 }

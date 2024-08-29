@@ -13,8 +13,9 @@
     , ["src/buildtool/file_system", "git_context"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/logging", "log_level"]
-    , ["src/buildtool/main", "retry"]
     , ["src/buildtool/main", "version"]
+    , ["src/buildtool/storage", "config"]
+    , ["src/buildtool/storage", "repository_garbage_collector"]
     , ["src/buildtool/storage", "storage"]
     , "cli"
     , "exit_codes"
@@ -24,6 +25,7 @@
     , "setup"
     , "setup_utils"
     , "update"
+    , ["src/buildtool/crypto", "hash_function"]
     ]
   , "stage": ["src", "other_tools", "just_mr"]
   , "private-ldflags":
@@ -43,6 +45,7 @@
     [ ["@", "gsl", "", "gsl"]
     , ["@", "json", "", "json"]
     , ["src/buildtool/storage", "config"]
+    , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/build_engine/expression", "expression"]
     ]
   , "stage": ["src", "other_tools", "just_mr"]
@@ -82,23 +85,21 @@
   , "hdrs": ["setup_utils.hpp"]
   , "srcs": ["setup_utils.cpp"]
   , "deps":
-    [ ["src/buildtool/build_engine/expression", "expression_ptr_interface"]
+    [ ["src/buildtool/auth", "auth"]
+    , ["src/buildtool/build_engine/expression", "expression_ptr_interface"]
     , ["src/buildtool/build_engine/expression", "expression"]
-    , ["src/buildtool/execution_api/common", "common"]
-    , ["src/buildtool/serve_api/remote", "serve_api"]
+    , ["src/buildtool/execution_api/local", "config"]
+    , ["src/buildtool/serve_api/remote", "config"]
     , "cli"
     ]
   , "stage": ["src", "other_tools", "just_mr"]
   , "private-deps":
     [ ["@", "json", "", "json"]
+    , ["src/buildtool/execution_api/remote", "config"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , "exit_codes"
-    , ["src/buildtool/auth", "auth"]
-    , ["src/buildtool/execution_api/bazel_msg", "bazel_msg"]
-    , ["src/buildtool/execution_api/remote", "bazel"]
-    , ["src/buildtool/serve_api/remote", "config"]
     ]
   }
 , "fetch":
@@ -106,16 +107,27 @@
   , "name": ["fetch"]
   , "hdrs": ["fetch.hpp"]
   , "srcs": ["fetch.cpp"]
-  , "deps": [["src/buildtool/build_engine/expression", "expression"], "cli"]
+  , "deps":
+    [ ["src/buildtool/build_engine/expression", "expression"]
+    , "cli"
+    , ["src/buildtool/common", "retry_cli"]
+    , ["src/buildtool/storage", "config"]
+    , ["src/buildtool/storage", "storage"]
+    ]
   , "stage": ["src", "other_tools", "just_mr"]
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]
     , ["@", "json", "", "json"]
+    , ["src/buildtool/auth", "auth"]
+    , ["src/buildtool/common/remote", "retry_config"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/main", "retry"]
+    , ["src/buildtool/multithreading", "async_map_utils"]
     , ["src/buildtool/multithreading", "task_system"]
     , "exit_codes"
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
     , ["src/other_tools/just_mr/progress_reporting", "progress_reporter"]
+    , ["src/other_tools/just_mr/progress_reporting", "statistics"]
     , ["src/other_tools/ops_maps", "archive_fetch_map"]
     , ["src/other_tools/ops_maps", "content_cas_map"]
     , ["src/other_tools/ops_maps", "critical_git_op_map"]
@@ -124,7 +136,13 @@
     , ["src/other_tools/utils", "parse_archive"]
     , "setup_utils"
     , ["src/buildtool/execution_api/common", "common"]
-    , ["src/buildtool/execution_api/local", "local"]
+    , ["src/buildtool/execution_api/common", "api_bundle"]
+    , ["src/buildtool/execution_api/local", "config"]
+    , ["src/buildtool/execution_api/local", "context"]
+    , ["src/buildtool/execution_api/remote", "config"]
+    , ["src/buildtool/execution_api/remote", "context"]
+    , ["src/buildtool/serve_api/remote", "config"]
+    , ["src/buildtool/serve_api/remote", "serve_api"]
     ]
   }
 , "update":
@@ -132,18 +150,24 @@
   , "name": ["update"]
   , "hdrs": ["update.hpp"]
   , "srcs": ["update.cpp"]
-  , "deps": [["src/buildtool/build_engine/expression", "expression"], "cli"]
+  , "deps":
+    [ ["src/buildtool/build_engine/expression", "expression"]
+    , "cli"
+    , ["src/buildtool/storage", "config"]
+    ]
   , "stage": ["src", "other_tools", "just_mr"]
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]
     , ["@", "json", "", "json"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/multithreading", "async_map_utils"]
     , ["src/buildtool/multithreading", "task_system"]
     , ["src/buildtool/storage", "config"]
     , ["src/other_tools/git_operations", "git_repo_remote"]
     , "exit_codes"
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
     , ["src/other_tools/just_mr/progress_reporting", "progress_reporter"]
+    , ["src/other_tools/just_mr/progress_reporting", "statistics"]
     , "utils"
     , ["src/other_tools/ops_maps", "git_update_map"]
     ]
@@ -153,16 +177,27 @@
   , "name": ["setup"]
   , "hdrs": ["setup.hpp"]
   , "srcs": ["setup.cpp"]
-  , "deps": [["src/buildtool/build_engine/expression", "expression"], "cli"]
+  , "deps":
+    [ ["src/buildtool/build_engine/expression", "expression"]
+    , "cli"
+    , ["src/buildtool/common", "retry_cli"]
+    , ["src/buildtool/storage", "config"]
+    , ["src/buildtool/storage", "storage"]
+    ]
   , "stage": ["src", "other_tools", "just_mr"]
   , "private-deps":
     [ ["@", "json", "", "json"]
+    , ["src/buildtool/auth", "auth"]
+    , ["src/buildtool/common/remote", "retry_config"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/main", "retry"]
+    , ["src/buildtool/multithreading", "async_map_utils"]
     , ["src/buildtool/multithreading", "task_system"]
     , ["src/buildtool/storage", "fs_utils"]
     , "exit_codes"
     , ["src/other_tools/just_mr/progress_reporting", "progress"]
     , ["src/other_tools/just_mr/progress_reporting", "progress_reporter"]
+    , ["src/other_tools/just_mr/progress_reporting", "statistics"]
     , "utils"
     , ["src/other_tools/ops_maps", "content_cas_map"]
     , ["src/other_tools/ops_maps", "critical_git_op_map"]
@@ -176,7 +211,13 @@
     , ["src/buildtool/file_system/symlinks_map", "resolve_symlinks_map"]
     , "setup_utils"
     , ["src/buildtool/execution_api/common", "common"]
-    , ["src/buildtool/execution_api/local", "local"]
+    , ["src/buildtool/execution_api/common", "api_bundle"]
+    , ["src/buildtool/execution_api/local", "config"]
+    , ["src/buildtool/execution_api/local", "context"]
+    , ["src/buildtool/execution_api/remote", "config"]
+    , ["src/buildtool/execution_api/remote", "context"]
+    , ["src/buildtool/serve_api/remote", "config"]
+    , ["src/buildtool/serve_api/remote", "serve_api"]
     ]
   }
 , "launch":
@@ -184,18 +225,23 @@
   , "name": ["launch"]
   , "hdrs": ["launch.hpp"]
   , "srcs": ["launch.cpp"]
-  , "deps": ["cli"]
+  , "deps":
+    [ "cli"
+    , ["src/buildtool/common", "retry_cli"]
+    , ["src/buildtool/storage", "config"]
+    , ["src/buildtool/storage", "storage"]
+    ]
   , "stage": ["src", "other_tools", "just_mr"]
   , "private-deps":
     [ ["@", "json", "", "json"]
     , ["src/buildtool/build_engine/expression", "expression"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/multithreading", "task_system"]
-    , ["src/buildtool/storage", "storage"]
+    , ["src/buildtool/storage", "repository_garbage_collector"]
+    , ["src/utils/cpp", "file_locking"]
     , "exit_codes"
     , "setup"
     , "utils"
-    , ["src/utils/cpp", "file_locking"]
     , "setup_utils"
     ]
   }

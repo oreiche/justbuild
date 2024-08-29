@@ -12,68 +12,140 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/execution_api/local/local_api.hpp"
+
 #include <cstdlib>
 #include <string>
 
 #include "catch2/catch_test_macros.hpp"
-#include "src/buildtool/execution_api/local/local_api.hpp"
+#include "src/buildtool/execution_api/local/config.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
 #include "test/buildtool/execution_api/common/api_test.hpp"
-#include "test/utils/hermeticity/local.hpp"
+#include "test/utils/hermeticity/test_storage_config.hpp"
 
 namespace {
+class FactoryApi final {
+  public:
+    explicit FactoryApi(
+        gsl::not_null<LocalContext const*> const& local_context) noexcept
+        : local_context_{*local_context} {}
 
-auto const kApiFactory = []() { return IExecutionApi::Ptr{new LocalApi()}; };
+    [[nodiscard]] auto operator()() const -> IExecutionApi::Ptr {
+        return IExecutionApi::Ptr{new LocalApi{&local_context_}};
+    }
+
+  private:
+    LocalContext const& local_context_;
+};
 
 }  // namespace
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAPI: No input, no output",
-                 "[execution_api]") {
-    TestNoInputNoOutput(kApiFactory, {}, /*is_hermetic=*/true);
+TEST_CASE("LocalAPI: No input, no output", "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+    FactoryApi api_factory(&local_context);
+
+    TestNoInputNoOutput(api_factory, {}, /*is_hermetic=*/true);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAPI: No input, create output",
-                 "[execution_api]") {
-    TestNoInputCreateOutput(kApiFactory, {}, /*is_hermetic=*/true);
+TEST_CASE("LocalAPI: No input, create output", "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+    FactoryApi api_factory(&local_context);
+
+    TestNoInputCreateOutput(api_factory, {}, /*is_hermetic=*/true);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAPI: One input copied to output",
-                 "[execution_api]") {
-    TestOneInputCopiedToOutput(kApiFactory, {}, /*is_hermetic=*/true);
+TEST_CASE("LocalAPI: One input copied to output", "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+    FactoryApi api_factory(&local_context);
+
+    TestOneInputCopiedToOutput(api_factory, {}, /*is_hermetic=*/true);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAPI: Non-zero exit code, create output",
-                 "[execution_api]") {
-    TestNonZeroExitCodeCreateOutput(kApiFactory, {});
+TEST_CASE("LocalAPI: Non-zero exit code, create output", "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+    FactoryApi api_factory(&local_context);
+
+    TestNonZeroExitCodeCreateOutput(api_factory, {});
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAPI: Retrieve two identical trees to path",
-                 "[execution_api]") {
+TEST_CASE("LocalAPI: Retrieve two identical trees to path", "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+    FactoryApi api_factory(&local_context);
+
     TestRetrieveTwoIdenticalTreesToPath(
-        kApiFactory, {}, "two_trees", /*is_hermetic=*/true);
+        api_factory, {}, "two_trees", /*is_hermetic=*/true);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAPI: Retrieve file and symlink with same content to "
-                 "path",
-                 "[execution_api]") {
+TEST_CASE("LocalAPI: Retrieve file and symlink with same content to path",
+          "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+    FactoryApi api_factory(&local_context);
+
     TestRetrieveFileAndSymlinkWithSameContentToPath(
-        kApiFactory, {}, "file_and_symlink", /*is_hermetic=*/true);
+        api_factory, {}, "file_and_symlink", /*is_hermetic=*/true);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAPI: Retrieve mixed blobs and trees",
-                 "[execution_api]") {
+TEST_CASE("LocalAPI: Retrieve mixed blobs and trees", "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+    FactoryApi api_factory(&local_context);
+
     TestRetrieveMixedBlobsAndTrees(
-        kApiFactory, {}, "blobs_and_trees", /*is_hermetic=*/true);
+        api_factory, {}, "blobs_and_trees", /*is_hermetic=*/true);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAPI: Create directory prior to execution",
-                 "[execution_api]") {
-    TestCreateDirPriorToExecution(kApiFactory, {}, /*is_hermetic=*/true);
+TEST_CASE("LocalAPI: Create directory prior to execution", "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+    FactoryApi api_factory(&local_context);
+
+    TestCreateDirPriorToExecution(api_factory, {}, /*is_hermetic=*/true);
 }

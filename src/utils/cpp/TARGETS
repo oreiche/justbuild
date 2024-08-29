@@ -48,6 +48,12 @@
   , "hdrs": ["path.hpp"]
   , "stage": ["src", "utils", "cpp"]
   }
+, "path_rebase":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["path_rebase"]
+  , "hdrs": ["path_rebase.hpp"]
+  , "stage": ["src", "utils", "cpp"]
+  }
 , "vector":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["vector"]
@@ -98,6 +104,25 @@
   , "name": ["verify_hash"]
   , "hdrs": ["verify_hash.hpp"]
   , "deps": [["@", "fmt", "", "fmt"]]
+  , "stage": ["src", "utils", "cpp"]
+  }
+, "transformed_range":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["transformed_range"]
+  , "hdrs": ["transformed_range.hpp"]
+  , "deps": [["@", "gsl", "", "gsl"]]
+  , "stage": ["src", "utils", "cpp"]
+  }
+, "prefix":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["prefix"]
+  , "hdrs": ["prefix.hpp"]
+  , "stage": ["src", "utils", "cpp"]
+  }
+, "expected":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["expected"]
+  , "hdrs": ["expected.hpp"]
   , "stage": ["src", "utils", "cpp"]
   }
 }

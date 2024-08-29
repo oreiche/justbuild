@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef INCLUDED_SRC_TEST_BUILDTOOL_EXECUTION_API_COMMON_API_TEST_HPP
+#define INCLUDED_SRC_TEST_BUILDTOOL_EXECUTION_API_COMMON_API_TEST_HPP
+
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -20,7 +23,9 @@
 #include <vector>
 
 #include "catch2/catch_test_macros.hpp"
-#include "src/buildtool/common/artifact_factory.hpp"
+#include "src/buildtool/common/artifact_description.hpp"
+#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/common/execution_response.hpp"
@@ -32,7 +37,8 @@
 using ApiFactory = std::function<IExecutionApi::Ptr()>;
 using ExecProps = std::map<std::string, std::string>;
 
-inline void SetLauncher() {
+[[nodiscard]] static inline auto CreateLocalExecConfig() noexcept
+    -> LocalExecutionConfig {
     std::vector<std::string> launcher{"env"};
     auto* env_path = std::getenv("PATH");
     if (env_path != nullptr) {
@@ -41,10 +47,12 @@ inline void SetLauncher() {
     else {
         launcher.emplace_back("PATH=/bin:/usr/bin");
     }
-    if (not LocalExecutionConfig::SetLauncher(launcher)) {
-        Logger::Log(LogLevel::Error, "Failure setting the local launcher.");
-        std::exit(EXIT_FAILURE);
+    LocalExecutionConfig::Builder builder;
+    if (auto config = builder.SetLauncher(std::move(launcher)).Build()) {
+        return *std::move(config);
     }
+    Logger::Log(LogLevel::Error, "Failure setting the local launcher.");
+    std::exit(EXIT_FAILURE);
 }
 
 [[nodiscard]] static inline auto GetTestDir(std::string const& test_name)
@@ -65,10 +73,13 @@ inline void SetLauncher() {
 
     auto api = api_factory();
 
-    auto action = api->CreateAction(
-        *api->UploadTree({}), {"echo", "-n", test_content}, {}, {}, {}, props);
-
-    SetLauncher();
+    auto action = api->CreateAction(*api->UploadTree({}),
+                                    {"echo", "-n", test_content},
+                                    "",
+                                    {},
+                                    {},
+                                    {},
+                                    props);
 
     SECTION("Cache execution result in action cache") {
         action->SetCacheFlag(IExecutionAction::CacheFlag::CacheOutput);
@@ -127,7 +138,13 @@ inline void SetLauncher() {
     ExecProps const& props,
     bool is_hermetic = false) {
     std::string test_content("test");
-    auto test_digest = ArtifactDigest::Create<ObjectType::File>(test_content);
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    auto test_digest =
+        ArtifactDigest::Create<ObjectType::File>(hash_function, test_content);
 
     std::string output_path{"output_file"};
 
@@ -138,6 +155,7 @@ inline void SetLauncher() {
         {"/bin/sh",
          "-c",
          "set -e\necho -n " + test_content + " > " + output_path},
+        "",
         {output_path},
         {},
         {},
@@ -204,26 +222,32 @@ inline void SetLauncher() {
     ExecProps const& props,
     bool is_hermetic = false) {
     std::string test_content("test");
-    auto test_digest = ArtifactDigest::Create<ObjectType::File>(test_content);
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    auto test_digest =
+        ArtifactDigest::Create<ObjectType::File>(hash_function, test_content);
 
     auto input_artifact_opt =
-        ArtifactFactory::FromDescription(ArtifactFactory::DescribeKnownArtifact(
-            test_digest.hash(), test_digest.size(), ObjectType::File));
-    CHECK(input_artifact_opt.has_value());
+        ArtifactDescription::CreateKnown(test_digest, ObjectType::File)
+            .ToArtifact();
     auto input_artifact =
-        DependencyGraph::ArtifactNode{std::move(*input_artifact_opt)};
+        DependencyGraph::ArtifactNode{std::move(input_artifact_opt)};
 
     std::string input_path{"dir/subdir/input"};
     std::string output_path{"output_file"};
 
     auto api = api_factory();
-    CHECK(api->Upload(BlobContainer{{BazelBlob{
+    CHECK(api->Upload(ArtifactBlobContainer{{ArtifactBlob{
                           test_digest, test_content, /*is_exec=*/false}}},
                       false));
 
     auto action =
         api->CreateAction(*api->UploadTree({{input_path, &input_artifact}}),
                           {"cp", input_path, output_path},
+                          "",
                           {output_path},
                           {},
                           {},
@@ -289,7 +313,13 @@ inline void SetLauncher() {
     ApiFactory const& api_factory,
     ExecProps const& props) {
     std::string test_content("test");
-    auto test_digest = ArtifactDigest::Create<ObjectType::File>(test_content);
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    auto test_digest =
+        ArtifactDigest::Create<ObjectType::File>(hash_function, test_content);
 
     std::string output_path{"output_file"};
 
@@ -300,6 +330,7 @@ inline void SetLauncher() {
                                      "-c",
                                      "set -e\necho -n " + test_content + " > " +
                                          output_path + "\nexit 1\n"},
+                                    "",
                                     {output_path},
                                     {},
                                     {},
@@ -392,6 +423,7 @@ inline void SetLauncher() {
 
     auto action = api->CreateAction(*api->UploadTree({}),
                                     {"/bin/sh", "-c", make_cmd("root")},
+                                    "",
                                     {},
                                     {"root"},
                                     env,
@@ -464,6 +496,7 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
 
     auto action = api->CreateAction(*api->UploadTree({}),
                                     {"/bin/sh", "-c", make_cmd("root")},
+                                    "",
                                     {},
                                     {"root"},
                                     env,
@@ -532,6 +565,7 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
 
     auto action = api->CreateAction(*api->UploadTree({}),
                                     {"/bin/sh", "-c", cmd},
+                                    "",
                                     {foo_path.string(), link_path.string()},
                                     {bar_path.parent_path().string()},
                                     env,
@@ -599,6 +633,7 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
         {"/bin/sh",
          "-c",
          fmt::format("set -e\n [ -d {} ]", output_path.string())},
+        "",
         {},
         {output_path},
         {},
@@ -659,3 +694,5 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
         }
     }
 }
+
+#endif  // INCLUDED_SRC_TEST_BUILDTOOL_EXECUTION_API_COMMON_API_TEST_HPP

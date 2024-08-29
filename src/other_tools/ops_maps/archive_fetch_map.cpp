@@ -19,23 +19,20 @@
 #include "fmt/core.h"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
-#include "src/buildtool/storage/storage.hpp"
-#include "src/other_tools/just_mr/progress_reporting/progress.hpp"
-#include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
 #include "src/other_tools/just_mr/utils.hpp"
 
 namespace {
 
-void ProcessContent(
-    std::filesystem::path const& content_path,
-    std::filesystem::path const& target_name,
-    gsl::not_null<IExecutionApi*> const& local_api,
-    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
-    std::string const& content,
-    ArchiveFetchMap::SetterPtr const& setter,
-    ArchiveFetchMap::LoggerPtr const& logger) {
+void ProcessContent(std::filesystem::path const& content_path,
+                    std::filesystem::path const& target_name,
+                    gsl::not_null<IExecutionApi const*> const& local_api,
+                    IExecutionApi const* remote_api,
+                    std::string const& content,
+                    gsl::not_null<JustMRStatistics*> const& stats,
+                    ArchiveFetchMap::SetterPtr const& setter,
+                    ArchiveFetchMap::LoggerPtr const& logger) {
     // try to back up to remote CAS
-    if (remote_api) {
+    if (remote_api != nullptr) {
         if (not local_api->RetrieveToCas(
                 {Artifact::ObjectInfo{
                     .digest = ArtifactDigest{content, 0, /*is_tree=*/false},
@@ -62,24 +59,29 @@ void ProcessContent(
         return;
     }
     // success
-    JustMRStatistics::Instance().IncrementExecutedCounter();
+    stats->IncrementExecutedCounter();
     (*setter)(true);
 }
 
 }  // namespace
 
-auto CreateArchiveFetchMap(
-    gsl::not_null<ContentCASMap*> const& content_cas_map,
-    std::filesystem::path const& fetch_dir,
-    gsl::not_null<IExecutionApi*> const& local_api,
-    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
-    std::size_t jobs) -> ArchiveFetchMap {
-    auto fetch_archive = [content_cas_map, fetch_dir, local_api, remote_api](
-                             auto ts,
-                             auto setter,
-                             auto logger,
-                             auto /* unused */,
-                             auto const& key) {
+auto CreateArchiveFetchMap(gsl::not_null<ContentCASMap*> const& content_cas_map,
+                           std::filesystem::path const& fetch_dir,
+                           gsl::not_null<Storage const*> const& storage,
+                           gsl::not_null<IExecutionApi const*> const& local_api,
+                           IExecutionApi const* remote_api,
+                           gsl::not_null<JustMRStatistics*> const& stats,
+                           std::size_t jobs) -> ArchiveFetchMap {
+    auto fetch_archive = [content_cas_map,
+                          fetch_dir,
+                          storage,
+                          local_api,
+                          remote_api,
+                          stats](auto ts,
+                                 auto setter,
+                                 auto logger,
+                                 auto /* unused */,
+                                 auto const& key) {
         // get corresponding distfile
         auto distfile =
             (key.distfile
@@ -91,13 +93,15 @@ auto CreateArchiveFetchMap(
             ts,
             {key},
             [target_name,
+             storage,
              local_api,
              remote_api,
              content = key.content,
+             stats,
              setter,
              logger]([[maybe_unused]] auto const& values) {
                 // content is in local CAS now
-                auto const& cas = Storage::Instance().CAS();
+                auto const& cas = storage->CAS();
                 auto content_path =
                     cas.BlobPath(ArtifactDigest{content, 0, /*is_tree=*/false},
                                  /*is_executable=*/false)
@@ -107,6 +111,7 @@ auto CreateArchiveFetchMap(
                                local_api,
                                remote_api,
                                content,
+                               stats,
                                setter,
                                logger);
             },

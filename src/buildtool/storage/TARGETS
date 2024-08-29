@@ -3,17 +3,32 @@
   , "name": ["config"]
   , "hdrs": ["config.hpp"]
   , "deps":
-    [ ["src/buildtool/common", "common"]
-    , ["src/buildtool/execution_api/remote", "config"]
+    [ "backend_description"
     , ["@", "gsl", "", "gsl"]
-    , ["@", "json", "", "json"]
+    , ["src/buildtool/common", "common"]
+    , ["src/buildtool/common/remote", "remote_common"]
     , ["src/buildtool/compatibility", "compatibility"]
-    , ["src/buildtool/file_system", "object_type"]
     , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/file_system", "object_type"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/utils/cpp", "gsl"]
     , ["src/utils/cpp", "tmp_dir"]
+    , ["src/utils/cpp", "expected"]
+    , ["src/buildtool/crypto", "hash_function"]
+    ]
+  , "stage": ["src", "buildtool", "storage"]
+  }
+, "repository_garbage_collector":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["repository_garbage_collector"]
+  , "hdrs": ["repository_garbage_collector.hpp"]
+  , "srcs": ["repository_garbage_collector.cpp"]
+  , "deps": ["config", ["src/utils/cpp", "file_locking"]]
+  , "private-deps":
+    [ ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/logging", "logging"]
     ]
   , "stage": ["src", "buildtool", "storage"]
   }
@@ -34,14 +49,15 @@
     , "large_object_cas.hpp"
     , "large_object_cas.tpp"
     , "compactifier.hpp"
+    , "uplinker.hpp"
     ]
   , "private-hdrs": ["compactification_task.hpp"]
   , "srcs":
-    [ "target_cache_key.cpp"
-    , "target_cache_entry.cpp"
+    [ "target_cache_entry.cpp"
     , "garbage_collector.cpp"
     , "compactifier.cpp"
     , "compactification_task.cpp"
+    , "uplinker.cpp"
     ]
   , "deps":
     [ "config"
@@ -55,24 +71,25 @@
     , ["src/buildtool/build_engine/expression", "expression"]
     , ["src/utils/cpp", "file_locking"]
     , ["src/utils/cpp", "gsl"]
+    , ["src/utils/cpp", "expected"]
     , ["@", "gsl", "", "gsl"]
     , ["@", "json", "", "json"]
     , ["@", "fmt", "", "fmt"]
     , ["src/buildtool/file_system", "object_type"]
     , ["src/buildtool/file_system", "file_system_manager"]
-    , ["src/buildtool/execution_api/bazel_msg", "bazel_msg_factory"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/common", "bazel_types"]
     , ["src/buildtool/file_system", "git_repo"]
     , ["src/buildtool/common", "artifact_description"]
     , ["src/buildtool/compatibility", "compatibility"]
+    , ["src/buildtool/crypto", "hash_function"]
     ]
   , "stage": ["src", "buildtool", "storage"]
   , "private-deps":
-    [ ["src/buildtool/execution_api/remote", "config"]
-    , ["src/buildtool/logging", "log_level"]
+    [ ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/execution_api/common", "message_limits"]
     , ["src/buildtool/multithreading", "task_system"]
+    , ["src/utils/cpp", "path_hash"]
     ]
   }
 , "fs_utils":
@@ -83,6 +100,8 @@
   , "deps":
     [ ["src/buildtool/common", "user_structs"]
     , ["src/buildtool/file_system/symlinks_map", "pragma_special"]
+    , "config"
+    , "storage"
     ]
   , "stage": ["src", "buildtool", "storage"]
   , "private-deps":
@@ -91,8 +110,6 @@
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "path"]
-    , "config"
-    , "storage"
     ]
   }
 , "file_chunker":
@@ -102,5 +119,17 @@
   , "srcs": ["file_chunker.cpp"]
   , "stage": ["src", "buildtool", "storage"]
   , "private-deps": [["@", "gsl", "", "gsl"]]
+  }
+, "backend_description":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["backend_description"]
+  , "hdrs": ["backend_description.hpp"]
+  , "srcs": ["backend_description.cpp"]
+  , "deps":
+    [ ["src/buildtool/common/remote", "remote_common"]
+    , ["src/utils/cpp", "expected"]
+    ]
+  , "stage": ["src", "buildtool", "storage"]
+  , "private-deps": [["@", "fmt", "", "fmt"], ["@", "json", "", "json"]]
   }
 }

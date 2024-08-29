@@ -25,7 +25,10 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/common/user_structs.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/other_tools/just_mr/mirrors.hpp"
+#include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/ops_maps/critical_git_op_map.hpp"
 #include "src/other_tools/ops_maps/import_to_git_map.hpp"
 #include "src/utils/cpp/hash_combine.hpp"
@@ -80,10 +83,12 @@ using CommitGitMap =
     MirrorsPtr const& additional_mirrors,
     std::string const& git_bin,
     std::vector<std::string> const& launcher,
-    bool serve_api_exists,
-    gsl::not_null<IExecutionApi*> const& local_api,
-    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
+    ServeApi const* serve,
+    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<IExecutionApi const*> const& local_api,
+    IExecutionApi const* remote_api,
     bool fetch_absent,
+    gsl::not_null<JustMRProgress*> const& progress,
     std::size_t jobs) -> CommitGitMap;
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_ROOT_MAPS_COMMIT_GIT_MAP_HPP

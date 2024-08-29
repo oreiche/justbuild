@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/execution_engine/executor/executor.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <map>
@@ -23,13 +25,19 @@
 
 #include "catch2/catch_test_macros.hpp"
 #include "gsl/gsl"
-#include "src/buildtool/common/artifact_factory.hpp"
+#include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/common/artifact_description.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
+#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
-#include "src/buildtool/execution_engine/executor/executor.hpp"
+#include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
+#include "src/buildtool/execution_engine/executor/context.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/progress_reporting/progress.hpp"
+#include "test/utils/executor/test_api_bundle.hpp"
 
 /// \brief Mockup API test config.
 struct TestApiConfig {
@@ -76,10 +84,37 @@ class TestResponse : public IExecutionResponse {
     [[nodiscard]] auto HasStdOut() const noexcept -> bool final { return true; }
     [[nodiscard]] auto StdErr() noexcept -> std::string final { return {}; }
     [[nodiscard]] auto StdOut() noexcept -> std::string final { return {}; }
-    [[nodiscard]] auto ActionDigest() const noexcept -> std::string final {
-        return {};
+    [[nodiscard]] auto ActionDigest() const noexcept
+        -> std::string const& final {
+        static const std::string kEmptyHash;
+        return kEmptyHash;
     }
-    [[nodiscard]] auto Artifacts() noexcept -> ArtifactInfos final {
+    [[nodiscard]] auto Artifacts() noexcept -> ArtifactInfos const& final {
+        if (not populated_) {
+            Populate();
+        }
+        return artifacts_;
+    }
+    [[nodiscard]] auto DirectorySymlinks() noexcept
+        -> DirSymlinks const& final {
+        static const DirSymlinks kEmptySymlinks{};
+        return kEmptySymlinks;
+    }
+
+  private:
+    TestApiConfig config_{};
+    ArtifactInfos artifacts_;
+    bool populated_ = false;
+
+    explicit TestResponse(TestApiConfig config) noexcept
+        : config_{std::move(config)} {}
+
+    void Populate() noexcept {
+        if (populated_) {
+            return;
+        }
+        populated_ = true;
+
         ArtifactInfos artifacts{};
         artifacts.reserve(config_.execution.outputs.size());
 
@@ -92,21 +127,11 @@ class TestResponse : public IExecutionResponse {
                         .digest = ArtifactDigest{path, 0, /*is_tree=*/false},
                         .type = ObjectType::File});
             } catch (...) {
-                return {};
+                return;
             }
         }
-
-        return artifacts;
+        artifacts_ = std::move(artifacts);
     }
-    [[nodiscard]] auto ArtifactsWithDirSymlinks() noexcept
-        -> std::pair<ArtifactInfos, DirSymlinks> final {
-        return {};
-    }
-
-  private:
-    TestApiConfig config_{};
-    explicit TestResponse(TestApiConfig config) noexcept
-        : config_{std::move(config)} {}
 };
 
 /// \brief Mockup Action, stores only config
@@ -136,32 +161,32 @@ class TestApi : public IExecutionApi {
     explicit TestApi(TestApiConfig config) noexcept
         : config_{std::move(config)} {}
 
-    auto CreateAction(
+    [[nodiscard]] auto CreateAction(
         ArtifactDigest const& /*unused*/,
         std::vector<std::string> const& /*unused*/,
+        std::string const& /*unused*/,
         std::vector<std::string> const& /*unused*/,
         std::vector<std::string> const& /*unused*/,
         std::map<std::string, std::string> const& /*unused*/,
-        std::map<std::string, std::string> const& /*unused*/) noexcept
+        std::map<std::string, std::string> const& /*unused*/) const noexcept
         -> IExecutionAction::Ptr final {
         return IExecutionAction::Ptr{new TestAction(config_)};
     }
-    auto RetrieveToPaths(
+    [[nodiscard]] auto RetrieveToPaths(
         std::vector<Artifact::ObjectInfo> const& /*unused*/,
         std::vector<std::filesystem::path> const& /*unused*/,
-        std::optional<
-            gsl::not_null<IExecutionApi*>> const& /* unused */) noexcept
-        -> bool final {
+        IExecutionApi const* /* unused */) const noexcept -> bool final {
         return false;  // not needed by Executor
     }
-    auto RetrieveToFds(std::vector<Artifact::ObjectInfo> const& /*unused*/,
-                       std::vector<int> const& /*unused*/,
-                       bool /*unused*/) noexcept -> bool final {
+    [[nodiscard]] auto RetrieveToFds(
+        std::vector<Artifact::ObjectInfo> const& /*unused*/,
+        std::vector<int> const& /*unused*/,
+        bool /*unused*/) const noexcept -> bool final {
         return false;  // not needed by Executor
     }
-    auto RetrieveToCas(std::vector<Artifact::ObjectInfo> const& unused,
-                       gsl::not_null<IExecutionApi*> const& /*unused*/) noexcept
-        -> bool final {
+    [[nodiscard]] auto RetrieveToCas(
+        std::vector<Artifact::ObjectInfo> const& unused,
+        IExecutionApi const& /*unused*/) const noexcept -> bool final {
         // Note that a false-positive "free-nonheap-object" warning is thrown by
         // gcc 12.2 with GNU libstdc++, if the caller passes a temporary vector
         // that is not used by this function. Therefore, we explicitly use this
@@ -169,25 +194,29 @@ class TestApi : public IExecutionApi {
         // irrelevant for testing though.
         return unused.empty();  // not needed by Executor
     }
-    auto RetrieveToMemory(
-        Artifact::ObjectInfo const& /*artifact_info*/) noexcept
+    [[nodiscard]] auto RetrieveToMemory(
+        Artifact::ObjectInfo const& /*artifact_info*/) const noexcept
         -> std::optional<std::string> override {
         return std::nullopt;  // not needed by Executor
     }
-    auto Upload(BlobContainer const& blobs, bool /*unused*/) noexcept
-        -> bool final {
+    [[nodiscard]] auto Upload(ArtifactBlobContainer&& blobs,
+                              bool /*unused*/) const noexcept -> bool final {
+        auto blob_range = blobs.Blobs();
         return std::all_of(
-            blobs.begin(), blobs.end(), [this](auto const& blob) {
-                return config_.artifacts[blob.data]
-                           .uploads  // for local artifacts
-                       or config_.artifacts[blob.digest.hash()]
-                              .uploads;  // for known and action artifacts
+            blob_range.begin(), blob_range.end(), [this](auto const& blob) {
+                // for local artifacts
+                auto it1 = config_.artifacts.find(*blob.data);
+                if (it1 != config_.artifacts.end() and it1->second.uploads) {
+                    return true;
+                }
+                // for known and action artifacts
+                auto it2 = config_.artifacts.find(blob.digest.hash());
+                return it2 != config_.artifacts.end() and it2->second.uploads;
             });
     }
-    auto UploadTree(
-        std::vector<
-            DependencyGraph::NamedArtifactNodePtr> const& /*unused*/) noexcept
-        -> std::optional<ArtifactDigest> final {
+    [[nodiscard]] auto UploadTree(
+        std::vector<DependencyGraph::NamedArtifactNodePtr> const& /*unused*/)
+        const noexcept -> std::optional<ArtifactDigest> final {
         return ArtifactDigest{};  // not needed by Executor
     }
     [[nodiscard]] auto IsAvailable(ArtifactDigest const& digest) const noexcept
@@ -230,9 +259,10 @@ class TestApi : public IExecutionApi {
     -> std::pair<TestApiConfig, RepositoryConfig> {
     using path = std::filesystem::path;
 
-    auto const local_cpp_desc = ArtifactDescription{path{"local.cpp"}, ""};
-    auto const known_cpp_desc = ArtifactDescription{
-        ArtifactDigest{"known.cpp", 0, /*is_tree=*/false}, ObjectType::File};
+    auto const local_cpp_desc =
+        ArtifactDescription::CreateLocal(path{"local.cpp"}, "");
+    auto const known_cpp_desc = ArtifactDescription::CreateKnown(
+        ArtifactDigest{"known.cpp", 0, /*is_tree=*/false}, ObjectType::File);
 
     auto const test_action_desc = ActionDescription{
         {"output1.exe", "output2.exe"},
@@ -265,20 +295,36 @@ TEST_CASE("Executor: Process artifact", "[executor]") {
     DependencyGraph g;
     auto [config, repo_config] = CreateTest(&g, workspace_path);
 
-    auto const local_cpp_desc =
-        ArtifactFactory::DescribeLocalArtifact("local.cpp", "");
-    auto const local_cpp_id = ArtifactFactory::Identifier(local_cpp_desc);
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
 
-    auto const known_cpp_desc = ArtifactFactory::DescribeKnownArtifact(
-        "known.cpp", 0, ObjectType::File);
-    auto const known_cpp_id = ArtifactFactory::Identifier(known_cpp_desc);
+    auto const local_cpp_id =
+        ArtifactDescription::CreateLocal("local.cpp", "").Id();
+
+    auto const known_cpp_id =
+        ArtifactDescription::CreateKnown(
+            ArtifactDigest{"known.cpp", 0, /*is_tree=*/false}, ObjectType::File)
+            .Id();
+
+    Auth auth{};
+    RetryConfig retry_config{};             // default retry config
+    RemoteExecutionConfig remote_config{};  // default remote config
+    RemoteContext const remote_context{.auth = &auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &remote_config};
 
     SECTION("Processing succeeds for valid config") {
         auto api = TestApi::Ptr{new TestApi{config}};
         Statistics stats{};
         Progress progress{};
-        Executor runner{
-            &repo_config, api.get(), api.get(), {}, {}, &stats, &progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+        ExecutionContext const exec_context{.repo_config = &repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = &stats,
+                                            .progress = &progress};
+        Executor runner{&exec_context};
 
         CHECK(runner.Process(g.ArtifactNodeWithId(local_cpp_id)));
         CHECK(runner.Process(g.ArtifactNodeWithId(known_cpp_id)));
@@ -290,8 +336,13 @@ TEST_CASE("Executor: Process artifact", "[executor]") {
         auto api = TestApi::Ptr{new TestApi{config}};
         Statistics stats{};
         Progress progress{};
-        Executor runner{
-            &repo_config, api.get(), api.get(), {}, {}, &stats, &progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+        ExecutionContext const exec_context{.repo_config = &repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = &stats,
+                                            .progress = &progress};
+        Executor runner{&exec_context};
 
         CHECK(not runner.Process(g.ArtifactNodeWithId(local_cpp_id)));
         CHECK(runner.Process(g.ArtifactNodeWithId(known_cpp_id)));
@@ -303,8 +354,13 @@ TEST_CASE("Executor: Process artifact", "[executor]") {
         auto api = TestApi::Ptr{new TestApi{config}};
         Statistics stats{};
         Progress progress{};
-        Executor runner{
-            &repo_config, api.get(), api.get(), {}, {}, &stats, &progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+        ExecutionContext const exec_context{.repo_config = &repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = &stats,
+                                            .progress = &progress};
+        Executor runner{&exec_context};
 
         CHECK(runner.Process(g.ArtifactNodeWithId(local_cpp_id)));
         CHECK(not runner.Process(g.ArtifactNodeWithId(known_cpp_id)));
@@ -318,29 +374,43 @@ TEST_CASE("Executor: Process action", "[executor]") {
     DependencyGraph g;
     auto [config, repo_config] = CreateTest(&g, workspace_path);
 
-    auto const local_cpp_desc =
-        ArtifactFactory::DescribeLocalArtifact("local.cpp", "");
-    auto const local_cpp_id = ArtifactFactory::Identifier(local_cpp_desc);
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
 
-    auto const known_cpp_desc = ArtifactFactory::DescribeKnownArtifact(
-        "known.cpp", 0, ObjectType::File);
-    auto const known_cpp_id = ArtifactFactory::Identifier(known_cpp_desc);
+    auto const local_cpp_id =
+        ArtifactDescription::CreateLocal("local.cpp", "").Id();
 
-    ActionIdentifier action_id{"test_action"};
-    auto const output1_desc =
-        ArtifactFactory::DescribeActionArtifact(action_id, "output1.exe");
-    auto const output1_id = ArtifactFactory::Identifier(output1_desc);
+    auto const known_cpp_id =
+        ArtifactDescription::CreateKnown(
+            ArtifactDigest{"known.cpp", 0, /*is_tree=*/false}, ObjectType::File)
+            .Id();
 
-    auto const output2_desc =
-        ArtifactFactory::DescribeActionArtifact(action_id, "output2.exe");
-    auto const output2_id = ArtifactFactory::Identifier(output2_desc);
+    ActionIdentifier const action_id{"test_action"};
+    auto const output1_id =
+        ArtifactDescription::CreateAction(action_id, "output1.exe").Id();
+
+    auto const output2_id =
+        ArtifactDescription::CreateAction(action_id, "output2.exe").Id();
+
+    Auth auth{};
+    RetryConfig retry_config{};             // default retry config
+    RemoteExecutionConfig remote_config{};  // default remote config
+    RemoteContext const remote_context{.auth = &auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = &remote_config};
 
     SECTION("Processing succeeds for valid config") {
         auto api = TestApi::Ptr{new TestApi{config}};
         Statistics stats{};
         Progress progress{};
-        Executor runner{
-            &repo_config, api.get(), api.get(), {}, {}, &stats, &progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+        ExecutionContext const exec_context{.repo_config = &repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = &stats,
+                                            .progress = &progress};
+        Executor runner{&exec_context};
 
         CHECK(runner.Process(g.ArtifactNodeWithId(local_cpp_id)));
         CHECK(runner.Process(g.ArtifactNodeWithId(known_cpp_id)));
@@ -355,8 +425,13 @@ TEST_CASE("Executor: Process action", "[executor]") {
         auto api = TestApi::Ptr{new TestApi{config}};
         Statistics stats{};
         Progress progress{};
-        Executor runner{
-            &repo_config, api.get(), api.get(), {}, {}, &stats, &progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+        ExecutionContext const exec_context{.repo_config = &repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = &stats,
+                                            .progress = &progress};
+        Executor runner{&exec_context};
 
         CHECK(runner.Process(g.ArtifactNodeWithId(local_cpp_id)));
         CHECK(runner.Process(g.ArtifactNodeWithId(known_cpp_id)));
@@ -371,8 +446,13 @@ TEST_CASE("Executor: Process action", "[executor]") {
         auto api = TestApi::Ptr{new TestApi{config}};
         Statistics stats{};
         Progress progress{};
-        Executor runner{
-            &repo_config, api.get(), api.get(), {}, {}, &stats, &progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+        ExecutionContext const exec_context{.repo_config = &repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = &stats,
+                                            .progress = &progress};
+        Executor runner{&exec_context};
 
         CHECK(runner.Process(g.ArtifactNodeWithId(local_cpp_id)));
         CHECK(runner.Process(g.ArtifactNodeWithId(known_cpp_id)));
@@ -390,8 +470,13 @@ TEST_CASE("Executor: Process action", "[executor]") {
         auto api = TestApi::Ptr{new TestApi{config}};
         Statistics stats{};
         Progress progress{};
-        Executor runner{
-            &repo_config, api.get(), api.get(), {}, {}, &stats, &progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+        ExecutionContext const exec_context{.repo_config = &repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = &stats,
+                                            .progress = &progress};
+        Executor runner{&exec_context};
 
         CHECK(runner.Process(g.ArtifactNodeWithId(local_cpp_id)));
         CHECK(runner.Process(g.ArtifactNodeWithId(known_cpp_id)));
@@ -406,8 +491,13 @@ TEST_CASE("Executor: Process action", "[executor]") {
         auto api = TestApi::Ptr{new TestApi{config}};
         Statistics stats{};
         Progress progress{};
-        Executor runner{
-            &repo_config, api.get(), api.get(), {}, {}, &stats, &progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+        ExecutionContext const exec_context{.repo_config = &repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = &stats,
+                                            .progress = &progress};
+        Executor runner{&exec_context};
 
         CHECK(runner.Process(g.ArtifactNodeWithId(local_cpp_id)));
         CHECK(runner.Process(g.ArtifactNodeWithId(known_cpp_id)));
@@ -425,8 +515,13 @@ TEST_CASE("Executor: Process action", "[executor]") {
         auto api = TestApi::Ptr{new TestApi{config}};
         Statistics stats{};
         Progress progress{};
-        Executor runner{
-            &repo_config, api.get(), api.get(), {}, {}, &stats, &progress};
+        auto const apis = CreateTestApiBundle(hash_function, api);
+        ExecutionContext const exec_context{.repo_config = &repo_config,
+                                            .apis = &apis,
+                                            .remote_context = &remote_context,
+                                            .statistics = &stats,
+                                            .progress = &progress};
+        Executor runner{&exec_context};
 
         CHECK(runner.Process(g.ArtifactNodeWithId(local_cpp_id)));
         CHECK(runner.Process(g.ArtifactNodeWithId(known_cpp_id)));

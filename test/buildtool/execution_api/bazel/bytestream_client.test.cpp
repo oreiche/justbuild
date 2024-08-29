@@ -12,23 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/execution_api/remote/bazel/bytestream_client.hpp"
+
 #include <cstddef>
+#include <optional>
 #include <string>
 
 #include "catch2/catch_test_macros.hpp"
+#include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob.hpp"
+#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/execution_api/common/execution_common.hpp"
-#include "src/buildtool/execution_api/remote/bazel/bytestream_client.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "test/utils/remote_execution/test_auth_config.hpp"
+#include "test/utils/remote_execution/test_remote_config.hpp"
 
 constexpr std::size_t kLargeSize = GRPC_DEFAULT_MAX_RECV_MESSAGE_LENGTH + 1;
 
 TEST_CASE("ByteStream Client: Transfer single blob", "[execution_api]") {
-    auto const& info = RemoteExecutionConfig::RemoteAddress();
-    auto stream = ByteStreamClient{info->host, info->port};
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+
+    auto stream = ByteStreamClient{remote_config->remote_address->host,
+                                   remote_config->remote_address->port,
+                                   &*auth_config};
     auto uuid = CreateUUIDVersion4(*CreateProcessUniqueId());
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
 
     SECTION("Upload small blob") {
         std::string instance_name{"remote-execution"};
@@ -36,7 +55,7 @@ TEST_CASE("ByteStream Client: Transfer single blob", "[execution_api]") {
 
         // digest of "foobar"
         auto digest = static_cast<bazel_re::Digest>(
-            ArtifactDigest::Create<ObjectType::File>(content));
+            ArtifactDigest::Create<ObjectType::File>(hash_function, content));
 
         CHECK(stream.Write(fmt::format("{}/uploads/{}/blobs/{}/{}",
                                        instance_name,
@@ -55,6 +74,24 @@ TEST_CASE("ByteStream Client: Transfer single blob", "[execution_api]") {
         }
     }
 
+    SECTION("Small blob with wrong digest") {
+        std::string instance_name{"remote-execution"};
+        std::string content("foobar");
+        std::string other_content("This is a differnt string");
+
+        // Valid digest, but for a different string
+        auto digest = static_cast<bazel_re::Digest>(
+            ArtifactDigest::Create<ObjectType::File>(hash_function,
+                                                     other_content));
+
+        CHECK(not stream.Write(fmt::format("{}/uploads/{}/blobs/{}/{}",
+                                           instance_name,
+                                           uuid,
+                                           digest.hash(),
+                                           digest.size_bytes()),
+                               content));
+    }
+
     SECTION("Upload large blob") {
         std::string instance_name{"remote-execution"};
 
@@ -65,7 +102,7 @@ TEST_CASE("ByteStream Client: Transfer single blob", "[execution_api]") {
 
         // digest of "instance_nameinstance_nameinstance_..."
         auto digest = static_cast<bazel_re::Digest>(
-            ArtifactDigest::Create<ObjectType::File>(content));
+            ArtifactDigest::Create<ObjectType::File>(hash_function, content));
 
         CHECK(stream.Write(fmt::format("{}/uploads/{}/blobs/{}/{}",
                                        instance_name,
@@ -104,22 +141,37 @@ TEST_CASE("ByteStream Client: Transfer single blob", "[execution_api]") {
 }
 
 TEST_CASE("ByteStream Client: Transfer multiple blobs", "[execution_api]") {
-    auto const& info = RemoteExecutionConfig::RemoteAddress();
-    auto stream = ByteStreamClient{info->host, info->port};
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+
+    auto stream = ByteStreamClient{remote_config->remote_address->host,
+                                   remote_config->remote_address->port,
+                                   &*auth_config};
     auto uuid = CreateUUIDVersion4(*CreateProcessUniqueId());
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
 
     SECTION("Upload small blobs") {
         std::string instance_name{"remote-execution"};
 
-        BazelBlob foo{ArtifactDigest::Create<ObjectType::File>("foo"),
-                      "foo",
-                      /*is_exec=*/false};
-        BazelBlob bar{ArtifactDigest::Create<ObjectType::File>("bar"),
-                      "bar",
-                      /*is_exec=*/false};
-        BazelBlob baz{ArtifactDigest::Create<ObjectType::File>("baz"),
-                      "baz",
-                      /*is_exec=*/false};
+        BazelBlob foo{
+            ArtifactDigest::Create<ObjectType::File>(hash_function, "foo"),
+            "foo",
+            /*is_exec=*/false};
+        BazelBlob bar{
+            ArtifactDigest::Create<ObjectType::File>(hash_function, "bar"),
+            "bar",
+            /*is_exec=*/false};
+        BazelBlob baz{
+            ArtifactDigest::Create<ObjectType::File>(hash_function, "baz"),
+            "baz",
+            /*is_exec=*/false};
 
         CHECK(stream.WriteMany<BazelBlob>(
             {foo, bar, baz},
@@ -130,7 +182,7 @@ TEST_CASE("ByteStream Client: Transfer multiple blobs", "[execution_api]") {
                                    blob.digest.hash(),
                                    blob.digest.size_bytes());
             },
-            [](auto const& blob) { return blob.data; }));
+            [](auto const& blob) { return *blob.data; }));
 
         SECTION("Download small blobs") {
             std::vector<std::string> contents{};
@@ -146,9 +198,9 @@ TEST_CASE("ByteStream Client: Transfer multiple blobs", "[execution_api]") {
                     contents.emplace_back(std::move(data));
                 });
             REQUIRE(contents.size() == 3);
-            CHECK(contents[0] == foo.data);
-            CHECK(contents[1] == bar.data);
-            CHECK(contents[2] == baz.data);
+            CHECK(contents[0] == *foo.data);
+            CHECK(contents[1] == *bar.data);
+            CHECK(contents[2] == *baz.data);
         }
     }
 
@@ -164,13 +216,16 @@ TEST_CASE("ByteStream Client: Transfer multiple blobs", "[execution_api]") {
             content_baz[i] = instance_name[(i + 2) % instance_name.size()];
         }
 
-        BazelBlob foo{ArtifactDigest::Create<ObjectType::File>(content_foo),
+        BazelBlob foo{ArtifactDigest::Create<ObjectType::File>(hash_function,
+                                                               content_foo),
                       content_foo,
                       /*is_exec=*/false};
-        BazelBlob bar{ArtifactDigest::Create<ObjectType::File>(content_bar),
+        BazelBlob bar{ArtifactDigest::Create<ObjectType::File>(hash_function,
+                                                               content_bar),
                       content_bar,
                       /*is_exec=*/false};
-        BazelBlob baz{ArtifactDigest::Create<ObjectType::File>(content_baz),
+        BazelBlob baz{ArtifactDigest::Create<ObjectType::File>(hash_function,
+                                                               content_baz),
                       content_baz,
                       /*is_exec=*/false};
 
@@ -183,7 +238,7 @@ TEST_CASE("ByteStream Client: Transfer multiple blobs", "[execution_api]") {
                                    blob.digest.hash(),
                                    blob.digest.size_bytes());
             },
-            [](auto const& blob) { return blob.data; }));
+            [](auto const& blob) { return *blob.data; }));
 
         SECTION("Download large blobs") {
             std::vector<std::string> contents{};
@@ -199,9 +254,9 @@ TEST_CASE("ByteStream Client: Transfer multiple blobs", "[execution_api]") {
                     contents.emplace_back(std::move(data));
                 });
             REQUIRE(contents.size() == 3);
-            CHECK(contents[0] == foo.data);
-            CHECK(contents[1] == bar.data);
-            CHECK(contents[2] == baz.data);
+            CHECK(contents[0] == *foo.data);
+            CHECK(contents[1] == *bar.data);
+            CHECK(contents[2] == *baz.data);
         }
     }
 }

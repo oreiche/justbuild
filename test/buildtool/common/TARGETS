@@ -1,24 +1,11 @@
-{ "artifact_factory":
-  { "type": ["@", "rules", "CC/test", "test"]
-  , "name": ["artifact_factory"]
-  , "srcs": ["artifact_factory.test.cpp"]
-  , "private-deps":
-    [ ["@", "catch2", "", "catch2"]
-    , ["", "catch-main"]
-    , ["@", "json", "", "json"]
-    , ["@", "src", "src/buildtool/common", "artifact_factory"]
-    , ["@", "src", "src/buildtool/file_system", "object_type"]
-    ]
-  , "stage": ["test", "buildtool", "common"]
-  }
-, "artifact_description":
+{ "artifact_description":
   { "type": ["@", "rules", "CC/test", "test"]
   , "name": ["artifact_description"]
   , "srcs": ["artifact_description.test.cpp"]
   , "private-deps":
     [ ["@", "catch2", "", "catch2"]
     , ["", "catch-main"]
-    , ["@", "src", "src/buildtool/common", "artifact_factory"]
+    , ["@", "json", "", "json"]
     , ["@", "src", "src/buildtool/common", "artifact_description"]
     , ["@", "src", "src/buildtool/common", "common"]
     , ["@", "src", "src/buildtool/file_system", "object_type"]
@@ -33,7 +20,6 @@
     [ ["@", "catch2", "", "catch2"]
     , ["", "catch-main"]
     , ["@", "json", "", "json"]
-    , ["@", "src", "src/buildtool/common", "artifact_factory"]
     , ["@", "src", "src/buildtool/common", "action_description"]
     , ["@", "src", "src/buildtool/common", "common"]
     ]
@@ -51,33 +37,16 @@
     , ["@", "src", "src/buildtool/common", "common"]
     , ["@", "src", "src/buildtool/file_system", "file_root"]
     , ["@", "src", "src/buildtool/file_system", "file_system_manager"]
-    , ["utils", "local_hermeticity"]
+    , ["utils", "test_storage_config"]
     , ["@", "src", "src/buildtool/execution_api/local", "local"]
-    ]
-  , "stage": ["test", "buildtool", "common"]
-  }
-, "artifact_object_info":
-  { "type": ["@", "rules", "CC/test", "test"]
-  , "name": ["artifact_object_info"]
-  , "srcs": ["artifact_object_info.test.cpp"]
-  , "private-deps":
-    [ ["@", "catch2", "", "catch2"]
-    , ["", "catch-main"]
-    , ["@", "json", "", "json"]
-    , ["@", "src", "src/buildtool/common", "common"]
-    , ["@", "src", "src/buildtool/file_system", "object_type"]
+    , ["@", "src", "src/buildtool/storage", "storage"]
+    , ["@", "src", "src/buildtool/storage", "config"]
     ]
   , "stage": ["test", "buildtool", "common"]
   }
 , "TESTS":
-  { "type": "install"
-  , "tainted": ["test"]
-  , "deps":
-    [ "action_description"
-    , "artifact_description"
-    , "artifact_factory"
-    , "repository_config"
-    , "artifact_object_info"
-    ]
+  { "type": ["@", "rules", "test", "suite"]
+  , "stage": ["common"]
+  , "deps": ["action_description", "artifact_description", "repository_config"]
   }
 }

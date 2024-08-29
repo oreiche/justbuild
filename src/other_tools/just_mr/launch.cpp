@@ -14,6 +14,8 @@
 
 #include "src/other_tools/just_mr/launch.hpp"
 
+#include <cerrno>   // for errno
+#include <cstring>  // for strerror()
 #include <filesystem>
 #include <utility>
 
@@ -23,7 +25,9 @@
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
+#include "src/buildtool/storage/repository_garbage_collector.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
 #include "src/other_tools/just_mr/setup.hpp"
 #include "src/other_tools/just_mr/setup_utils.hpp"
@@ -37,6 +41,8 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
               MultiRepoRemoteAuthArguments const& auth_args,
               RetryArguments const& retry_args,
               ForwardOnlyArguments const& launch_fwd,
+              StorageConfig const& storage_config,
+              Storage const& storage,
               bool forward_build_root,
               std::string multi_repo_tool_name) -> int {
     // check if subcmd_name can be taken from additional args
@@ -61,7 +67,12 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
     if (subcommand and kKnownJustSubcommands.contains(*subcommand)) {
         // Read the config file if needed
         if (kKnownJustSubcommands.at(*subcommand).config) {
-            lock = GarbageCollector::SharedLock();
+            auto repo_lock =
+                RepositoryGarbageCollector::SharedLock(storage_config);
+            if (not repo_lock) {
+                return kExitGenericFailure;
+            }
+            lock = GarbageCollector::SharedLock(storage_config);
             if (not lock) {
                 return kExitGenericFailure;
             }
@@ -74,6 +85,9 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
                                             setup_args,
                                             just_cmd_args,
                                             auth_args,
+                                            retry_args,
+                                            storage_config,
+                                            storage,
                                             /*interactive=*/false,
                                             std::move(multi_repo_tool_name));
             if (not mr_config_path) {
@@ -167,7 +181,7 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
     }
     // forward remote execution and mutual TLS arguments
     if (supports_remote) {
-        if (common_args.compatible == true) {
+        if (common_args.compatible) {
             cmd.emplace_back("--compatible");
         }
         if (common_args.remote_execution_address) {
@@ -243,6 +257,6 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
     [[maybe_unused]] auto res =
         execvp(argv[0], static_cast<char* const*>(argv.data()));
     // execvp returns only if command errored out
-    Logger::Log(LogLevel::Error, "execvp failed with error code {}", errno);
+    Logger::Log(LogLevel::Error, "execvp failed with:\n{}", strerror(errno));
     return kExitExecError;
 }

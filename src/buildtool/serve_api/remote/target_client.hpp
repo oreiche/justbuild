@@ -27,18 +27,27 @@
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/remote/port.hpp"
-#include "src/buildtool/execution_api/common/create_execution_api.hpp"
+#include "src/buildtool/common/remote/remote_common.hpp"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
+#include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/storage.hpp"
 #include "src/buildtool/storage/target_cache_entry.hpp"
 #include "src/buildtool/storage/target_cache_key.hpp"
 
 /// \brief Result union for the ServeTarget request.
 /// Index 0 will contain the hash of the blob containing the logged
-/// analysis/build failure received from the endpoint, as a string.
-/// Index 1 will contain any other failure message, as a string.
-/// Index 2 will contain the target cache value information on success.
+/// analysis/build failure received from the endpoint, as a string; this should
+/// also trigger a local build fail.
+/// Index 1 will contain the message of any INTERNAL error on the endpoint, as
+/// a string; this should trigger a local build fail.
+/// Index 2 will contain any other failure message, as a string; local builds
+/// might be able to continue, but with a warning.
+/// Index 3 will contain the target cache value information on success.
 using serve_target_result_t =
     std::variant<std::string,
+                 std::string,
                  std::string,
                  std::pair<TargetCacheEntry, Artifact::ObjectInfo>>;
 
@@ -46,7 +55,11 @@ using serve_target_result_t =
 /// src/buildtool/serve_api/serve_service/just_serve.proto
 class TargetClient {
   public:
-    TargetClient(std::string const& server, Port port) noexcept;
+    explicit TargetClient(
+        ServerAddress const& address,
+        gsl::not_null<Storage const*> const& storage,
+        gsl::not_null<RemoteContext const*> const& remote_context,
+        gsl::not_null<ApiBundle const*> const& apis) noexcept;
 
     /// \brief Retrieve the pair of TargetCacheEntry and ObjectInfo associated
     /// to the given key.
@@ -55,7 +68,7 @@ class TargetClient {
     /// \returns A correspondingly populated result union, or nullopt if remote
     /// reported that the target was not found.
     [[nodiscard]] auto ServeTarget(const TargetCacheKey& key,
-                                   const std::string& repo_key) noexcept
+                                   const std::string& repo_key) const noexcept
         -> std::optional<serve_target_result_t>;
 
     /// \brief Retrieve the flexible config variables of an export target.
@@ -65,8 +78,8 @@ class TargetClient {
     /// \returns The list of flexible config variables, or nullopt on errors.
     [[nodiscard]] auto ServeTargetVariables(std::string const& target_root_id,
                                             std::string const& target_file,
-                                            std::string const& target) noexcept
-        -> std::optional<std::vector<std::string>>;
+                                            std::string const& target)
+        const noexcept -> std::optional<std::vector<std::string>>;
 
     /// \brief Retrieve the artifact digest of the blob containing the export
     /// target description fields required by just describe.
@@ -74,20 +87,17 @@ class TargetClient {
     /// \param[in] target_file Relative path of the target file.
     /// \param[in] target Name of the target to interrogate.
     /// \returns The artifact digest, or nullopt on errors.
-    [[nodiscard]] auto ServeTargetDescription(
-        std::string const& target_root_id,
-        std::string const& target_file,
-        std::string const& target) noexcept -> std::optional<ArtifactDigest>;
+    [[nodiscard]] auto ServeTargetDescription(std::string const& target_root_id,
+                                              std::string const& target_file,
+                                              std::string const& target)
+        const noexcept -> std::optional<ArtifactDigest>;
 
   private:
+    Storage const& storage_;
+    RemoteExecutionConfig const& exec_config_;
+    ApiBundle const& apis_;
     std::unique_ptr<justbuild::just_serve::Target::Stub> stub_;
     Logger logger_{"RemoteTargetClient"};
-    gsl::not_null<IExecutionApi::Ptr> const remote_api_{
-        CreateExecutionApi(RemoteExecutionConfig::RemoteAddress(),
-                           std::nullopt,
-                           "remote-execution")};
-    gsl::not_null<IExecutionApi::Ptr> const local_api_{
-        CreateExecutionApi(std::nullopt)};
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_SERVE_API_TARGET_CLIENT_HPP

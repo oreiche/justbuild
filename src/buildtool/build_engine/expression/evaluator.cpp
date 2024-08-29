@@ -279,6 +279,35 @@ auto NubRight(ExpressionPtr const& expr) -> ExpressionPtr {
     return ExpressionPtr{reverse_result};
 }
 
+auto NubLeft(ExpressionPtr const& expr) -> ExpressionPtr {
+    if (not expr->IsList()) {
+        throw Evaluator::EvaluationError{fmt::format(
+            "nub_left expects list but instead got: {}.", expr->ToString())};
+    }
+    if (not expr->IsCacheable()) {
+        throw Evaluator::EvaluationError{
+            fmt::format("Implicit comparison by passing name-containing value "
+                        "to nub_left: {}",
+                        expr->ToString())};
+    }
+    // short-cut evaluation for efficiency
+    if (expr->List().empty()) {
+        return expr;
+    }
+    auto const& list = expr->List();
+    auto result = Expression::list_t{};
+    result.reserve(list.size());
+    auto seen = std::unordered_set<ExpressionPtr>{};
+    seen.reserve(list.size());
+    std::for_each(list.begin(), list.end(), [&](auto const& l) {
+        if (not seen.contains(l)) {
+            result.push_back(l);
+            seen.insert(l);
+        }
+    });
+    return ExpressionPtr{result};
+}
+
 auto Range(ExpressionPtr const& expr) -> ExpressionPtr {
     std::size_t len = 0;
     if (expr->IsNumber() && expr->Number() > 0.0) {
@@ -295,8 +324,8 @@ auto Range(ExpressionPtr const& expr) -> ExpressionPtr {
     return ExpressionPtr{result};
 }
 
-auto ChangeEndingTo(ExpressionPtr const& name, ExpressionPtr const& ending)
-    -> ExpressionPtr {
+auto ChangeEndingTo(ExpressionPtr const& name,
+                    ExpressionPtr const& ending) -> ExpressionPtr {
     std::filesystem::path path{name->String()};
     return ExpressionPtr{(path.parent_path() / path.stem()).string() +
                          ending->String()};
@@ -347,8 +376,9 @@ auto Join(ExpressionPtr const& expr, std::string const& sep) -> ExpressionPtr {
 
 template <bool kDisjoint = false>
 // NOLINTNEXTLINE(misc-no-recursion)
-auto Union(Expression::list_t const& dicts, std::size_t from, std::size_t to)
-    -> ExpressionPtr {
+auto Union(Expression::list_t const& dicts,
+           std::size_t from,
+           std::size_t to) -> ExpressionPtr {
     if (to <= from) {
         return Expression::kEmptyMap;
     }
@@ -403,8 +433,8 @@ auto Union(ExpressionPtr const& expr) -> ExpressionPtr {
     return Union<kDisjoint>(list, 0, list.size());
 }
 
-auto ConcatTargetName(ExpressionPtr const& expr, ExpressionPtr const& append)
-    -> ExpressionPtr {
+auto ConcatTargetName(ExpressionPtr const& expr,
+                      ExpressionPtr const& append) -> ExpressionPtr {
     if (expr->IsString()) {
         return ExpressionPtr{expr->String() + append->String()};
     }
@@ -497,6 +527,134 @@ auto VarExpr(SubExprEvaluator&& eval,
         return eval(expr->Get("default", Expression::none_t{}), env);
     }
     return result;
+}
+
+auto OnlyInQuasiQuote(SubExprEvaluator&& /*eval*/,
+                      ExpressionPtr const& /*expr*/,
+                      Configuration const& /*env*/) -> ExpressionPtr {
+    throw Evaluator::EvaluationError{
+        R"("," and ",@" are only evaluated within quasi-quote ("`") environments.)"};
+}
+
+auto ExpandQuasiQuote(const SubExprEvaluator& eval,
+                      ExpressionPtr const& expr,
+                      Configuration const& env) -> ExpressionPtr;
+
+// NOLINTNEXTLINE(misc-no-recursion)
+auto ExpandQuasiQuoteListEntry(const SubExprEvaluator& eval,
+                               ExpressionPtr const& expr,
+                               Configuration const& env) -> ExpressionPtr {
+    if (expr->IsList()) {
+        auto result = Expression::list_t{};
+        for (auto const& entry : expr->List()) {
+            auto expanded = ExpandQuasiQuoteListEntry(eval, entry, env);
+            std::copy(expanded->List().begin(),
+                      expanded->List().end(),
+                      std::back_inserter(result));
+        }
+        return ExpressionPtr{Expression::list_t{ExpressionPtr{result}}};
+    }
+    if (expr->IsMap()) {
+        if (auto type_token = expr->At("type")) {
+            if (type_token->get()->IsString()) {
+                auto token = type_token->get()->String();
+                if (token == ",") {
+                    auto arg = expr->At("$1");
+                    if (not arg) {
+                        return ExpressionPtr{Expression::kNone};
+                    }
+                    auto result = eval(*arg, env);
+                    return ExpressionPtr{Expression::list_t{result}};
+                }
+                if (token == ",@") {
+                    auto arg = expr->At("$1");
+                    if (not arg) {
+                        return Expression::kEmptyList;
+                    }
+                    auto result = eval(*arg, env);
+                    if (not result->IsList()) {
+                        throw Evaluator::EvaluationError{fmt::format(
+                            "Argument of \",@\"-expresion {} should evaluate "
+                            "to a list, but obtained {}",
+                            expr->ToString(),
+                            result->ToString())};
+                    }
+                    return result;
+                }
+            }
+        }
+        // regular map, walk through the entries and quasiquote expand them
+        auto result = Expression::map_t::underlying_map_t{};
+        for (auto const& el : expr->Map()) {
+            auto expanded = ExpandQuasiQuote(eval, el.second, env);
+            result[el.first] = expanded;
+        }
+        return ExpressionPtr{Expression::map_t{result}};
+    }
+    // not a container, spliced literally, i.e., return singleton list
+    return ExpressionPtr{Expression::list_t{expr}};
+}
+
+// NOLINTNEXTLINE(misc-no-recursion)
+auto ExpandQuasiQuote(const SubExprEvaluator& eval,
+                      ExpressionPtr const& expr,
+                      Configuration const& env) -> ExpressionPtr {
+    if (expr->IsList()) {
+        auto result = Expression::list_t{};
+        for (auto const& entry : expr->List()) {
+            auto expanded = ExpandQuasiQuoteListEntry(eval, entry, env);
+            std::copy(expanded->List().begin(),
+                      expanded->List().end(),
+                      std::back_inserter(result));
+        }
+        return ExpressionPtr{result};
+    }
+    if (expr->IsMap()) {
+        if (auto type_token = expr->At("type")) {
+            if (type_token->get()->IsString()) {
+                auto token = type_token->get()->String();
+                if (token == ",") {
+                    auto arg = expr->At("$1");
+                    if (not arg) {
+                        return Expression::kNone;
+                    }
+                    return eval(*arg, env);
+                }
+                if (token == ",@") {
+                    throw Evaluator::EvaluationError{fmt::format(
+                        "\",@\"-expression found in non-list context: {}",
+                        expr->ToString())};
+                }
+            }
+        }
+        // regular map, walk through the entries and quasiquote expand them
+        auto result = Expression::map_t::underlying_map_t{};
+        for (auto const& el : expr->Map()) {
+            auto expanded = ExpandQuasiQuote(eval, el.second, env);
+            result[el.first] = expanded;
+        }
+        return ExpressionPtr{Expression::map_t{result}};
+    }
+    // not a container, return literal anyway
+    return expr;
+}
+
+auto QuasiQuoteExpr(SubExprEvaluator&& eval,
+                    ExpressionPtr const& expr,
+                    Configuration const& env) -> ExpressionPtr {
+    if (auto const to_expand = expr->At("$1")) {
+        return ExpandQuasiQuote(eval, *to_expand, env);
+    }
+    return Expression::kNone;
+}
+
+auto QuoteExpr(SubExprEvaluator&& /*eval*/,
+               ExpressionPtr const& expr,
+               Configuration const& /*env*/) -> ExpressionPtr {
+    if (auto const literal = expr->At("$1")) {
+        return *literal;
+    }
+    return Expression::kNone;
 }
 
 auto IfExpr(SubExprEvaluator&& eval,
@@ -734,8 +892,9 @@ auto ToSubdirExpr(SubExprEvaluator&& eval,
         for (auto const& el : d->Map()) {
             std::filesystem::path k{el.first};
             auto new_key = ToNormalPath(subdir / k.filename()).string();
-            if (result.contains(new_key) &&
-                !((result[new_key] == el.second) && el.second->IsCacheable())) {
+            if (result.contains(new_key) and
+                not((result[new_key] == el.second) and
+                    el.second->IsCacheable())) {
                 // Check if the user specifed an error message for that case,
                 // otherwise just generate a generic error message.
                 auto msg_expr = expr->Map().Find("msg");
@@ -767,8 +926,8 @@ auto ToSubdirExpr(SubExprEvaluator&& eval,
         for (auto const& el : d->Map()) {
             auto new_key = ToNormalPath(subdir / el.first).string();
             if (auto it = result.find(new_key);
-                it != result.end() &&
-                (!((it->second == el.second) && el.second->IsCacheable()))) {
+                it != result.end() and
+                (not((it->second == el.second) and el.second->IsCacheable()))) {
                 auto msg_expr = expr->Map().Find("msg");
                 if (not msg_expr) {
                     throw Evaluator::EvaluationError{fmt::format(
@@ -790,6 +949,31 @@ auto ToSubdirExpr(SubExprEvaluator&& eval,
                    << " conflicts on new path " << new_key << std::endl;
                 ss << "Map to stage was " << d->ToString() << std::endl;
                 throw Evaluator::EvaluationError(ss.str(), false, true);
+            }
+            result.emplace(std::move(new_key), el.second);
+        }
+    }
+    return ExpressionPtr{Expression::map_t{result}};
+}
+
+auto FromSubdirExpr(SubExprEvaluator&& eval,
+                    ExpressionPtr const& expr,
+                    Configuration const& env) -> ExpressionPtr {
+    auto d = eval(expr["$1"], env);
+    auto s = eval(expr->Get("subdir", "."s), env);
+    std::filesystem::path subdir{s->String()};
+    auto result = Expression::map_t::underlying_map_t{};
+    for (auto const& el : d->Map()) {
+        auto new_path = ToNormalPath(
+            std::filesystem::path(el.first).lexically_relative(subdir));
+        if (PathIsNonUpwards(new_path)) {
+            auto new_key = new_path.string();
+            if (auto it = result.find(new_key);
+                it != result.end() &&
+                (!((it->second == el.second) && el.second->IsCacheable()))) {
+                throw Evaluator::EvaluationError{
+                    fmt::format("Staging conflict for path {}",
+                                nlohmann::json(new_key).dump())};
             }
             result.emplace(std::move(new_key), el.second);
         }
@@ -1089,6 +1273,10 @@ auto AssertNonEmptyExpr(SubExprEvaluator&& eval,
 
 auto const kBuiltInFunctions =
     FunctionMap::MakePtr({{"var", VarExpr},
+                          {"'", QuoteExpr},
+                          {"`", QuasiQuoteExpr},
+                          {",", OnlyInQuasiQuote},
+                          {",@", OnlyInQuasiQuote},
                           {"if", IfExpr},
                           {"cond", CondExpr},
                           {"case", CaseExpr},
@@ -1105,6 +1293,7 @@ auto const kBuiltInFunctions =
                           {"+", UnaryExpr(Addition)},
                           {"*", UnaryExpr(Multiplication)},
                           {"nub_right", UnaryExpr(NubRight)},
+                          {"nub_left", UnaryExpr(NubLeft)},
                           {"range", UnaryExpr(Range)},
                           {"change_ending", ChangeEndingExpr},
                           {"basename", UnaryExpr(BaseName)},
@@ -1127,6 +1316,7 @@ auto const kBuiltInFunctions =
                                return Union</*kDisjoint=*/false>(exp);
                            })},
                           {"to_subdir", ToSubdirExpr},
+                          {"from_subdir", FromSubdirExpr},
                           {"foreach", ForeachExpr},
                           {"foreach_map", ForeachMapExpr},
                           {"foldl", FoldLeftExpr},

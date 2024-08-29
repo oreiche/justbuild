@@ -25,7 +25,11 @@
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
 #include "src/other_tools/just_mr/mirrors.hpp"
+#include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/ops_maps/critical_git_op_map.hpp"
 #include "src/utils/cpp/hash_combine.hpp"
 
@@ -83,9 +87,12 @@ using ContentCASMap = AsyncMapConsumer<ArchiveContent, std::nullptr_t>;
     MirrorsPtr const& additional_mirrors,
     CAInfoPtr const& ca_info,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
-    bool serve_api_exists,
-    gsl::not_null<IExecutionApi*> const& local_api,
-    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
+    ServeApi const* serve,
+    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<Storage const*> const& storage,
+    gsl::not_null<IExecutionApi const*> const& local_api,
+    IExecutionApi const* remote_api,
+    gsl::not_null<JustMRProgress*> const& progress,
     std::size_t jobs) -> ContentCASMap;
 
 namespace std {

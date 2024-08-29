@@ -36,8 +36,10 @@
     , ["@", "src", "src/buildtool/logging", "log_level"]
     , ["@", "src", "src/buildtool/logging", "logging"]
     , ["@", "src", "src/other_tools/git_operations", "git_repo_remote"]
+    , ["@", "src", "src/buildtool/storage", "config"]
     , ["@", "src", "src/utils/cpp", "atomic"]
     , ["utils", "shell_quoting"]
+    , ["utils", "test_storage_config"]
     ]
   , "stage": ["test", "other_tools", "git_operations"]
   }
@@ -72,8 +74,8 @@
   , "deps": ["git_config_run"]
   }
 , "TESTS":
-  { "type": "install"
-  , "tainted": ["test"]
+  { "type": ["@", "rules", "test", "suite"]
+  , "stage": ["git_operations"]
   , "deps":
     [ "critical_git_ops_mp"
     , "git_repo_remote"

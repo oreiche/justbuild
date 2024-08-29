@@ -32,6 +32,7 @@
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/concepts.hpp"
+#include "src/utils/cpp/json.hpp"
 
 /// FilteredIterator is an helper class to allow for iteration over
 /// directory-only or file-only entries stored inside the class
@@ -225,17 +226,15 @@ class FileRoot {
             if (std::holds_alternative<tree_t>(data_)) {
                 try {
                     auto const& data = std::get<tree_t>(data_);
-                    // check if tree is ignore_special
-                    if (data->RawHash().empty()) {
-                        return std::nullopt;
-                    }
-                    auto const& id = data->Hash();
-                    auto const& size = data->Size();
-                    if (size) {
-                        return ArtifactDescription{
-                            ArtifactDigest{id, *size, /*is_tree=*/true},
-                            ObjectType::Tree,
-                            repository};
+                    // only consider tree if we have it unmodified
+                    if (auto id = data->Hash()) {
+                        auto const& size = data->Size();
+                        if (size) {
+                            return ArtifactDescription::CreateKnown(
+                                ArtifactDigest{*id, *size, /*is_tree=*/true},
+                                ObjectType::Tree,
+                                repository);
+                        }
                     }
                 } catch (...) {
                     return std::nullopt;
@@ -351,7 +350,8 @@ class FileRoot {
                 nlohmann::json j;
                 j.push_back(ignore_special_ ? kGitTreeIgnoreSpecialMarker
                                             : kGitTreeMarker);
-                j.push_back(std::get<git_root_t>(root_).tree->Hash());
+                // we need the root tree id, irrespective of ignore_special flag
+                j.push_back(std::get<git_root_t>(root_).tree->FileRootHash());
                 return j;
             }
             if (std::holds_alternative<absent_root_t>(root_)) {
@@ -575,23 +575,23 @@ class FileRoot {
                     if (Compatibility::IsCompatible()) {
                         auto compatible_hash = Compatibility::RegisterGitEntry(
                             entry->Hash(), *entry->Blob(), repository);
-                        return ArtifactDescription{
+                        return ArtifactDescription::CreateKnown(
                             ArtifactDigest{compatible_hash,
                                            *entry->Size(),
                                            /*is_tree=*/false},
-                            entry->Type()};
+                            entry->Type());
                     }
-                    return ArtifactDescription{
+                    return ArtifactDescription::CreateKnown(
                         ArtifactDigest{
                             entry->Hash(), *entry->Size(), /*is_tree=*/false},
                         entry->Type(),
-                        repository};
+                        repository);
                 }
             }
             return std::nullopt;
         }
         if (std::holds_alternative<fs_root_t>(root_)) {
-            return ArtifactDescription{file_path, repository};
+            return ArtifactDescription::CreateLocal(file_path, repository);
         }
         return std::nullopt;  // absent roots are neither LOCAL nor KNOWN
     }

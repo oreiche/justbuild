@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/build_engine/base_maps/json_file_map.hpp"
+
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
 
 #include "catch2/catch_test_macros.hpp"
-#include "src/buildtool/build_engine/base_maps/json_file_map.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
@@ -28,8 +29,8 @@ namespace {
 
 using namespace BuildMaps::Base;  // NOLINT
 
-auto SetupConfig(std::string target_file_name, bool use_git)
-    -> RepositoryConfig {
+auto SetupConfig(std::string target_file_name,
+                 bool use_git) -> RepositoryConfig {
     auto root = FileRoot{kBasePath};
     if (use_git) {
         auto repo_path = CreateTestRepo();
@@ -100,7 +101,7 @@ TEST_CASE("non existent") {
     auto consumer = [&as_expected](auto values) {
         // Missing optional files are expected to result in empty objects with
         // no entries in it.
-        if (values[0]->is_object() && values[0]->empty()) {
+        if (values[0]->is_object() and values[0]->empty()) {
             as_expected = true;
         };
     };

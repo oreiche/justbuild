@@ -6,19 +6,23 @@
   , "proto": [["@", "bazel_remote_apis", "", "remote_execution_proto"]]
   , "stage": ["src", "buildtool", "execution_api", "execution_service"]
   , "deps":
-    [ ["@", "gsl", "", "gsl"]
-    , ["src/buildtool/execution_api/local", "local"]
+    [ "operation_cache"
+    , ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/execution_api/local", "context"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/common", "bazel_types"]
     , ["src/buildtool/storage", "storage"]
+    , ["src/buildtool/storage", "config"]
+    , ["src/utils/cpp", "expected"]
     ]
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]
-    , ["src/buildtool/storage", "storage"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/logging", "log_level"]
     , "operation_cache"
     , ["src/utils/cpp", "verify_hash"]
+    , ["src/buildtool/execution_api/local", "local"]
     ]
   , "private-ldflags":
     ["-pthread", "-Wl,--whole-archive,-lpthread,--no-whole-archive"]
@@ -32,16 +36,14 @@
   , "stage": ["src", "buildtool", "execution_api", "execution_service"]
   , "deps":
     [ ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/execution_api/local", "context"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/common", "bazel_types"]
     , ["src/buildtool/storage", "storage"]
+    , ["src/buildtool/storage", "config"]
     ]
   , "private-deps":
-    [ ["src/buildtool/storage", "storage"]
-    , ["src/buildtool/execution_api/local", "local"]
-    , ["src/buildtool/logging", "log_level"]
-    , ["src/utils/cpp", "verify_hash"]
-    ]
+    [["src/buildtool/logging", "log_level"], ["src/utils/cpp", "verify_hash"]]
   }
 , "cas_server":
   { "type": ["@", "rules", "CC", "library"]
@@ -51,16 +53,17 @@
   , "proto": [["@", "bazel_remote_apis", "", "remote_execution_proto"]]
   , "stage": ["src", "buildtool", "execution_api", "execution_service"]
   , "deps":
-    [ ["src/buildtool/logging", "logging"]
+    [ ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/execution_api/local", "context"]
+    , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/common", "bazel_types"]
     , ["src/buildtool/storage", "storage"]
-    , ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/storage", "config"]
     ]
   , "private-deps":
     [ ["src/buildtool/compatibility", "compatibility"]
     , ["src/buildtool/logging", "log_level"]
     , ["@", "fmt", "", "fmt"]
-    , ["src/buildtool/storage", "storage"]
     , ["src/utils/cpp", "verify_hash"]
     , "cas_utils"
     ]
@@ -71,6 +74,11 @@
   , "hdrs": ["server_implementation.hpp"]
   , "srcs": ["server_implementation.cpp"]
   , "stage": ["src", "buildtool", "execution_api", "execution_service"]
+  , "deps":
+    [ ["src/buildtool/execution_api/common", "api_bundle"]
+    , ["src/buildtool/execution_api/local", "context"]
+    , ["src/buildtool/execution_api/remote", "context"]
+    ]
   , "private-deps":
     [ "execution_server"
     , "ac_server"
@@ -78,14 +86,10 @@
     , "bytestream_server"
     , "capabilities_server"
     , "operations_server"
-    , ["src/buildtool/execution_api/remote", "config"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
-    , ["src/buildtool/auth", "auth"]
     , ["@", "json", "", "json"]
-    , ["src/buildtool/execution_api/local", "local"]
     , ["@", "grpc", "", "grpc++"]
-    , ["src/buildtool/execution_api/remote", "config"]
     , ["@", "fmt", "", "fmt"]
     , ["src/buildtool/compatibility", "compatibility"]
     , ["src/buildtool/common/remote", "port"]
@@ -100,18 +104,20 @@
   , "stage": ["src", "buildtool", "execution_api", "execution_service"]
   , "deps":
     [ ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/execution_api/local", "context"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/storage", "storage"]
+    , ["src/buildtool/storage", "config"]
     ]
   , "private-deps":
     [ ["src/buildtool/compatibility", "compatibility"]
     , ["src/buildtool/execution_api/common", "bytestream-common"]
+    , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/utils/cpp", "tmp_dir"]
     , ["@", "fmt", "", "fmt"]
-    , ["src/buildtool/storage", "storage"]
-    , ["src/buildtool/execution_api/local", "local"]
     , ["src/utils/cpp", "verify_hash"]
+    , "cas_utils"
     ]
   }
 , "capabilities_server":
@@ -142,7 +148,11 @@
   , "name": ["operations_server"]
   , "hdrs": ["operations_server.hpp"]
   , "srcs": ["operations_server.cpp"]
-  , "deps": [["src/buildtool/logging", "logging"]]
+  , "deps":
+    [ "operation_cache"
+    , ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/logging", "logging"]
+    ]
   , "proto": [["@", "googleapis", "", "google_longrunning_operations_proto"]]
   , "stage": ["src", "buildtool", "execution_api", "execution_service"]
   , "private-deps":
@@ -161,6 +171,7 @@
     [ ["@", "grpc", "", "grpc++"]
     , ["src/buildtool/common", "bazel_types"]
     , ["src/buildtool/storage", "storage"]
+    , ["src/utils/cpp", "expected"]
     ]
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]

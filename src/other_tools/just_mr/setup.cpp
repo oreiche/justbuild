@@ -18,19 +18,31 @@
 #include <condition_variable>
 #include <cstddef>
 #include <exception>
+#include <optional>
 #include <thread>
 
 #include "nlohmann/json.hpp"
+#include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
-#include "src/buildtool/execution_api/local/local_api.hpp"
+#include "src/buildtool/execution_api/local/config.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
+#include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/file_system/symlinks_map/resolve_symlinks_map.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/main/retry.hpp"
+#include "src/buildtool/multithreading/async_map_utils.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
+#include "src/buildtool/serve_api/remote/config.hpp"
+#include "src/buildtool/serve_api/remote/serve_api.hpp"
 #include "src/buildtool/storage/fs_utils.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress_reporter.hpp"
+#include "src/other_tools/just_mr/progress_reporting/statistics.hpp"
 #include "src/other_tools/just_mr/setup_utils.hpp"
 #include "src/other_tools/just_mr/utils.hpp"
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
@@ -48,6 +60,9 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                     MultiRepoSetupArguments const& setup_args,
                     MultiRepoJustSubCmdsArguments const& just_cmd_args,
                     MultiRepoRemoteAuthArguments const& auth_args,
+                    RetryArguments const& retry_args,
+                    StorageConfig const& storage_config,
+                    Storage const& storage,
                     bool interactive,
                     std::string multi_repo_tool_name)
     -> std::optional<std::filesystem::path> {
@@ -107,43 +122,92 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
     if (main and not setup_args.sub_all) {
         JustMR::Utils::ReachableRepositories(repos, *main, setup_repos);
     }
+    Logger::Log(LogLevel::Info,
+                "Found {} repositories to set up",
+                setup_repos->to_setup.size());
 
-    // setup the APIs for archive fetches; only happens if in native mode
-    auto remote_api =
-        JustMR::Utils::GetRemoteApi(common_args.remote_execution_address,
-                                    common_args.remote_serve_address,
-                                    auth_args);
-    IExecutionApi::Ptr local_api{std::make_unique<LocalApi>()};
-    bool remote_compatible{common_args.compatible == true};
+    // setup local execution config
+    auto local_exec_config =
+        JustMR::Utils::CreateLocalExecutionConfig(common_args);
+    if (not local_exec_config) {
+        return std::nullopt;
+    }
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &*local_exec_config,
+                                     .storage_config = &storage_config,
+                                     .storage = &storage};
+
+    // setup authentication config
+    auto auth_config = JustMR::Utils::CreateAuthConfig(auth_args);
+    if (not auth_config) {
+        return std::nullopt;
+    }
+
+    // setup the retry config
+    auto retry_config = CreateRetryConfig(retry_args);
+    if (not retry_config) {
+        return std::nullopt;
+    }
+
+    // setup remote execution config
+    auto remote_exec_config = JustMR::Utils::CreateRemoteExecutionConfig(
+        common_args.remote_execution_address, common_args.remote_serve_address);
+    if (not remote_exec_config) {
+        return std::nullopt;
+    }
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = &*auth_config,
+                                       .retry_config = &*retry_config,
+                                       .exec_config = &*remote_exec_config};
+
+    auto const apis = ApiBundle::Create(&local_context,
+                                        &remote_context,
+                                        /*repo_config=*/nullptr);
+
+    bool const has_remote_api =
+        apis.local != apis.remote and not common_args.compatible;
 
     // setup the API for serving roots
-    auto serve_api_exists = JustMR::Utils::SetupServeApi(
-        common_args.remote_serve_address, auth_args);
+    auto serve_config =
+        JustMR::Utils::CreateServeConfig(common_args.remote_serve_address);
+    if (not serve_config) {
+        return std::nullopt;
+    }
+
+    auto serve =
+        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
 
     // check configuration of the serve endpoint provided
-    if (serve_api_exists) {
+    if (serve) {
+        // if we have a remote endpoint explicitly given by the user, it must
+        // match what the serve endpoint expects
+        if (common_args.remote_execution_address and
+            not serve->CheckServeRemoteExecution()) {
+            return std::nullopt;  // this check logs error on failure
+        }
+
         // check the compatibility mode of the serve endpoint
-        auto compatible = ServeApi::IsCompatible();
+        auto compatible = serve->IsCompatible();
         if (not compatible) {
             Logger::Log(LogLevel::Warning,
                         "Checking compatibility configuration of the provided "
                         "serve endpoint failed.");
-            serve_api_exists = false;
+            serve = std::nullopt;
         }
-        if (*compatible != remote_compatible) {
+        if (*compatible != common_args.compatible) {
             Logger::Log(
                 LogLevel::Warning,
                 "Provided serve endpoint operates in a different compatibility "
                 "mode than stated. Serve endpoint ignored.");
-            serve_api_exists = false;
-        }
-        // if we have a remote endpoint explicitly given by the user, it must
-        // match what the serve endpoint expects
-        if (remote_api and common_args.remote_execution_address and
-            not ServeApi::CheckServeRemoteExecution()) {
-            return std::nullopt;  // this check logs error on failure
+            serve = std::nullopt;
         }
     }
+
+    // setup progress and statistics instances
+    JustMRStatistics stats{};
+    JustMRProgress progress{setup_repos->to_setup.size()};
 
     // setup the required async maps
     auto crit_git_op_ptr = std::make_shared<CriticalGitOpGuard>();
@@ -154,17 +218,19 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                             common_args.alternative_mirrors,
                             common_args.ca_info,
                             &critical_git_op_map,
-                            serve_api_exists,
-                            &(*local_api),
-                            (remote_api and not remote_compatible)
-                                ? std::make_optional(&(*remote_api))
-                                : std::nullopt,
+                            serve ? &*serve : nullptr,
+                            &storage_config,
+                            &storage,
+                            &(*apis.local),
+                            has_remote_api ? &*apis.remote : nullptr,
+                            &progress,
                             common_args.jobs);
 
     auto import_to_git_map =
         CreateImportToGitMap(&critical_git_op_map,
                              common_args.git_path->string(),
                              *common_args.local_launcher,
+                             &storage_config,
                              common_args.jobs);
 
     auto git_tree_fetch_map =
@@ -172,12 +238,12 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                               &import_to_git_map,
                               common_args.git_path->string(),
                               *common_args.local_launcher,
-                              serve_api_exists,
-                              &(*local_api),
-                              (remote_api and not remote_compatible)
-                                  ? std::make_optional(&(*remote_api))
-                                  : std::nullopt,
+                              serve ? &*serve : nullptr,
+                              &storage_config,
+                              &(*apis.local),
+                              has_remote_api ? &*apis.remote : nullptr,
                               false, /* backup_to_remote */
+                              &progress,
                               common_args.jobs);
 
     auto resolve_symlinks_map = CreateResolveSymlinksMap();
@@ -189,12 +255,12 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                            common_args.alternative_mirrors,
                            common_args.git_path->string(),
                            *common_args.local_launcher,
-                           serve_api_exists,
-                           &(*local_api),
-                           (remote_api and not remote_compatible)
-                               ? std::make_optional(&(*remote_api))
-                               : std::nullopt,
+                           serve ? &*serve : nullptr,
+                           &storage_config,
+                           &(*apis.local),
+                           has_remote_api ? &*apis.remote : nullptr,
                            common_args.fetch_absent,
+                           &progress,
                            common_args.jobs);
 
     auto content_git_map =
@@ -205,17 +271,20 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                             common_args.ca_info,
                             &resolve_symlinks_map,
                             &critical_git_op_map,
-                            serve_api_exists,
-                            (remote_api and not remote_compatible)
-                                ? std::make_optional(&(*remote_api))
-                                : std::nullopt,
+                            serve ? &*serve : nullptr,
+                            &storage_config,
+                            &storage,
+                            has_remote_api ? &*apis.remote : nullptr,
                             common_args.fetch_absent,
+                            &progress,
                             common_args.jobs);
 
     auto foreign_file_git_map =
         CreateForeignFileGitMap(&content_cas_map,
                                 &import_to_git_map,
-                                serve_api_exists,
+                                serve ? &*serve : nullptr,
+                                &storage_config,
+                                &storage,
                                 common_args.fetch_absent,
                                 common_args.jobs);
 
@@ -224,10 +293,9 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
         &critical_git_op_map,
         &import_to_git_map,
         &resolve_symlinks_map,
-        serve_api_exists,
-        (remote_api and not remote_compatible)
-            ? std::make_optional(&(*remote_api))
-            : std::nullopt,
+        serve ? &*serve : nullptr,
+        &storage_config,
+        has_remote_api ? &*apis.remote : nullptr,
         common_args.jobs,
         multi_repo_tool_name,
         common_args.just_path ? common_args.just_path->string()
@@ -237,11 +305,11 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
         CreateDistdirGitMap(&content_cas_map,
                             &import_to_git_map,
                             &critical_git_op_map,
-                            serve_api_exists,
-                            &(*local_api),
-                            (remote_api and not remote_compatible)
-                                ? std::make_optional(&(*remote_api))
-                                : std::nullopt,
+                            serve ? &*serve : nullptr,
+                            &storage_config,
+                            &storage,
+                            &(*apis.local),
+                            has_remote_api ? &*apis.remote : nullptr,
                             common_args.jobs);
 
     auto tree_id_git_map =
@@ -249,11 +317,10 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                            &critical_git_op_map,
                            &import_to_git_map,
                            common_args.fetch_absent,
-                           serve_api_exists,
-                           &(*local_api),
-                           (remote_api and not remote_compatible)
-                               ? std::make_optional(&(*remote_api))
-                               : std::nullopt,
+                           serve ? &*serve : nullptr,
+                           &storage_config,
+                           &(*apis.local),
+                           has_remote_api ? &*apis.remote : nullptr,
                            common_args.jobs);
 
     auto repos_to_setup_map = CreateReposToSetupMap(config,
@@ -266,27 +333,27 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                                                     &distdir_git_map,
                                                     &tree_id_git_map,
                                                     common_args.fetch_absent,
+                                                    &stats,
                                                     common_args.jobs);
 
     // set up progress observer
-    Logger::Log(LogLevel::Info,
-                "Found {} repositories to set up",
-                setup_repos->to_setup.size());
-    JustMRProgress::Instance().SetTotal(setup_repos->to_setup.size());
     std::atomic<bool> done{false};
     std::condition_variable cv{};
-    auto reporter = JustMRProgressReporter::Reporter();
+    auto reporter = JustMRProgressReporter::Reporter(&stats, &progress);
     auto observer =
         std::thread([reporter, &done, &cv]() { reporter(&done, &cv); });
 
     // Populate workspace_root and TAKE_OVER fields
     bool failed{false};
+    bool has_value{false};
+
     {
         TaskSystem ts{common_args.jobs};
         repos_to_setup_map.ConsumeAfterKeysReady(
             &ts,
             setup_repos->to_setup,
             [&failed,
+             &has_value,
              &mr_config,
              repos,
              setup_repos,
@@ -294,6 +361,7 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
              interactive,
              multi_repo_tool_name](auto const& values) noexcept {
                 try {
+                    has_value = true;
                     // set the initial setup repositories
                     nlohmann::json mr_repos{};
                     for (auto const& repo : setup_repos->to_setup) {
@@ -375,6 +443,18 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
     if (failed) {
         return std::nullopt;
     }
+    if (not has_value) {
+        // check for cycles in maps where cycles can occur and have meaning
+        if (auto error = DetectAndReportCycle("resolving symlinks",
+                                              resolve_symlinks_map,
+                                              kGitObjectToResolvePrinter)) {
+            Logger::Log(LogLevel::Error, *error);
+            return std::nullopt;
+        }
+        DetectAndReportPending(
+            "setup", repos_to_setup_map, kReposToSetupPrinter);
+        return std::nullopt;
+    }
     // if successful, return the output config
-    return StorageUtils::AddToCAS(mr_config.dump(2));
+    return StorageUtils::AddToCAS(storage, mr_config.dump(2));
 }

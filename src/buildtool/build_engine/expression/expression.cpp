@@ -24,6 +24,8 @@
 #include "fmt/core.h"
 #include "gsl/gsl"
 #include "src/buildtool/build_engine/expression/evaluator.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/crypto/hasher.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/gsl.hpp"
 #include "src/utils/cpp/json.hpp"
@@ -236,6 +238,10 @@ auto Expression::TypeString() const noexcept -> std::string {
 // NOLINTNEXTLINE(misc-no-recursion)
 auto Expression::ComputeHash() const noexcept -> std::string {
     auto hash = std::string{};
+
+    // The type of HashFunction is irrelevant here. It is used for
+    // identification and quick comparison of expressions. SHA256 is used.
+    HashFunction const hash_function{HashFunction::Type::PlainSHA256};
     if (IsNone() or IsBool() or IsNumber() or IsString() or IsArtifact() or
         IsResult() or IsNode() or IsName()) {
         // just hash the JSON representation, but prepend "@" for artifact,
@@ -245,10 +251,10 @@ auto Expression::ComputeHash() const noexcept -> std::string {
                            : IsNode()   ? "#"
                            : IsName()   ? "$"
                                         : ""};
-        hash = HashFunction::ComputeHash(prefix + ToString()).Bytes();
+        hash = hash_function.PlainHashData(prefix + ToString()).Bytes();
     }
     else {
-        auto hasher = HashFunction::Hasher();
+        auto hasher = hash_function.MakeHasher();
         if (IsList()) {
             auto list = Value<Expression::list_t>();
             hasher.Update("[");
@@ -260,7 +266,7 @@ auto Expression::ComputeHash() const noexcept -> std::string {
             auto map = Value<Expression::map_t>();
             hasher.Update("{");
             for (auto const& el : map->get()) {
-                hasher.Update(HashFunction::ComputeHash(el.first).Bytes());
+                hasher.Update(hash_function.PlainHashData(el.first).Bytes());
                 hasher.Update(el.second->ToHash());
             }
         }

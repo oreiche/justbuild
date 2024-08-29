@@ -24,20 +24,20 @@ auto ActionCacheServiceImpl::GetActionResult(
     const ::bazel_re::GetActionResultRequest* request,
     ::bazel_re::ActionResult* response) -> ::grpc::Status {
     if (auto error_msg = IsAHash(request->action_digest().hash()); error_msg) {
-        logger_.Emit(LogLevel::Debug, *error_msg);
+        logger_.Emit(LogLevel::Debug, "{}", *error_msg);
         return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, *error_msg};
     }
     logger_.Emit(LogLevel::Trace,
                  "GetActionResult: {}",
                  request->action_digest().hash());
-    auto lock = GarbageCollector::SharedLock();
-    if (!lock) {
+    auto lock = GarbageCollector::SharedLock(storage_config_);
+    if (not lock) {
         auto str = fmt::format("Could not acquire SharedLock");
         logger_.Emit(LogLevel::Error, str);
         return grpc::Status{grpc::StatusCode::INTERNAL, str};
     }
-    auto x = storage_->ActionCache().CachedResult(request->action_digest());
-    if (!x) {
+    auto x = storage_.ActionCache().CachedResult(request->action_digest());
+    if (not x) {
         return grpc::Status{
             grpc::StatusCode::NOT_FOUND,
             fmt::format("{} missing from AC", request->action_digest().hash())};

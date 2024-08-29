@@ -5,14 +5,17 @@
   , "private-deps":
     [ ["@", "catch2", "", "catch2"]
     , ["", "catch-main"]
-    , ["@", "src", "src/buildtool/common", "artifact_factory"]
+    , ["@", "src", "src/buildtool/common", "artifact_description"]
     , ["@", "src", "src/buildtool/common", "config"]
     , ["@", "src", "src/buildtool/execution_api/local", "config"]
+    , ["@", "src", "src/buildtool/execution_api/local", "context"]
     , ["@", "src", "src/buildtool/execution_api/local", "local"]
     , ["@", "src", "src/buildtool/file_system", "file_system_manager"]
     , ["@", "src", "src/buildtool/logging", "log_level"]
     , ["@", "src", "src/buildtool/logging", "logging"]
-    , ["utils", "local_hermeticity"]
+    , ["utils", "test_storage_config"]
+    , ["@", "src", "src/buildtool/storage", "storage"]
+    , ["@", "src", "src/buildtool/storage", "config"]
     ]
   , "stage": ["test", "buildtool", "execution_api", "local"]
   }
@@ -23,15 +26,19 @@
   , "private-deps":
     [ ["@", "catch2", "", "catch2"]
     , ["", "catch-main"]
+    , ["@", "src", "src/buildtool/execution_api/local", "config"]
+    , ["@", "src", "src/buildtool/execution_api/local", "context"]
     , ["@", "src", "src/buildtool/execution_api/local", "local"]
     , ["buildtool/execution_api/common", "api_test"]
-    , ["utils", "local_hermeticity"]
+    , ["utils", "test_storage_config"]
+    , ["@", "src", "src/buildtool/storage", "storage"]
+    , ["@", "src", "src/buildtool/storage", "config"]
     ]
   , "stage": ["test", "buildtool", "execution_api", "local"]
   }
 , "TESTS":
-  { "type": "install"
-  , "tainted": ["test"]
+  { "type": ["@", "rules", "test", "suite"]
+  , "stage": ["local"]
   , "deps": ["local_api", "local_execution"]
   }
 }

@@ -28,20 +28,26 @@
 #include <vector>
 
 #include "gsl/gsl"
-#include "src/buildtool/common/remote/remote_common.hpp"
-#include "src/buildtool/common/repository_config.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/common/tree.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
+#include "src/buildtool/execution_api/common/common_api.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_api.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
+#include "src/buildtool/execution_engine/executor/context.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/progress_reporting/progress.hpp"
 #include "src/utils/cpp/hex_string.hpp"
+#include "src/utils/cpp/path_rebase.hpp"
+#include "src/utils/cpp/prefix.hpp"
 
 /// \brief Implementations for executing actions and uploading artifacts.
 class ExecutorImpl {
@@ -52,10 +58,10 @@ class ExecutorImpl {
     [[nodiscard]] static auto ExecuteAction(
         Logger const& logger,
         gsl::not_null<DependencyGraph::ActionNode const*> const& action,
-        gsl::not_null<IExecutionApi*> const& api,
-        std::map<std::string, std::string> const& properties,
-        std::vector<std::pair<std::map<std::string, std::string>,
-                              ServerAddress>> const& dispatch_list,
+        IExecutionApi const& api,
+        ExecutionProperties const& merged_properties,
+        gsl::not_null<RemoteContext const*> const& remote_context,
+        HashFunction hash_function,
         std::chrono::milliseconds const& timeout,
         IExecutionAction::CacheFlag cache_flag,
         gsl::not_null<Statistics*> const& stats,
@@ -103,13 +109,14 @@ class ExecutorImpl {
             stats->IncrementActionsQueuedCounter();
         }
 
-        auto alternative_api =
-            GetAlternativeEndpoint(properties, dispatch_list);
+        // get the alternative endpoint
+        auto alternative_api = GetAlternativeEndpoint(
+            merged_properties, remote_context, hash_function);
         if (alternative_api) {
-            if (not api->ParallelRetrieveToCas(
+            if (not api.ParallelRetrieveToCas(
                     std::vector<Artifact::ObjectInfo>{Artifact::ObjectInfo{
                         *root_digest, ObjectType::Tree, /* failed= */ false}},
-                    &(*alternative_api),
+                    *alternative_api,
                     /* jobs= */ 1,
                     /* use_blob_splitting= */ true)) {
                 Logger::Log(LogLevel::Error,
@@ -119,13 +126,19 @@ class ExecutorImpl {
             }
         }
 
-        auto remote_action = (alternative_api ? &(*alternative_api) : api)
-                                 ->CreateAction(*root_digest,
-                                                action->Command(),
-                                                action->OutputFilePaths(),
-                                                action->OutputDirPaths(),
-                                                action->Env(),
-                                                properties);
+        auto base = action->Content().Cwd();
+        auto cwd_relative_output_files =
+            RebasePathStringsRelativeTo(base, action->OutputFilePaths());
+        auto cwd_relative_output_dirs =
+            RebasePathStringsRelativeTo(base, action->OutputDirPaths());
+        auto remote_action = (alternative_api ? *alternative_api : api)
+                                 .CreateAction(*root_digest,
+                                               action->Command(),
+                                               base,
+                                               cwd_relative_output_files,
+                                               cwd_relative_output_dirs,
+                                               action->Env(),
+                                               merged_properties);
 
         if (remote_action == nullptr) {
             logger.Emit(LogLevel::Error,
@@ -165,9 +178,8 @@ class ExecutorImpl {
     [[nodiscard]] static auto VerifyOrUploadArtifact(
         Logger const& logger,
         gsl::not_null<DependencyGraph::ArtifactNode const*> const& artifact,
-        gsl::not_null<RepositoryConfig*> const& repo_config,
-        gsl::not_null<IExecutionApi*> const& remote_api,
-        gsl::not_null<IExecutionApi*> const& local_api) noexcept -> bool {
+        gsl::not_null<const RepositoryConfig*> const& repo_config,
+        ApiBundle const& apis) noexcept -> bool {
         auto const object_info_opt = artifact->Content().Info();
         auto const file_path_opt = artifact->Content().FilePath();
         // If there is no object info and no file path, the artifact can not be
@@ -189,16 +201,17 @@ class ExecutorImpl {
                     << std::endl;
                 return oss.str();
             });
-            if (not remote_api->IsAvailable(object_info_opt->digest)) {
+            if (not apis.remote->IsAvailable(object_info_opt->digest)) {
                 // Check if requested artifact is available in local CAS and
                 // upload to remote CAS in case it is.
-                if (local_api->IsAvailable(object_info_opt->digest) and
-                    local_api->RetrieveToCas({*object_info_opt}, remote_api)) {
+                if (apis.local->IsAvailable(object_info_opt->digest) and
+                    apis.local->RetrieveToCas({*object_info_opt},
+                                              *apis.remote)) {
                     return true;
                 }
 
                 if (not VerifyOrUploadKnownArtifact(
-                        remote_api,
+                        *apis.remote,
                         artifact->Content().Repository(),
                         repo_config,
                         *object_info_opt)) {
@@ -225,8 +238,11 @@ class ExecutorImpl {
             return oss.str();
         });
         auto repo = artifact->Content().Repository();
-        auto new_info =
-            UploadFile(remote_api, repo, repo_config, *file_path_opt);
+        auto new_info = UploadFile(*apis.remote,
+                                   apis.hash_function,
+                                   repo,
+                                   repo_config,
+                                   *file_path_opt);
         if (not new_info) {
             Logger::Log(LogLevel::Error,
                         "artifact in {} could not be uploaded to CAS.",
@@ -248,10 +264,9 @@ class ExecutorImpl {
     /// \param[in] tree     The git tree to be uploaded.
     /// \returns True if the upload was successful, False in case of any error.
     // NOLINTNEXTLINE(misc-no-recursion)
-    [[nodiscard]] static auto VerifyOrUploadTree(
-        gsl::not_null<IExecutionApi*> const& api,
-        GitTree const& tree) noexcept -> bool {
-
+    [[nodiscard]] static auto VerifyOrUploadTree(IExecutionApi const& api,
+                                                 GitTree const& tree) noexcept
+        -> bool {
         // create list of digests for batch check of CAS availability
         std::vector<ArtifactDigest> digests;
         std::unordered_map<ArtifactDigest, gsl::not_null<GitTreeEntryPtr>>
@@ -269,7 +284,8 @@ class ExecutorImpl {
 
         Logger::Log(LogLevel::Trace, [&tree]() {
             std::ostringstream oss{};
-            oss << "upload directory content of " << tree.Hash() << std::endl;
+            oss << "upload directory content of " << tree.FileRootHash()
+                << std::endl;
             for (auto const& [path, entry] : tree) {
                 oss << fmt::format(" - {}: {}", path, entry->Hash())
                     << std::endl;
@@ -278,7 +294,7 @@ class ExecutorImpl {
         });
 
         // find missing digests
-        auto missing_digests = api->IsAvailable(digests);
+        auto missing_digests = api.IsAvailable(digests);
 
         // process missing trees
         for (auto const& digest : missing_digests) {
@@ -294,7 +310,7 @@ class ExecutorImpl {
         }
 
         // upload missing entries (blobs or trees)
-        BlobContainer container;
+        ArtifactBlobContainer container;
         for (auto const& digest : missing_digests) {
             if (auto it = entry_map.find(digest); it != entry_map.end()) {
                 auto const& entry = it->second;
@@ -302,21 +318,24 @@ class ExecutorImpl {
                 if (not content) {
                     return false;
                 }
-                try {
-                    container.Emplace(std::move(
-                        BazelBlob{digest,
-                                  std::move(*content),
-                                  IsExecutableObject(entry->Type())}));
-                } catch (std::exception const& ex) {
-                    Logger::Log(LogLevel::Error,
-                                "failed to create blob with: ",
-                                ex.what());
+                // store and/or upload blob, taking into account the maximum
+                // transfer size
+                if (not UpdateContainerAndUpload<ArtifactDigest>(
+                        &container,
+                        ArtifactBlob{digest,
+                                     std::move(*content),
+                                     IsExecutableObject(entry->Type())},
+                        /*exception_is_fatal=*/true,
+                        [&api](ArtifactBlobContainer&& blobs) {
+                            return api.Upload(std::move(blobs),
+                                              /*skip_find_missing=*/true);
+                        })) {
                     return false;
                 }
             }
         }
-
-        return api->Upload(container, /*skip_find_missing=*/true);
+        // upload remaining blobs
+        return api.Upload(std::move(container), /*skip_find_missing=*/true);
     }
 
     /// \brief Lookup blob via digest in local git repositories and upload.
@@ -326,9 +345,9 @@ class ExecutorImpl {
     /// \param hash         The git-sha1 hash of the object
     /// \returns true on success
     [[nodiscard]] static auto VerifyOrUploadGitArtifact(
-        gsl::not_null<IExecutionApi*> const& api,
+        IExecutionApi const& api,
         std::string const& repo,
-        gsl::not_null<RepositoryConfig*> const& repo_config,
+        gsl::not_null<const RepositoryConfig*> const& repo_config,
         Artifact::ObjectInfo const& info,
         std::string const& hash) noexcept -> bool {
         std::optional<std::string> content;
@@ -344,7 +363,7 @@ class ExecutorImpl {
             if (not VerifyOrUploadTree(api, *tree)) {
                 Logger::Log(LogLevel::Error,
                             "failed to verifyorupload git tree {} [{}]",
-                            tree->Hash(),
+                            tree->FileRootHash(),
                             hash);
                 return false;
             }
@@ -359,15 +378,16 @@ class ExecutorImpl {
             return false;
         }
 
-        // upload artifact content
-        auto container = BlobContainer{{BazelBlob{
-            info.digest, std::move(*content), IsExecutableObject(info.type)}}};
-        return api->Upload(container, /*skip_find_missing=*/true);
+        return api.Upload(ArtifactBlobContainer{{ArtifactBlob{
+                              info.digest,
+                              std::move(*content),
+                              IsExecutableObject(info.type)}}},
+                          /*skip_find_missing=*/true);
     }
 
     [[nodiscard]] static auto ReadGitBlob(
         std::string const& repo,
-        gsl::not_null<RepositoryConfig*> const& repo_config,
+        gsl::not_null<const RepositoryConfig*> const& repo_config,
         std::string const& hash) noexcept -> std::optional<std::string> {
         std::optional<std::string> blob{};
         if (auto const* ws_root = repo_config->WorkspaceRoot(repo)) {
@@ -383,7 +403,7 @@ class ExecutorImpl {
 
     [[nodiscard]] static auto ReadGitTree(
         std::string const& repo,
-        gsl::not_null<RepositoryConfig*> const& repo_config,
+        gsl::not_null<const RepositoryConfig*> const& repo_config,
         std::string const& hash) noexcept -> std::optional<GitTree> {
         std::optional<GitTree> tree{};
         if (auto const* ws_root = repo_config->WorkspaceRoot(repo)) {
@@ -404,9 +424,9 @@ class ExecutorImpl {
     /// \param info         The info of the object
     /// \returns true on success
     [[nodiscard]] static auto VerifyOrUploadKnownArtifact(
-        gsl::not_null<IExecutionApi*> const& api,
+        IExecutionApi const& api,
         std::string const& repo,
-        gsl::not_null<RepositoryConfig*> const& repo_config,
+        gsl::not_null<const RepositoryConfig*> const& repo_config,
         Artifact::ObjectInfo const& info) noexcept -> bool {
         if (Compatibility::IsCompatible()) {
             auto opt = Compatibility::GetGitEntry(info.digest.hash());
@@ -428,9 +448,10 @@ class ExecutorImpl {
     /// \param file_path    The path of the file to be read
     /// \returns The computed object info on success
     [[nodiscard]] static auto UploadFile(
-        gsl::not_null<IExecutionApi*> const& api,
+        IExecutionApi const& api,
+        HashFunction hash_function,
         std::string const& repo,
-        gsl::not_null<RepositoryConfig*> const& repo_config,
+        gsl::not_null<const RepositoryConfig*> const& repo_config,
         std::filesystem::path const& file_path) noexcept
         -> std::optional<Artifact::ObjectInfo> {
         auto const* ws_root = repo_config->WorkspaceRoot(repo);
@@ -445,11 +466,12 @@ class ExecutorImpl {
         if (not content.has_value()) {
             return std::nullopt;
         }
-        auto digest = ArtifactDigest::Create<ObjectType::File>(*content);
-        if (not api->Upload(
-                BlobContainer{{BazelBlob{digest,
-                                         std::move(*content),
-                                         IsExecutableObject(*object_type)}}})) {
+        auto digest =
+            ArtifactDigest::Create<ObjectType::File>(hash_function, *content);
+        if (not api.Upload(ArtifactBlobContainer{
+                {ArtifactBlob{digest,
+                              std::move(*content),
+                              IsExecutableObject(*object_type)}}})) {
             return std::nullopt;
         }
         return Artifact::ObjectInfo{.digest = std::move(digest),
@@ -462,11 +484,16 @@ class ExecutorImpl {
         IExecutionResponse::ArtifactInfos const& artifacts,
         gsl::not_null<DependencyGraph::ActionNode const*> const& action,
         bool fail_artifacts) noexcept {
+        auto base = action->Content().Cwd();
         for (auto const& [name, node] : action->OutputFiles()) {
-            node->Content().SetObjectInfo(artifacts.at(name), fail_artifacts);
+            node->Content().SetObjectInfo(
+                artifacts.at(RebasePathStringRelativeTo(base, name)),
+                fail_artifacts);
         }
         for (auto const& [name, node] : action->OutputDirs()) {
-            node->Content().SetObjectInfo(artifacts.at(name), fail_artifacts);
+            node->Content().SetObjectInfo(
+                artifacts.at(RebasePathStringRelativeTo(base, name)),
+                fail_artifacts);
         }
     }
 
@@ -474,7 +501,7 @@ class ExecutorImpl {
     /// \param api          The endpoint required for uploading
     /// \param artifacts    The artifacts to create the root tree digest from
     [[nodiscard]] static auto CreateRootDigest(
-        gsl::not_null<IExecutionApi*> const& api,
+        IExecutionApi const& api,
         std::vector<DependencyGraph::NamedArtifactNodePtr> const&
             artifacts) noexcept -> std::optional<ArtifactDigest> {
         if (artifacts.size() == 1 and
@@ -486,17 +513,20 @@ class ExecutorImpl {
                 return info->digest;
             }
         }
-        return api->UploadTree(artifacts);
+        return api.UploadTree(artifacts);
     }
     /// \brief Check that all outputs expected from the action description
     /// are present in the artifacts map
     [[nodiscard]] static auto CheckOutputsExist(
         IExecutionResponse::ArtifactInfos const& artifacts,
-        std::vector<Action::LocalPath> const& outputs) noexcept -> bool {
-        return std::all_of(
-            outputs.begin(), outputs.end(), [&artifacts](auto const& output) {
-                return artifacts.contains(output);
-            });
+        std::vector<Action::LocalPath> const& outputs,
+        std::string base) noexcept -> bool {
+        return std::all_of(outputs.begin(),
+                           outputs.end(),
+                           [&artifacts, &base](auto const& output) {
+                               return artifacts.contains(
+                                   RebasePathStringRelativeTo(base, output));
+                           });
     }
 
     /// \brief Parse response and write object info to DAG's artifact nodes.
@@ -510,7 +540,7 @@ class ExecutorImpl {
         bool count_as_executed = false) -> bool {
         logger.Emit(LogLevel::Trace, "finished execution");
 
-        if (!response) {
+        if (not response) {
             logger.Emit(LogLevel::Trace, "response is empty");
             return false;
         }
@@ -551,14 +581,19 @@ class ExecutorImpl {
         auto output_dirs = action->OutputDirPaths();
 
         if (artifacts.empty() or
-            not CheckOutputsExist(artifacts, output_files) or
-            not CheckOutputsExist(artifacts, output_dirs)) {
+            not CheckOutputsExist(
+                artifacts, output_files, action->Content().Cwd()) or
+            not CheckOutputsExist(
+                artifacts, output_dirs, action->Content().Cwd())) {
             logger.Emit(LogLevel::Error, [&] {
                 std::string message{
                     "action executed with missing outputs.\n"
                     " Action outputs should be the following artifacts:"};
                 for (auto const& output : output_files) {
-                    message += "\n  - " + output;
+                    message += "\n  - file: " + output;
+                }
+                for (auto const& output : output_dirs) {
+                    message += "\n  - dir: " + output;
                 }
                 return message;
             });
@@ -577,7 +612,7 @@ class ExecutorImpl {
         Logger const& logger,
         gsl::not_null<DependencyGraph::ActionNode const*> const& action,
         IExecutionResponse::Ptr const& response) noexcept {
-        if (!response) {
+        if (not response) {
             logger.Emit(LogLevel::Error, "response is empty");
             return;
         }
@@ -586,20 +621,27 @@ class ExecutorImpl {
         auto build_message = [has_err, has_out, &logger, &action, &response]() {
             using namespace std::string_literals;
             auto message = ""s;
+            bool has_both = has_err and has_out;
             if (has_err or has_out) {
-                message += (has_err and has_out ? "Stdout and stderr"s
-                            : has_out           ? "Stdout"s
-                                                : "Stderr"s) +
+                message += (has_both  ? "Output"s
+                            : has_out ? "Stdout"s
+                                      : "Stderr"s) +
                            " of command ";
             }
             message += nlohmann::json(action->Command()).dump() +
                        " in environment " +
                        nlohmann::json(action->Env()).dump() + "\n";
             if (response->HasStdOut()) {
-                message += response->StdOut();
+                if (has_both) {
+                    message += "Stdout:\n";
+                }
+                message += PrefixLines(response->StdOut());
             }
             if (response->HasStdErr()) {
-                message += response->StdErr();
+                if (has_both) {
+                    message += "Stderr:\n";
+                }
+                message += PrefixLines(response->StdErr());
             }
             return message;
         };
@@ -614,11 +656,11 @@ class ExecutorImpl {
         std::ostringstream msg{};
         msg << "Failed to execute command ";
         msg << nlohmann::json(action->Command()).dump();
-        msg << " in evenironment ";
+        msg << " in environment ";
         msg << nlohmann::json(action->Env()).dump();
         auto const& origin_map = progress->OriginMap();
         auto origins = origin_map.find(action->Content().Id());
-        if (origins != origin_map.end() and !origins->second.empty()) {
+        if (origins != origin_map.end() and not origins->second.empty()) {
             msg << "\nrequested by";
             for (auto const& origin : origins->second) {
                 msg << "\n - ";
@@ -637,9 +679,9 @@ class ExecutorImpl {
     }
 
     [[nodiscard]] static inline auto MergeProperties(
-        const std::map<std::string, std::string>& base,
-        const std::map<std::string, std::string>& overlay) {
-        std::map<std::string, std::string> result = base;
+        const ExecutionProperties& base,
+        const ExecutionProperties& overlay) {
+        ExecutionProperties result = base;
         for (auto const& [k, v] : overlay) {
             result[k] = v;
         }
@@ -647,12 +689,15 @@ class ExecutorImpl {
     }
 
   private:
+    /// \brief Get the alternative endpoint based on a specified set of platform
+    /// properties. These are checked against the dispatch list of an existing
+    /// remote context.
     [[nodiscard]] static inline auto GetAlternativeEndpoint(
-        const std::map<std::string, std::string>& properties,
-        const std::vector<std::pair<std::map<std::string, std::string>,
-                                    ServerAddress>>& dispatch_list)
-        -> std::unique_ptr<BazelApi> {
-        for (auto const& [pred, endpoint] : dispatch_list) {
+        const ExecutionProperties& properties,
+        const gsl::not_null<RemoteContext const*>& remote_context,
+        HashFunction hash_function) -> std::unique_ptr<BazelApi> {
+        for (auto const& [pred, endpoint] :
+             remote_context->exec_config->dispatch) {
             bool match = true;
             for (auto const& [k, v] : pred) {
                 auto v_it = properties.find(k);
@@ -670,7 +715,10 @@ class ExecutorImpl {
                     "alternative remote execution",
                     endpoint.host,
                     endpoint.port,
-                    config);
+                    remote_context->auth,
+                    remote_context->retry_config,
+                    config,
+                    hash_function);
             }
         }
         return nullptr;
@@ -683,26 +731,17 @@ class Executor {
     using CF = IExecutionAction::CacheFlag;
 
   public:
+    /// \brief Create rebuilder for action comparision of two endpoints.
+    /// \param context  Execution context. References all the required
+    /// information needed to execute actions on a specified remote endpoint.
+    /// \param logger   Overwrite the default logger. Useful for orchestrated
+    /// builds, i.e., triggered by just serve.
+    /// \param timeout  Timeout for action execution.
     explicit Executor(
-        gsl::not_null<RepositoryConfig*> const& repo_config,
-        gsl::not_null<IExecutionApi*> const& local_api,
-        gsl::not_null<IExecutionApi*> const& remote_api,
-        std::map<std::string, std::string> properties,
-        std::vector<std::pair<std::map<std::string, std::string>,
-                              ServerAddress>> dispatch_list,
-        gsl::not_null<Statistics*> const& stats,
-        gsl::not_null<Progress*> const& progress,
+        gsl::not_null<ExecutionContext const*> const& context,
         Logger const* logger = nullptr,  // log in caller logger, if given
         std::chrono::milliseconds timeout = IExecutionAction::kDefaultTimeout)
-        : repo_config_{repo_config},
-          local_api_{local_api},
-          remote_api_{remote_api},
-          properties_{std::move(properties)},
-          dispatch_list_{std::move(dispatch_list)},
-          stats_{stats},
-          progress_{progress},
-          logger_{logger},
-          timeout_{timeout} {}
+        : context_{*context}, logger_{logger}, timeout_{timeout} {}
 
     /// \brief Run an action in a blocking manner
     /// This method must be thread-safe as it could be called in parallel
@@ -717,18 +756,22 @@ class Executor {
             auto const response = Impl::ExecuteAction(
                 *logger_,
                 action,
-                remote_api_,
-                Impl::MergeProperties(properties_,
-                                      action->ExecutionProperties()),
-                dispatch_list_,
+                *context_.apis->remote,
+                Impl::MergeProperties(
+                    context_.remote_context->exec_config->platform_properties,
+                    action->ExecutionProperties()),
+                context_.remote_context,
+                context_.apis->hash_function,
                 Impl::ScaleTime(timeout_, action->TimeoutScale()),
                 action->NoCache() ? CF::DoNotCacheOutput : CF::CacheOutput,
-                stats_,
-                progress_);
+                context_.statistics,
+                context_.progress);
             // check response and save digests of results
-            return not response or
-                   Impl::ParseResponse(
-                       *logger_, *response, action, stats_, progress_);
+            return not response or Impl::ParseResponse(*logger_,
+                                                       *response,
+                                                       action,
+                                                       context_.statistics,
+                                                       context_.progress);
         }
 
         Logger logger("action:" + action->Content().Id());
@@ -736,18 +779,23 @@ class Executor {
         auto const response = Impl::ExecuteAction(
             logger,
             action,
-            remote_api_,
-            Impl::MergeProperties(properties_, action->ExecutionProperties()),
-            dispatch_list_,
+            *context_.apis->remote,
+            Impl::MergeProperties(
+                context_.remote_context->exec_config->platform_properties,
+                action->ExecutionProperties()),
+            context_.remote_context,
+            context_.apis->hash_function,
             Impl::ScaleTime(timeout_, action->TimeoutScale()),
             action->NoCache() ? CF::DoNotCacheOutput : CF::CacheOutput,
-            stats_,
-            progress_);
+            context_.statistics,
+            context_.progress);
 
         // check response and save digests of results
-        return not response or
-               Impl::ParseResponse(
-                   logger, *response, action, stats_, progress_);
+        return not response or Impl::ParseResponse(logger,
+                                                   *response,
+                                                   action,
+                                                   context_.statistics,
+                                                   context_.progress);
     }
 
     /// \brief Check artifact is available to the CAS or upload it.
@@ -761,23 +809,16 @@ class Executor {
         // non-copyable and non-movable object, we need some code duplication
         if (logger_ != nullptr) {
             return Impl::VerifyOrUploadArtifact(
-                *logger_, artifact, repo_config_, remote_api_, local_api_);
+                *logger_, artifact, context_.repo_config, *context_.apis);
         }
 
         Logger logger("artifact:" + ToHexString(artifact->Content().Id()));
         return Impl::VerifyOrUploadArtifact(
-            logger, artifact, repo_config_, remote_api_, local_api_);
+            logger, artifact, context_.repo_config, *context_.apis);
     }
 
   private:
-    gsl::not_null<RepositoryConfig*> repo_config_;
-    gsl::not_null<IExecutionApi*> local_api_;
-    gsl::not_null<IExecutionApi*> remote_api_;
-    std::map<std::string, std::string> properties_;
-    std::vector<std::pair<std::map<std::string, std::string>, ServerAddress>>
-        dispatch_list_;
-    gsl::not_null<Statistics*> stats_;
-    gsl::not_null<Progress*> progress_;
+    ExecutionContext const& context_;
     Logger const* logger_;
     std::chrono::milliseconds timeout_;
 };
@@ -789,29 +830,19 @@ class Rebuilder {
 
   public:
     /// \brief Create rebuilder for action comparision of two endpoints.
-    /// \param api          Rebuild endpoint, executes without action cache.
-    /// \param api_cached   Reference endpoint, serves everything from cache.
-    /// \param properties   Platform properties for execution.
-    /// \param timeout      Timeout for action execution.
-    Rebuilder(
-        gsl::not_null<RepositoryConfig*> const& repo_config,
-        gsl::not_null<IExecutionApi*> const& local_api,
-        gsl::not_null<IExecutionApi*> const& remote_api,
-        gsl::not_null<IExecutionApi*> const& api_cached,
-        std::map<std::string, std::string> properties,
-        std::vector<std::pair<std::map<std::string, std::string>,
-                              ServerAddress>> dispatch_list,
-        gsl::not_null<Statistics*> const& stats,
-        gsl::not_null<Progress*> const& progress,
+    /// \param context  Execution context. References all the required
+    /// information needed to perform a rebuild, during which the results of
+    /// executing actions on the regular remote endpoint and the cache endpoint
+    /// are compared.
+    /// \param timeout  Timeout for action execution.
+    explicit Rebuilder(
+        gsl::not_null<ExecutionContext const*> const& context,
         std::chrono::milliseconds timeout = IExecutionAction::kDefaultTimeout)
-        : repo_config_{repo_config},
-          local_api_{local_api},
-          remote_api_{remote_api},
-          api_cached_{api_cached},
-          properties_{std::move(properties)},
-          dispatch_list_{std::move(dispatch_list)},
-          stats_{stats},
-          progress_{progress},
+        : context_{*context},
+          api_cached_{context_.apis->MakeRemote(
+              context_.remote_context->exec_config->cache_address,
+              context_.remote_context->auth,
+              context_.remote_context->retry_config)},
           timeout_{timeout} {}
 
     [[nodiscard]] auto Process(
@@ -822,13 +853,16 @@ class Rebuilder {
         auto response = Impl::ExecuteAction(
             logger,
             action,
-            remote_api_,
-            Impl::MergeProperties(properties_, action->ExecutionProperties()),
-            dispatch_list_,
+            *context_.apis->remote,
+            Impl::MergeProperties(
+                context_.remote_context->exec_config->platform_properties,
+                action->ExecutionProperties()),
+            context_.remote_context,
+            context_.apis->hash_function,
             Impl::ScaleTime(timeout_, action->TimeoutScale()),
             CF::PretendCached,
-            stats_,
-            progress_);
+            context_.statistics,
+            context_.progress);
 
         if (not response) {
             return true;  // action without response (e.g., tree action)
@@ -838,13 +872,16 @@ class Rebuilder {
         auto response_cached = Impl::ExecuteAction(
             logger_cached,
             action,
-            api_cached_,
-            Impl::MergeProperties(properties_, action->ExecutionProperties()),
-            dispatch_list_,
+            *api_cached_,
+            Impl::MergeProperties(
+                context_.remote_context->exec_config->platform_properties,
+                action->ExecutionProperties()),
+            context_.remote_context,
+            context_.apis->hash_function,
             Impl::ScaleTime(timeout_, action->TimeoutScale()),
             CF::FromCacheOnly,
-            stats_,
-            progress_);
+            context_.statistics,
+            context_.progress);
 
         if (not response_cached) {
             logger_cached.Emit(LogLevel::Error,
@@ -856,8 +893,8 @@ class Rebuilder {
         return Impl::ParseResponse(logger,
                                    *response,
                                    action,
-                                   stats_,
-                                   progress_,
+                                   context_.statistics,
+                                   context_.progress,
                                    /*count_as_executed=*/true);
     }
 
@@ -866,7 +903,7 @@ class Rebuilder {
         const noexcept -> bool {
         Logger logger("artifact:" + ToHexString(artifact->Content().Id()));
         return Impl::VerifyOrUploadArtifact(
-            logger, artifact, repo_config_, remote_api_, local_api_);
+            logger, artifact, context_.repo_config, *context_.apis);
     }
 
     [[nodiscard]] auto DumpFlakyActions() const noexcept -> nlohmann::json {
@@ -882,15 +919,8 @@ class Rebuilder {
     }
 
   private:
-    gsl::not_null<RepositoryConfig*> repo_config_;
-    gsl::not_null<IExecutionApi*> local_api_;
-    gsl::not_null<IExecutionApi*> remote_api_;
-    gsl::not_null<IExecutionApi*> api_cached_;
-    std::map<std::string, std::string> properties_;
-    std::vector<std::pair<std::map<std::string, std::string>, ServerAddress>>
-        dispatch_list_;
-    gsl::not_null<Statistics*> stats_;
-    gsl::not_null<Progress*> progress_;
+    ExecutionContext const& context_;
+    gsl::not_null<IExecutionApi::Ptr> const api_cached_;
     std::chrono::milliseconds timeout_;
     mutable std::mutex m_;
     mutable std::vector<std::string> cache_misses_{};
@@ -904,9 +934,10 @@ class Rebuilder {
     void DetectFlakyAction(IExecutionResponse::Ptr const& response,
                            IExecutionResponse::Ptr const& response_cached,
                            Action const& action) const noexcept {
+        auto& stats = *context_.statistics;
         if (response and response_cached and
             response_cached->ActionDigest() == response->ActionDigest()) {
-            stats_->IncrementRebuiltActionComparedCounter();
+            stats.IncrementRebuiltActionComparedCounter();
             auto artifacts = response->Artifacts();
             auto artifacts_cached = response_cached->Artifacts();
             std::ostringstream msg{};
@@ -917,10 +948,10 @@ class Rebuilder {
                 }
             }
             if (msg.tellp() > 0) {
-                stats_->IncrementActionsFlakyCounter();
+                stats.IncrementActionsFlakyCounter();
                 bool tainted = action.MayFail() or action.NoCache();
                 if (tainted) {
-                    stats_->IncrementActionsFlakyTaintedCounter();
+                    stats.IncrementActionsFlakyTaintedCounter();
                 }
                 Logger::Log(tainted ? LogLevel::Debug : LogLevel::Warning,
                             "{}",
@@ -928,7 +959,7 @@ class Rebuilder {
             }
         }
         else {
-            stats_->IncrementRebuiltActionMissingCounter();
+            stats.IncrementRebuiltActionMissingCounter();
             std::unique_lock lock{m_};
             cache_misses_.emplace_back(action.Id());
         }

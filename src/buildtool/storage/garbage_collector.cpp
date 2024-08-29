@@ -16,28 +16,20 @@
 
 #include "src/buildtool/storage/garbage_collector.hpp"
 
-#include <cstddef>
+#include <array>
 #include <filesystem>
-#include <memory>
 #include <vector>
 
-#include "nlohmann/json.hpp"
+#include "gsl/gsl"
 #include "src/buildtool/common/artifact.hpp"
-#include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/compatibility/compatibility.hpp"
-#include "src/buildtool/compatibility/native_support.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/message_limits.hpp"
-#include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
-#include "src/buildtool/file_system/git_repo.hpp"
-#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/storage/compactifier.hpp"
-#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
-#include "src/buildtool/storage/target_cache_entry.hpp"
-#include "src/utils/cpp/hex_string.hpp"
 
 namespace {
 
@@ -60,96 +52,24 @@ auto RemoveDirs(const std::vector<std::filesystem::path>& directories) -> bool {
 
 }  // namespace
 
-auto GarbageCollector::GlobalUplinkBlob(bazel_re::Digest const& digest,
-                                        bool is_executable) noexcept -> bool {
-    // Try to find blob in all generations.
-    auto const& latest_cas = Storage::Generation(0).CAS();
-    for (std::size_t i = 0; i < StorageConfig::NumGenerations(); ++i) {
-        // Note that we uplink with _skip_sync_ as we want to prefer hard links
-        // from older generations over copies from the companion file/exec CAS.
-        if (Storage::Generation(i).CAS().LocalUplinkBlob(
-                latest_cas,
-                digest,
-                is_executable,
-                /*skip_sync=*/true,
-                /*splice_result=*/true)) {
-            return true;
-        }
-    }
-    return false;
+auto GarbageCollector::SharedLock(StorageConfig const& storage_config) noexcept
+    -> std::optional<LockFile> {
+    return LockFile::Acquire(LockFilePath(storage_config), /*is_shared=*/true);
 }
 
-auto GarbageCollector::GlobalUplinkLargeBlob(
-    bazel_re::Digest const& digest) noexcept -> bool {
-    // Try to find large entry in all generations.
-    auto const& latest_cas = Storage::Generation(0).CAS();
-    for (std::size_t i = 0; i < StorageConfig::NumGenerations(); ++i) {
-        if (Storage::Generation(i)
-                .CAS()
-                .LocalUplinkLargeObject<ObjectType::File>(latest_cas, digest)) {
-            return true;
-        }
-    }
-    return false;
+auto GarbageCollector::ExclusiveLock(
+    StorageConfig const& storage_config) noexcept -> std::optional<LockFile> {
+    return LockFile::Acquire(LockFilePath(storage_config), /*is_shared=*/false);
 }
 
-auto GarbageCollector::GlobalUplinkTree(bazel_re::Digest const& digest) noexcept
-    -> bool {
-    // Try to find tree in all generations.
-    auto const& latest_cas = Storage::Generation(0).CAS();
-    for (std::size_t i = 0; i < StorageConfig::NumGenerations(); ++i) {
-        if (Storage::Generation(i).CAS().LocalUplinkTree(
-                latest_cas, digest, /*splice_result=*/true)) {
-            return true;
-        }
-    }
-    return false;
+auto GarbageCollector::LockFilePath(
+    StorageConfig const& storage_config) noexcept -> std::filesystem::path {
+    return storage_config.CacheRoot() / "gc.lock";
 }
 
-auto GarbageCollector::GlobalUplinkActionCacheEntry(
-    bazel_re::Digest const& action_id) noexcept -> bool {
-    // Try to find action-cache entry in all generations.
-    auto const& latest_ac = Storage::Generation(0).ActionCache();
-    for (std::size_t i = 0; i < StorageConfig::NumGenerations(); ++i) {
-        if (Storage::Generation(i).ActionCache().LocalUplinkEntry(latest_ac,
-                                                                  action_id)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-auto GarbageCollector::GlobalUplinkTargetCacheEntry(
-    TargetCacheKey const& key,
-    std::optional<std::string> const& shard) noexcept -> bool {
-    // Try to find target-cache entry in all generations.
-    auto const& latest_tc =
-        Storage::Generation(0).TargetCache().WithShard(shard);
-    for (std::size_t i = 0; i < StorageConfig::NumGenerations(); ++i) {
-        if (Storage::Generation(i)
-                .TargetCache()
-                .WithShard(shard)
-                .LocalUplinkEntry(latest_tc, key)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-auto GarbageCollector::SharedLock() noexcept -> std::optional<LockFile> {
-    return LockFile::Acquire(LockFilePath(), /*is_shared=*/true);
-}
-
-auto GarbageCollector::ExclusiveLock() noexcept -> std::optional<LockFile> {
-    return LockFile::Acquire(LockFilePath(), /*is_shared=*/false);
-}
-
-auto GarbageCollector::LockFilePath() noexcept -> std::filesystem::path {
-    return StorageConfig::CacheRoot() / "gc.lock";
-}
-
-auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
-    -> bool {
+auto GarbageCollector::TriggerGarbageCollection(
+    StorageConfig const& storage_config,
+    bool no_rotation) noexcept -> bool {
     auto const kRemoveMe = std::string{"remove-me"};
 
     auto pid = CreateProcessUniqueId();
@@ -162,7 +82,7 @@ auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
     // With a shared lock, we can remove all directories with the given prefix,
     // as we own the process id.
     {
-        auto lock = SharedLock();
+        auto lock = SharedLock(storage_config);
         if (not lock) {
             Logger::Log(LogLevel::Error,
                         "Failed to get a shared lock the local build root");
@@ -170,7 +90,7 @@ auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
         }
 
         for (auto const& entry :
-             std::filesystem::directory_iterator(StorageConfig::CacheRoot())) {
+             std::filesystem::directory_iterator(storage_config.CacheRoot())) {
             if (entry.path().filename().string().find(remove_me_prefix) == 0) {
                 to_remove.emplace_back(entry.path());
             }
@@ -189,7 +109,7 @@ auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
     // after releasing the shared lock, wait to get an exclusive lock for doing
     // the critical renaming
     {
-        auto lock = ExclusiveLock();
+        auto lock = ExclusiveLock(storage_config);
         if (not lock) {
             Logger::Log(LogLevel::Error,
                         "Failed to exclusively lock the local build root");
@@ -201,14 +121,14 @@ auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
         // up of owned directories is done with a shared lock.
         std::vector<std::filesystem::path> left_over{};
         for (auto const& entry :
-             std::filesystem::directory_iterator(StorageConfig::CacheRoot())) {
+             std::filesystem::directory_iterator(storage_config.CacheRoot())) {
             if (entry.path().filename().string().find(kRemoveMe) == 0) {
                 left_over.emplace_back(entry.path());
             }
         }
         for (auto const& d : left_over) {
             auto new_name =
-                StorageConfig::CacheRoot() /
+                storage_config.CacheRoot() /
                 fmt::format("{}{}", remove_me_prefix, remove_me_counter++);
             if (FileSystemManager::Rename(d, new_name)) {
                 to_remove.emplace_back(new_name);
@@ -224,10 +144,10 @@ auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
         // Now that the have to exclusive lock, try to move out ephemeral data;
         // as it is still under the generation regime, it is not a huge problem
         // if that fails.
-        auto ephemeral = StorageConfig::EphemeralRoot();
+        auto ephemeral = storage_config.EphemeralRoot();
         if (FileSystemManager::IsDirectory(ephemeral)) {
             auto remove_me_dir =
-                StorageConfig::CacheRoot() /
+                storage_config.CacheRoot() /
                 fmt::format("{}{}", remove_me_prefix, remove_me_counter++);
             if (FileSystemManager::Rename(ephemeral, remove_me_dir)) {
                 to_remove.emplace_back(remove_me_dir);
@@ -243,7 +163,8 @@ auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
         // Compactification must take place before rotating generations.
         // Otherwise, an interruption of the process during compactification
         // would lead to an invalid old generation.
-        if (not GarbageCollector::Compactify(kMaxBatchTransferSize)) {
+        if (not GarbageCollector::Compactify(storage_config,
+                                             kMaxBatchTransferSize)) {
             Logger::Log(LogLevel::Error,
                         "Failed to compactify the youngest generation.");
             return false;
@@ -252,16 +173,16 @@ auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
         // Rotate generations unless told not to do so
         if (not no_rotation) {
             auto remove_me_dir =
-                StorageConfig::CacheRoot() /
+                storage_config.CacheRoot() /
                 fmt::format("{}{}", remove_me_prefix, remove_me_counter++);
             to_remove.emplace_back(remove_me_dir);
-            for (std::size_t i = StorageConfig::NumGenerations(); i > 0; --i) {
-                auto cache_root = StorageConfig::GenerationCacheRoot(i - 1);
+            for (std::size_t i = storage_config.num_generations; i > 0; --i) {
+                auto cache_root = storage_config.GenerationCacheRoot(i - 1);
                 if (FileSystemManager::IsDirectory(cache_root)) {
                     auto new_cache_root =
-                        (i == StorageConfig::NumGenerations())
+                        (i == storage_config.num_generations)
                             ? remove_me_dir
-                            : StorageConfig::GenerationCacheRoot(i);
+                            : storage_config.GenerationCacheRoot(i);
                     if (not FileSystemManager::Rename(cache_root,
                                                       new_cache_root)) {
                         Logger::Log(LogLevel::Error,
@@ -279,7 +200,7 @@ auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
     // have to remove
     bool success{};
     {
-        auto lock = SharedLock();
+        auto lock = SharedLock(storage_config);
         if (not lock) {
             Logger::Log(LogLevel::Error,
                         "Failed to get a shared lock the local build root");
@@ -291,25 +212,37 @@ auto GarbageCollector::TriggerGarbageCollection(bool no_rotation) noexcept
     return success;
 }
 
-auto GarbageCollector::Compactify(size_t threshold) noexcept -> bool {
-    const bool mode = Compatibility::IsCompatible();
-
+auto GarbageCollector::Compactify(StorageConfig const& storage_config,
+                                  size_t threshold) noexcept -> bool {
     // Return to the initial compatibility mode once done:
-    auto scope_guard = std::shared_ptr<void>(nullptr, [mode](void* /*unused*/) {
+    auto const guard = gsl::finally([mode = Compatibility::IsCompatible()] {
         Compatibility::SetCompatible(mode);
     });
 
-    // Compactification must be done for both native and compatible storages.
-    auto compactify = [threshold](bool compatible) -> bool {
-        auto const storage =
-            ::Generation(StorageConfig::GenerationCacheDir(0, compatible));
-        Compatibility::SetCompatible(compatible);
+    auto compactify = [threshold](StorageConfig const& config) -> bool {
+        Compatibility::SetCompatible(config.hash_function.GetType() ==
+                                     HashFunction::Type::PlainSHA256);
+        auto const storage = ::Generation::Create(&config);
 
         return Compactifier::RemoveInvalid(storage.CAS()) and
                Compactifier::RemoveSpliced(storage.CAS()) and
                Compactifier::SplitLarge(storage.CAS(), threshold);
     };
-    return compactify(mode) and compactify(not mode);
+
+    // Compactification must be done for both native and compatible storages.
+    static constexpr std::array kHashes = {HashFunction::Type::GitSHA1,
+                                           HashFunction::Type::PlainSHA256};
+    auto builder = StorageConfig::Builder{}
+                       .SetBuildRoot(storage_config.build_root)
+                       .SetNumGenerations(storage_config.num_generations);
+
+    return std::all_of(kHashes.begin(),
+                       kHashes.end(),
+                       [&builder, &compactify](HashFunction::Type hash_type) {
+                           auto const config =
+                               builder.SetHashType(hash_type).Build();
+                           return config.has_value() and compactify(*config);
+                       });
 }
 
 #endif  // BOOTSTRAP_BUILD_TOOL

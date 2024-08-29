@@ -21,12 +21,19 @@
 #include "build/bazel/remote/execution/v2/remote_execution.grpc.pb.h"
 #include "gsl/gsl"
 #include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
 
 class CASServiceImpl final
     : public bazel_re::ContentAddressableStorage::Service {
   public:
+    explicit CASServiceImpl(
+        gsl::not_null<LocalContext const*> const& local_context) noexcept
+        : storage_config_{*local_context->storage_config},
+          storage_{*local_context->storage} {}
+
     // Determine if blobs are present in the CAS.
     //
     // Clients can use this API before uploading blobs to determine which ones
@@ -211,11 +218,8 @@ class CASServiceImpl final
         -> ::grpc::Status override;
 
   private:
-    [[nodiscard]] auto CheckDigestConsistency(bazel_re::Digest const& ref,
-                                              bazel_re::Digest const& computed)
-        const noexcept -> std::optional<std::string>;
-
-    gsl::not_null<Storage const*> storage_ = &Storage::Instance();
+    StorageConfig const& storage_config_;
+    Storage const& storage_;
     Logger logger_{"execution-service"};
 };
 #endif

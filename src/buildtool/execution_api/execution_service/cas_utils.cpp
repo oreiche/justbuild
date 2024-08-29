@@ -47,16 +47,16 @@ auto CASUtils::EnsureTreeInvariant(bazel_re::Digest const& digest,
 
 auto CASUtils::SplitBlobIdentity(bazel_re::Digest const& blob_digest,
                                  Storage const& storage) noexcept
-    -> std::variant<std::vector<bazel_re::Digest>, grpc::Status> {
+    -> expected<std::vector<bazel_re::Digest>, grpc::Status> {
 
     // Check blob existence.
     auto path = NativeSupport::IsTree(blob_digest.hash())
                     ? storage.CAS().TreePath(blob_digest)
                     : storage.CAS().BlobPath(blob_digest, false);
     if (not path) {
-        return grpc::Status{
-            grpc::StatusCode::NOT_FOUND,
-            fmt::format("blob not found {}", blob_digest.hash())};
+        return unexpected{
+            grpc::Status{grpc::StatusCode::NOT_FOUND,
+                         fmt::format("blob not found {}", blob_digest.hash())}};
     }
 
     // The split protocol states that each chunk that is returned by the
@@ -67,15 +67,16 @@ auto CASUtils::SplitBlobIdentity(bazel_re::Digest const& blob_digest,
     if (NativeSupport::IsTree(blob_digest.hash())) {
         auto tree_data = FileSystemManager::ReadFile(*path);
         if (not tree_data) {
-            return grpc::Status{
+            return unexpected{grpc::Status{
                 grpc::StatusCode::INTERNAL,
-                fmt::format("could read tree data {}", blob_digest.hash())};
+                fmt::format("could read tree data {}", blob_digest.hash())}};
         }
         auto digest = storage.CAS().StoreBlob(*tree_data, false);
         if (not digest) {
-            return grpc::Status{grpc::StatusCode::INTERNAL,
-                                fmt::format("could not store tree as blob {}",
-                                            blob_digest.hash())};
+            return unexpected{
+                grpc::Status{grpc::StatusCode::INTERNAL,
+                             fmt::format("could not store tree as blob {}",
+                                         blob_digest.hash())}};
         }
         chunk_digests.emplace_back(*digest);
         return chunk_digests;
@@ -86,27 +87,24 @@ auto CASUtils::SplitBlobIdentity(bazel_re::Digest const& blob_digest,
 
 auto CASUtils::SplitBlobFastCDC(bazel_re::Digest const& blob_digest,
                                 Storage const& storage) noexcept
-    -> std::variant<std::vector<bazel_re::Digest>, grpc::Status> {
+    -> expected<std::vector<bazel_re::Digest>, grpc::Status> {
     // Split blob into chunks:
     auto split = NativeSupport::IsTree(blob_digest.hash())
                      ? storage.CAS().SplitTree(blob_digest)
                      : storage.CAS().SplitBlob(blob_digest);
 
     // Process result:
-    if (auto* result = std::get_if<std::vector<bazel_re::Digest>>(&split)) {
-        return std::move(*result);
+    if (split) {
+        return *std::move(split);
     }
     // Process errors
-    if (auto* error = std::get_if<LargeObjectError>(&split)) {
-        return ToGrpc(std::move(*error));
-    }
-    return grpc::Status{grpc::StatusCode::INTERNAL, "an unknown error"};
+    return unexpected{ToGrpc(std::move(split).error())};
 }
 
 auto CASUtils::SpliceBlob(bazel_re::Digest const& blob_digest,
                           std::vector<bazel_re::Digest> const& chunk_digests,
                           Storage const& storage) noexcept
-    -> std::variant<bazel_re::Digest, grpc::Status> {
+    -> expected<bazel_re::Digest, grpc::Status> {
     // Splice blob from chunks:
     auto splice =
         NativeSupport::IsTree(blob_digest.hash())
@@ -114,12 +112,8 @@ auto CASUtils::SpliceBlob(bazel_re::Digest const& blob_digest,
             : storage.CAS().SpliceBlob(blob_digest, chunk_digests, false);
 
     // Process result:
-    if (auto* result = std::get_if<bazel_re::Digest>(&splice)) {
-        return std::move(*result);
+    if (splice) {
+        return *std::move(splice);
     }
-    // Process errors
-    if (auto* error = std::get_if<LargeObjectError>(&splice)) {
-        return ToGrpc(std::move(*error));
-    }
-    return grpc::Status{grpc::StatusCode::INTERNAL, "an unknown error"};
+    return unexpected{ToGrpc(std::move(splice).error())};
 }

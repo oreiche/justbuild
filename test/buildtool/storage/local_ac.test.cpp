@@ -20,8 +20,9 @@
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
-#include "test/utils/hermeticity/local.hpp"
+#include "test/utils/hermeticity/test_storage_config.hpp"
 
 [[nodiscard]] static auto RunDummyExecution(
     gsl::not_null<LocalAC<true> const*> const& ac,
@@ -29,27 +30,31 @@
     bazel_re::Digest const& action_id,
     std::string const& seed) -> bool;
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAC: Single action, single result",
-                 "[storage]") {
-    auto const& ac = Storage::Instance().ActionCache();
-    auto const& cas = Storage::Instance().CAS();
+TEST_CASE("LocalAC: Single action, single result", "[storage]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const& ac = storage.ActionCache();
+    auto const& cas = storage.CAS();
 
-    auto action_id = ArtifactDigest::Create<ObjectType::File>("action");
+    auto action_id = ArtifactDigest::Create<ObjectType::File>(
+        storage_config.Get().hash_function, "action");
     CHECK(not ac.CachedResult(action_id));
     CHECK(RunDummyExecution(&ac, &cas, action_id, "result"));
     auto ac_result = ac.CachedResult(action_id);
     CHECK(ac_result);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAC: Two different actions, two different results",
-                 "[storage]") {
-    auto const& ac = Storage::Instance().ActionCache();
-    auto const& cas = Storage::Instance().CAS();
+TEST_CASE("LocalAC: Two different actions, two different results",
+          "[storage]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const& ac = storage.ActionCache();
+    auto const& cas = storage.CAS();
 
-    auto action_id1 = ArtifactDigest::Create<ObjectType::File>("action1");
-    auto action_id2 = ArtifactDigest::Create<ObjectType::File>("action2");
+    auto action_id1 = ArtifactDigest::Create<ObjectType::File>(
+        storage_config.Get().hash_function, "action1");
+    auto action_id2 = ArtifactDigest::Create<ObjectType::File>(
+        storage_config.Get().hash_function, "action2");
     CHECK(not ac.CachedResult(action_id1));
     CHECK(not ac.CachedResult(action_id2));
 
@@ -71,14 +76,16 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     CHECK(result_content1 != result_content2);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAC: Two different actions, same two results",
-                 "[storage]") {
-    auto const& ac = Storage::Instance().ActionCache();
-    auto const& cas = Storage::Instance().CAS();
+TEST_CASE("LocalAC: Two different actions, same two results", "[storage]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const& ac = storage.ActionCache();
+    auto const& cas = storage.CAS();
 
-    auto action_id1 = ArtifactDigest::Create<ObjectType::File>("action1");
-    auto action_id2 = ArtifactDigest::Create<ObjectType::File>("action2");
+    auto action_id1 = ArtifactDigest::Create<ObjectType::File>(
+        storage_config.Get().hash_function, "action1");
+    auto action_id2 = ArtifactDigest::Create<ObjectType::File>(
+        storage_config.Get().hash_function, "action2");
     CHECK(not ac.CachedResult(action_id1));
     CHECK(not ac.CachedResult(action_id2));
 
@@ -100,13 +107,14 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     CHECK(result_content1 == result_content2);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalAC: Same two actions, two different results",
-                 "[storage]") {
-    auto const& ac = Storage::Instance().ActionCache();
-    auto const& cas = Storage::Instance().CAS();
+TEST_CASE("LocalAC: Same two actions, two different results", "[storage]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const& ac = storage.ActionCache();
+    auto const& cas = storage.CAS();
 
-    auto action_id = ArtifactDigest::Create<ObjectType::File>("same action");
+    auto action_id = ArtifactDigest::Create<ObjectType::File>(
+        storage_config.Get().hash_function, "same action");
     CHECK(not ac.CachedResult(action_id));
 
     std::string result_content1{};

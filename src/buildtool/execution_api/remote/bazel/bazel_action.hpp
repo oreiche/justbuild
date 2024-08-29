@@ -17,10 +17,12 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_network.hpp"
 
 class BazelApi;
@@ -39,28 +41,31 @@ class BazelAction final : public IExecutionAction {
     }
 
   private:
-    std::shared_ptr<BazelNetwork> network_;
+    std::shared_ptr<BazelNetwork> const network_;
     bazel_re::Digest const root_digest_;
     std::vector<std::string> const cmdline_;
+    std::string const cwd_;
     std::vector<std::string> output_files_;
     std::vector<std::string> output_dirs_;
-    std::vector<bazel_re::Command_EnvironmentVariable> env_vars_;
-    std::vector<bazel_re::Platform_Property> properties_;
+    std::vector<bazel_re::Command_EnvironmentVariable> const env_vars_;
+    std::vector<bazel_re::Platform_Property> const properties_;
     CacheFlag cache_flag_{CacheFlag::CacheOutput};
     std::chrono::milliseconds timeout_{kDefaultTimeout};
 
-    BazelAction(std::shared_ptr<BazelNetwork> network,
-                bazel_re::Digest root_digest,
-                std::vector<std::string> command,
-                std::vector<std::string> output_files,
-                std::vector<std::string> output_dirs,
-                std::map<std::string, std::string> const& env_vars,
-                std::map<std::string, std::string> const& properties) noexcept;
+    explicit BazelAction(
+        std::shared_ptr<BazelNetwork> network,
+        bazel_re::Digest root_digest,
+        std::vector<std::string> command,
+        std::string cwd,
+        std::vector<std::string> output_files,
+        std::vector<std::string> output_dirs,
+        std::map<std::string, std::string> const& env_vars,
+        std::map<std::string, std::string> const& properties) noexcept;
 
-    [[nodiscard]] auto CreateBundlesForAction(BlobContainer* blobs,
+    [[nodiscard]] auto CreateBundlesForAction(BazelBlobContainer* blobs,
                                               bazel_re::Digest const& exec_dir,
                                               bool do_not_cache) const noexcept
-        -> bazel_re::Digest;
+        -> std::optional<bazel_re::Digest>;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_BAZEL_BAZEL_ACTION_HPP

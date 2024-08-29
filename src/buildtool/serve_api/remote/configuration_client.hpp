@@ -21,24 +21,28 @@
 #include <utility>
 #include <vector>
 
+#include "gsl/gsl"
 #include "justbuild/just_serve/just_serve.grpc.pb.h"
-#include "src/buildtool/common/remote/client_common.hpp"
-#include "src/buildtool/common/remote/port.hpp"
+#include "src/buildtool/common/remote/remote_common.hpp"
+#include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
 /// Implements client side for Configuration service defined in:
 /// src/buildtool/serve_api/serve_service/just_serve.proto
 class ConfigurationClient {
   public:
-    ConfigurationClient(std::string const& server, Port port) noexcept
-        : stub_{justbuild::just_serve::Configuration::NewStub(
-              CreateChannelWithCredentials(server, port))} {}
+    explicit ConfigurationClient(
+        ServerAddress address,
+        gsl::not_null<RemoteContext const*> const& remote_context) noexcept;
 
-    [[nodiscard]] auto CheckServeRemoteExecution() noexcept -> bool;
+    [[nodiscard]] auto CheckServeRemoteExecution() const noexcept -> bool;
 
-    [[nodiscard]] auto IsCompatible() noexcept -> std::optional<bool>;
+    [[nodiscard]] auto IsCompatible() const noexcept -> std::optional<bool>;
 
   private:
+    ServerAddress const client_serve_address_;
+    RemoteExecutionConfig const& remote_config_;
     std::unique_ptr<justbuild::just_serve::Configuration::Stub> stub_;
     Logger logger_{"RemoteConfigurationClient"};
 };

@@ -17,61 +17,130 @@
 #include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
+#include "src/buildtool/execution_api/local/config.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/execution_api/local/local_api.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/execution_engine/executor/executor.hpp"
 #include "src/buildtool/progress_reporting/progress.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
 #include "test/buildtool/execution_engine/executor/executor_api.test.hpp"
-#include "test/utils/hermeticity/local.hpp"
+#include "test/utils/hermeticity/test_storage_config.hpp"
+#include "test/utils/remote_execution/test_auth_config.hpp"
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "Executor<LocalApi>: Upload blob",
-                 "[executor]") {
-    RepositoryConfig repo_config{};
-    TestBlobUpload(&repo_config,
-                   [&] { return std::make_unique<LocalApi>(&repo_config); });
-}
+TEST_CASE("Executor<LocalApi>: Upload blob", "[executor]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    LocalExecutionConfig local_exec_config{};
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "Executor<LocalApi>: Compile hello world",
-                 "[executor]") {
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
     RepositoryConfig repo_config{};
-    Statistics stats{};
-    Progress progress{};
-    TestHelloWorldCompilation(&repo_config, &stats, &progress, [&] {
-        return std::make_unique<LocalApi>(&repo_config);
+    TestBlobUpload(&repo_config, [&] {
+        return std::make_unique<LocalApi>(&local_context, &repo_config);
     });
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "Executor<LocalApi>: Compile greeter",
-                 "[executor]") {
+TEST_CASE("Executor<LocalApi>: Compile hello world", "[executor]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
     RepositoryConfig repo_config{};
     Statistics stats{};
     Progress progress{};
-    TestGreeterCompilation(&repo_config, &stats, &progress, [&] {
-        return std::make_unique<LocalApi>(&repo_config);
-    });
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+    TestHelloWorldCompilation(
+        &repo_config,
+        &stats,
+        &progress,
+        [&] {
+            return std::make_unique<LocalApi>(&local_context, &repo_config);
+        },
+        &*auth_config);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "Executor<LocalApi>: Upload and download trees",
-                 "[executor]") {
+TEST_CASE("Executor<LocalApi>: Compile greeter", "[executor]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
     RepositoryConfig repo_config{};
     Statistics stats{};
     Progress progress{};
-    TestUploadAndDownloadTrees(&repo_config, &stats, &progress, [&] {
-        return std::make_unique<LocalApi>(&repo_config);
-    });
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+    TestGreeterCompilation(
+        &repo_config,
+        &stats,
+        &progress,
+        [&] {
+            return std::make_unique<LocalApi>(&local_context, &repo_config);
+        },
+        &*auth_config);
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "Executor<LocalApi>: Retrieve output directories",
-                 "[executor]") {
+TEST_CASE("Executor<LocalApi>: Upload and download trees", "[executor]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
     RepositoryConfig repo_config{};
     Statistics stats{};
     Progress progress{};
-    TestRetrieveOutputDirectories(&repo_config, &stats, &progress, [&] {
-        return std::make_unique<LocalApi>(&repo_config);
-    });
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+    TestUploadAndDownloadTrees(
+        &repo_config,
+        &stats,
+        &progress,
+        [&] {
+            return std::make_unique<LocalApi>(&local_context, &repo_config);
+        },
+        &*auth_config);
+}
+
+TEST_CASE("Executor<LocalApi>: Retrieve output directories", "[executor]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    LocalExecutionConfig local_exec_config{};
+
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
+    RepositoryConfig repo_config{};
+    Statistics stats{};
+    Progress progress{};
+    auto auth_config = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth_config);
+    TestRetrieveOutputDirectories(
+        &repo_config,
+        &stats,
+        &progress,
+        [&] {
+            return std::make_unique<LocalApi>(&local_context, &repo_config);
+        },
+        &*auth_config);
 }

@@ -19,178 +19,10 @@
 #include <utility>  // std::move
 
 #include "fmt/core.h"
-#include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/storage/local_cas.hpp"
 
 namespace detail {
-
-template <class T_CAS>
-[[nodiscard]] auto ReadDirectory(T_CAS const& cas,
-                                 bazel_re::Digest const& digest) noexcept
-    -> std::optional<bazel_re::Directory> {
-    if (auto const path = cas.TreePath(digest)) {
-        if (auto const content = FileSystemManager::ReadFile(*path)) {
-            return BazelMsgFactory::MessageFromString<bazel_re::Directory>(
-                *content);
-        }
-    }
-    Logger::Log(LogLevel::Error,
-                "Directory {} not found in CAS",
-                NativeSupport::Unprefix(digest.hash()));
-    return std::nullopt;
-}
-
-template <class T_CAS>
-[[nodiscard]] auto ReadGitTree(T_CAS const& cas,
-                               bazel_re::Digest const& digest) noexcept
-    -> std::optional<GitRepo::tree_entries_t> {
-    if (auto const path = cas.TreePath(digest)) {
-        if (auto const content = FileSystemManager::ReadFile(*path)) {
-            auto check_symlinks =
-                [&cas](std::vector<bazel_re::Digest> const& ids) {
-                    for (auto const& id : ids) {
-                        auto link_path =
-                            cas.BlobPath(id, /*is_executable=*/false);
-                        if (not link_path) {
-                            return false;
-                        }
-                        // in the local CAS we store as files
-                        auto content = FileSystemManager::ReadFile(*link_path);
-                        if (not content or not PathIsNonUpwards(*content)) {
-                            return false;
-                        }
-                    }
-                    return true;
-                };
-            return GitRepo::ReadTreeData(
-                *content,
-                HashFunction::ComputeTreeHash(*content).Bytes(),
-                check_symlinks,
-                /*is_hex_id=*/false);
-        }
-    }
-    Logger::Log(LogLevel::Debug,
-                "Tree {} not found in CAS",
-                NativeSupport::Unprefix(digest.hash()));
-    return std::nullopt;
-}
-
-[[nodiscard]] inline auto DumpToStream(
-    gsl::not_null<FILE*> const& stream,
-    std::optional<std::string> const& data) noexcept -> bool {
-    if (data) {
-        std::fwrite(data->data(), 1, data->size(), stream);
-        return true;
-    }
-    return false;
-}
-
-template <class T_CAS>
-[[nodiscard]] auto TreeToStream(T_CAS const& cas,
-                                bazel_re::Digest const& tree_digest,
-                                gsl::not_null<FILE*> const& stream) noexcept
-    -> bool {
-    if (Compatibility::IsCompatible()) {
-        if (auto dir = ReadDirectory(cas, tree_digest)) {
-            return DumpToStream(stream,
-                                BazelMsgFactory::DirectoryToString(*dir));
-        }
-    }
-    else {
-        if (auto entries = ReadGitTree(cas, tree_digest)) {
-            return DumpToStream(stream,
-                                BazelMsgFactory::GitTreeToString(*entries));
-        }
-    }
-    return false;
-}
-
-template <class T_CAS>
-[[nodiscard]] auto BlobToStream(T_CAS const& cas,
-                                Artifact::ObjectInfo const& blob_info,
-                                gsl::not_null<FILE*> const& stream) noexcept
-    -> bool {
-    constexpr std::size_t kChunkSize{512};
-    auto path =
-        cas.BlobPath(blob_info.digest, IsExecutableObject(blob_info.type));
-    if (not path and not Compatibility::IsCompatible()) {
-        // in native mode, lookup object in tree cas to dump tree as blob
-        path = cas.TreePath(blob_info.digest);
-    }
-    if (path) {
-        std::string data(kChunkSize, '\0');
-        if (gsl::owner<FILE*> in = std::fopen(path->c_str(), "rb")) {
-            while (auto size = std::fread(data.data(), 1, kChunkSize, in)) {
-                std::fwrite(data.data(), 1, size, stream);
-            }
-            std::fclose(in);
-            return true;
-        }
-    }
-    return false;
-}
-
-[[nodiscard]] static inline auto IsDirectoryEmpty(
-    bazel_re::Directory const& dir) noexcept -> bool {
-    return dir.files().empty() and dir.directories().empty() and
-           dir.symlinks().empty();
-}
-
-template <class T_CAS>
-auto ReadObjectInfosRecursively(
-    T_CAS const& cas,
-    BazelMsgFactory::InfoStoreFunc const& store_info,
-    std::filesystem::path const& parent,
-    bazel_re::Digest const& digest,
-    bool const include_trees = false) -> bool {
-    // read from CAS
-    if (Compatibility::IsCompatible()) {
-        if (auto dir = ReadDirectory(cas, digest)) {
-            if (include_trees and IsDirectoryEmpty(*dir)) {
-                if (not store_info(
-                        parent, {ArtifactDigest{digest}, ObjectType::Tree})) {
-                    return false;
-                }
-            }
-            return BazelMsgFactory::ReadObjectInfosFromDirectory(
-                *dir,
-                [&cas, &store_info, &parent, include_trees](auto path,
-                                                            auto info) {
-                    return IsTreeObject(info.type)
-                               ? ReadObjectInfosRecursively(cas,
-                                                            store_info,
-                                                            parent / path,
-                                                            info.digest,
-                                                            include_trees)
-                               : store_info(parent / path, info);
-                });
-        }
-    }
-    else {
-        if (auto entries = ReadGitTree(cas, digest)) {
-            if (include_trees and entries->empty()) {
-                if (not store_info(
-                        parent, {ArtifactDigest{digest}, ObjectType::Tree})) {
-                    return false;
-                }
-            }
-            return BazelMsgFactory::ReadObjectInfosFromGitTree(
-                *entries,
-                [&cas, &store_info, &parent, include_trees](auto path,
-                                                            auto info) {
-                    return IsTreeObject(info.type)
-                               ? ReadObjectInfosRecursively(cas,
-                                                            store_info,
-                                                            parent / path,
-                                                            info.digest,
-                                                            include_trees)
-                               : store_info(parent / path, info);
-                });
-        }
-    }
-    return false;
-}
 
 [[nodiscard]] static inline auto CheckDigestConsistency(
     bazel_re::Digest const& lhs,
@@ -208,83 +40,9 @@ auto ReadObjectInfosRecursively(
 }  // namespace detail
 
 template <bool kDoGlobalUplink>
-[[nodiscard]] auto LocalCAS<kDoGlobalUplink>::RecursivelyReadTreeLeafs(
-    bazel_re::Digest const& tree_digest,
-    std::filesystem::path const& parent,
-    bool const include_trees) const noexcept
-    -> std::optional<std::pair<std::vector<std::filesystem::path>,
-                               std::vector<Artifact::ObjectInfo>>> {
-    std::vector<std::filesystem::path> paths{};
-    std::vector<Artifact::ObjectInfo> infos{};
-
-    auto store_info = [&paths, &infos](auto path, auto info) {
-        paths.emplace_back(path);
-        infos.emplace_back(info);
-        return true;
-    };
-
-    try {
-        if (detail::ReadObjectInfosRecursively(
-                *this, store_info, parent, tree_digest, include_trees)) {
-            return std::make_pair(std::move(paths), std::move(infos));
-        }
-    } catch (...) {
-        // fallthrough
-    }
-    return std::nullopt;
-}
-
-template <bool kDoGlobalUplink>
-[[nodiscard]] auto LocalCAS<kDoGlobalUplink>::ReadDirectTreeEntries(
-    bazel_re::Digest const& tree_digest,
-    std::filesystem::path const& parent) const noexcept
-    -> std::optional<std::pair<std::vector<std::filesystem::path>,
-                               std::vector<Artifact::ObjectInfo>>> {
-    std::vector<std::filesystem::path> paths{};
-    std::vector<Artifact::ObjectInfo> infos{};
-
-    auto store_info = [&paths, &infos](auto path, auto info) {
-        paths.emplace_back(path);
-        infos.emplace_back(info);
-        return true;
-    };
-
-    if (Compatibility::IsCompatible()) {
-        if (auto dir = detail::ReadDirectory(*this, tree_digest)) {
-            if (not BazelMsgFactory::ReadObjectInfosFromDirectory(
-                    *dir, [&store_info, &parent](auto path, auto info) {
-                        return store_info(parent / path, info);
-                    })) {
-                return std::nullopt;
-            }
-        }
-    }
-    else {
-        if (auto entries = detail::ReadGitTree(*this, tree_digest)) {
-            if (not BazelMsgFactory::ReadObjectInfosFromGitTree(
-                    *entries, [&store_info, &parent](auto path, auto info) {
-                        return store_info(parent / path, info);
-                    })) {
-                return std::nullopt;
-            }
-        }
-    }
-    return std::make_pair(std::move(paths), std::move(infos));
-}
-
-template <bool kDoGlobalUplink>
-auto LocalCAS<kDoGlobalUplink>::DumpToStream(Artifact::ObjectInfo const& info,
-                                             gsl::not_null<FILE*> const& stream,
-                                             bool raw_tree) const noexcept
-    -> bool {
-    return IsTreeObject(info.type) and not raw_tree
-               ? detail::TreeToStream(*this, info.digest, stream)
-               : detail::BlobToStream(*this, info, stream);
-}
-
-template <bool kDoGlobalUplink>
 template <bool kIsLocalGeneration>
-requires(kIsLocalGeneration) auto LocalCAS<kDoGlobalUplink>::LocalUplinkBlob(
+    requires(kIsLocalGeneration)
+auto LocalCAS<kDoGlobalUplink>::LocalUplinkBlob(
     LocalGenerationCAS const& latest,
     bazel_re::Digest const& digest,
     bool is_executable,
@@ -321,13 +79,22 @@ requires(kIsLocalGeneration) auto LocalCAS<kDoGlobalUplink>::LocalUplinkBlob(
     }
 
     // Uplink blob from older generation to the latest generation.
-    return blob_path_latest.has_value() or
-           latest.StoreBlob</*kOwner=*/true>(*blob_path, is_executable);
+    if (spliced and is_executable) {
+        // During multithreaded splicing, the main process can be forked
+        // (inheriting open file descriptors). In this case, an executable file
+        // saved using hardlinking becomes inaccessible. To prevent this,
+        // executables must be stored as copies made in a child process.
+        return latest.StoreBlob</*kOwner=*/false>(*blob_path, is_executable)
+            .has_value();
+    }
+    return latest.StoreBlob</*kOwner=*/true>(*blob_path, is_executable)
+        .has_value();
 }
 
 template <bool kDoGlobalUplink>
 template <bool kIsLocalGeneration>
-requires(kIsLocalGeneration) auto LocalCAS<kDoGlobalUplink>::LocalUplinkTree(
+    requires(kIsLocalGeneration)
+auto LocalCAS<kDoGlobalUplink>::LocalUplinkTree(
     LocalGenerationCAS const& latest,
     bazel_re::Digest const& digest,
     bool splice_result) const noexcept -> bool {
@@ -340,7 +107,8 @@ requires(kIsLocalGeneration) auto LocalCAS<kDoGlobalUplink>::LocalUplinkTree(
 
 template <bool kDoGlobalUplink>
 template <bool kIsLocalGeneration>
-requires(kIsLocalGeneration) auto LocalCAS<kDoGlobalUplink>::LocalUplinkGitTree(
+    requires(kIsLocalGeneration)
+auto LocalCAS<kDoGlobalUplink>::LocalUplinkGitTree(
     LocalGenerationCAS const& latest,
     bazel_re::Digest const& digest,
     bool splice_result) const noexcept -> bool {
@@ -434,12 +202,12 @@ requires(kIsLocalGeneration) auto LocalCAS<kDoGlobalUplink>::LocalUplinkGitTree(
 
 template <bool kDoGlobalUplink>
 template <bool kIsLocalGeneration>
-requires(kIsLocalGeneration) auto LocalCAS<kDoGlobalUplink>::
-    LocalUplinkBazelDirectory(
-        LocalGenerationCAS const& latest,
-        bazel_re::Digest const& digest,
-        gsl::not_null<std::unordered_set<bazel_re::Digest>*> const& seen,
-        bool splice_result) const noexcept -> bool {
+    requires(kIsLocalGeneration)
+auto LocalCAS<kDoGlobalUplink>::LocalUplinkBazelDirectory(
+    LocalGenerationCAS const& latest,
+    bazel_re::Digest const& digest,
+    gsl::not_null<std::unordered_set<bazel_re::Digest>*> const& seen,
+    bool splice_result) const noexcept -> bool {
     // Skip already uplinked directories
     if (seen->contains(digest)) {
         return true;
@@ -506,10 +274,10 @@ requires(kIsLocalGeneration) auto LocalCAS<kDoGlobalUplink>::
 
 template <bool kDoGlobalUplink>
 template <ObjectType kType, bool kIsLocalGeneration>
-requires(kIsLocalGeneration) auto LocalCAS<kDoGlobalUplink>::
-    LocalUplinkLargeObject(LocalGenerationCAS const& latest,
-                           bazel_re::Digest const& digest) const noexcept
-    -> bool {
+    requires(kIsLocalGeneration)
+auto LocalCAS<kDoGlobalUplink>::LocalUplinkLargeObject(
+    LocalGenerationCAS const& latest,
+    bazel_re::Digest const& digest) const noexcept -> bool {
     if constexpr (IsTreeObject(kType)) {
         return cas_tree_large_.LocalUplink(
             latest, latest.cas_tree_large_, digest);
@@ -522,14 +290,13 @@ requires(kIsLocalGeneration) auto LocalCAS<kDoGlobalUplink>::
 
 template <bool kDoGlobalUplink>
 template <ObjectType kType, bool kIsLocalGeneration>
-requires(kIsLocalGeneration) auto LocalCAS<kDoGlobalUplink>::TrySplice(
-    bazel_re::Digest const& digest) const noexcept
-    -> std::optional<LargeObject> {
+    requires(kIsLocalGeneration)
+auto LocalCAS<kDoGlobalUplink>::TrySplice(bazel_re::Digest const& digest)
+    const noexcept -> std::optional<LargeObject> {
     auto spliced = IsTreeObject(kType) ? cas_tree_large_.TrySplice(digest)
                                        : cas_file_large_.TrySplice(digest);
-    auto* large = std::get_if<LargeObject>(&spliced);
-    return large and large->IsValid() ? std::optional{std::move(*large)}
-                                      : std::nullopt;
+    return spliced and spliced->IsValid() ? std::optional{std::move(*spliced)}
+                                          : std::nullopt;
 }
 
 template <bool kDoGlobalUplink>
@@ -586,7 +353,7 @@ template <ObjectType kType>
 auto LocalCAS<kDoGlobalUplink>::Splice(
     bazel_re::Digest const& digest,
     std::vector<bazel_re::Digest> const& parts) const noexcept
-    -> std::variant<LargeObjectError, bazel_re::Digest> {
+    -> expected<bazel_re::Digest, LargeObjectError> {
     static constexpr bool kIsTree = IsTreeObject(kType);
     static constexpr bool kIsExec = IsExecutableObject(kType);
 
@@ -596,39 +363,33 @@ auto LocalCAS<kDoGlobalUplink>::Splice(
     }
 
     // Splice the result from parts:
-    std::optional<LargeObject> large_object;
     auto splice_result = kIsTree ? cas_tree_large_.Splice(digest, parts)
                                  : cas_file_large_.Splice(digest, parts);
-    if (auto* result = std::get_if<LargeObject>(&splice_result)) {
-        large_object = *result;
+    if (not splice_result) {
+        return unexpected{std::move(splice_result).error()};
     }
-    else if (auto* error = std::get_if<LargeObjectError>(&splice_result)) {
-        return std::move(*error);
-    }
-    else {
-        return LargeObjectError{
-            LargeObjectErrorCode::Internal,
-            fmt::format("could not splice {}", digest.hash())};
-    }
+
+    auto const& large_object = *splice_result;
 
     // Check digest consistency:
     // Using Store{Tree, Blob} to calculate the resulting hash and later
     // decide whether the result is valid is unreasonable, because these
     // methods can refer to a file that existed before. The direct hash
     // calculation is done instead.
-    auto const file_path = large_object->GetPath();
-    auto spliced_digest = ObjectCAS<kType>::CreateDigest(file_path);
+    auto const& file_path = large_object.GetPath();
+    auto spliced_digest =
+        ArtifactDigest::CreateFromFile<kType>(hash_function_, file_path);
     if (not spliced_digest) {
-        return LargeObjectError{LargeObjectErrorCode::Internal,
-                                "could not calculate digest"};
+        return unexpected{LargeObjectError{LargeObjectErrorCode::Internal,
+                                           "could not calculate digest"}};
     }
 
     if (not detail::CheckDigestConsistency(*spliced_digest, digest)) {
-        return LargeObjectError{
+        return unexpected{LargeObjectError{
             LargeObjectErrorCode::InvalidResult,
             fmt::format("actual result {} differs from the expected one {}",
                         spliced_digest->hash(),
-                        digest.hash())};
+                        digest.hash())}};
     }
 
     // Check tree invariants:
@@ -637,12 +398,12 @@ auto LocalCAS<kDoGlobalUplink>::Splice(
             // Read tree entries:
             auto const tree_data = FileSystemManager::ReadFile(file_path);
             if (not tree_data) {
-                return LargeObjectError{
+                return unexpected{LargeObjectError{
                     LargeObjectErrorCode::Internal,
-                    fmt::format("could not read tree {}", digest.hash())};
+                    fmt::format("could not read tree {}", digest.hash())}};
             }
             if (auto error = CheckTreeInvariant(digest, *tree_data)) {
-                return std::move(*error);
+                return unexpected{std::move(*error)};
             }
         }
     }
@@ -653,8 +414,9 @@ auto LocalCAS<kDoGlobalUplink>::Splice(
     if (stored_digest) {
         return std::move(*stored_digest);
     }
-    return LargeObjectError{LargeObjectErrorCode::Internal,
-                            fmt::format("could not splice {}", digest.hash())};
+    return unexpected{
+        LargeObjectError{LargeObjectErrorCode::Internal,
+                         fmt::format("could not splice {}", digest.hash())}};
 }
 
 #endif  // INCLUDED_SRC_BUILDTOOL_STORAGE_LOCAL_CAS_TPP

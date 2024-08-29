@@ -24,16 +24,16 @@ auto OperarationsServiceImpl::GetOperation(
     ::google::longrunning::Operation* response) -> ::grpc::Status {
     auto const& hash = request->name();
     if (auto error_msg = IsAHash(hash); error_msg) {
-        logger_.Emit(LogLevel::Debug, *error_msg);
+        logger_.Emit(LogLevel::Debug, "{}", *error_msg);
         return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, *error_msg};
     }
     logger_.Emit(LogLevel::Trace, "GetOperation: {}", hash);
     std::optional<::google::longrunning::Operation> op;
-    op = OperationCache::Query(hash);
-    if (!op) {
+    op = op_cache_.Query(hash);
+    if (not op) {
         auto const& str = fmt::format(
             "Executing action {} not found in internal cache.", hash);
-        logger_.Emit(LogLevel::Error, str);
+        logger_.Emit(LogLevel::Error, "{}", str);
         return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
     }
     response->CopyFrom(*op);

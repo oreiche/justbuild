@@ -18,16 +18,14 @@
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
-#include "src/buildtool/serve_api/remote/serve_api.hpp"
-#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/fs_utils.hpp"
-#include "src/buildtool/storage/storage.hpp"
 #include "src/other_tools/root_maps/root_utils.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
 namespace {
 
 void WithRootImportedToGit(ForeignFileInfo const& key,
+                           StorageConfig const& storage_config,
                            std::pair<std::string, GitCASPtr> const& result,
                            ForeignFileGitMap::SetterPtr const& setter,
                            ForeignFileGitMap::LoggerPtr const& logger) {
@@ -36,7 +34,7 @@ void WithRootImportedToGit(ForeignFileInfo const& key,
         return;
     }
     auto tree_id_file = StorageUtils::GetForeignFileTreeIDFile(
-        key.archive.content, key.name, key.executable);
+        storage_config, key.archive.content, key.name, key.executable);
     auto cache_written =
         StorageUtils::WriteTreeIDFile(tree_id_file, result.first);
     if (not cache_written) {
@@ -47,17 +45,19 @@ void WithRootImportedToGit(ForeignFileInfo const& key,
     (*setter)(
         std::pair(nlohmann::json::array({FileRoot::kGitTreeMarker,
                                          result.first,
-                                         StorageConfig::GitRoot().string()}),
+                                         storage_config.GitRoot().string()}),
                   /*is_cache_hit=*/false));
 }
 
 void WithFetchedFile(ForeignFileInfo const& key,
+                     gsl::not_null<StorageConfig const*> const& storage_config,
+                     Storage const& storage,
                      gsl::not_null<ImportToGitMap*> const& import_to_git_map,
                      gsl::not_null<TaskSystem*> const& ts,
                      ForeignFileGitMap::SetterPtr const& setter,
                      ForeignFileGitMap::LoggerPtr const& logger) {
-    auto tmp_dir = StorageConfig::CreateTypedTmpDir("foreign-file");
-    auto const& cas = Storage::Instance().CAS();
+    auto tmp_dir = storage_config->CreateTypedTmpDir("foreign-file");
+    auto const& cas = storage.CAS();
     auto digest = ArtifactDigest(key.archive.content, 0, key.executable);
     auto content_cas_path = cas.BlobPath(digest, key.executable);
     if (not content_cas_path) {
@@ -88,9 +88,11 @@ void WithFetchedFile(ForeignFileInfo const& key,
         {std::move(c_info)},
         [tmp_dir,  // keep tmp_dir alive
          key,
+         storage_config,
          setter,
          logger](auto const& values) {
-            WithRootImportedToGit(key, *values[0], setter, logger);
+            WithRootImportedToGit(
+                key, *storage_config, *values[0], setter, logger);
         },
         [logger, target_path = tmp_dir->GetPath()](auto const& msg,
                                                    bool fatal) {
@@ -101,7 +103,8 @@ void WithFetchedFile(ForeignFileInfo const& key,
         });
 }
 
-void UseCacheHit(const std::string& tree_id,
+void UseCacheHit(StorageConfig const& storage_config,
+                 const std::string& tree_id,
                  ForeignFileGitMap::SetterPtr const& setter) {
     // We keep the invariant, that, whenever a cache entry is written,
     // the root is in our git root; in particular, the latter is present,
@@ -109,12 +112,12 @@ void UseCacheHit(const std::string& tree_id,
     (*setter)(
         std::pair(nlohmann::json::array({FileRoot::kGitTreeMarker,
                                          tree_id,
-                                         StorageConfig::GitRoot().string()}),
+                                         storage_config.GitRoot().string()}),
                   /*is_cache_hit=*/true));
 }
 
 void HandleAbsentForeignFile(ForeignFileInfo const& key,
-                             bool serve_api_exists,
+                             ServeApi const* serve,
                              ForeignFileGitMap::SetterPtr const& setter,
                              ForeignFileGitMap::LoggerPtr const& logger) {
     // Compute tree in memory
@@ -138,8 +141,8 @@ void HandleAbsentForeignFile(ForeignFileInfo const& key,
         return;
     }
     auto tree_id = ToHexString(tree->first);
-    if (serve_api_exists) {
-        auto has_tree = CheckServeHasAbsentRoot(tree_id, logger);
+    if (serve != nullptr) {
+        auto has_tree = CheckServeHasAbsentRoot(*serve, tree_id, logger);
         if (not has_tree) {
             return;
         }
@@ -149,12 +152,12 @@ void HandleAbsentForeignFile(ForeignFileInfo const& key,
                 /*is_cache_hit=*/false));
             return;
         }
-        auto serve_result = ServeApi::RetrieveTreeFromForeignFile(
+        auto serve_result = serve->RetrieveTreeFromForeignFile(
             key.archive.content, key.name, key.executable);
-        if (std::holds_alternative<std::string>(serve_result)) {
+        if (serve_result) {
             // if serve has set up the tree, it must match what we
             // expect
-            auto const& served_tree_id = std::get<std::string>(serve_result);
+            auto const& served_tree_id = *serve_result;
             if (tree_id != served_tree_id) {
                 (*logger)(fmt::format("Mismatch in served root tree "
                                       "id: expected {}, but got {}",
@@ -169,8 +172,7 @@ void HandleAbsentForeignFile(ForeignFileInfo const& key,
                 /*is_cache_hit=*/false));
             return;
         }
-        auto const& is_fatal = std::get<bool>(serve_result);
-        if (is_fatal) {
+        if (serve_result.error() == GitLookupError::Fatal) {
             (*logger)(fmt::format("Serve endpoint failed to set up root "
                                   "from known foreign-file content {}",
                                   key.archive.content),
@@ -196,49 +198,65 @@ void HandleAbsentForeignFile(ForeignFileInfo const& key,
 [[nodiscard]] auto CreateForeignFileGitMap(
     gsl::not_null<ContentCASMap*> const& content_cas_map,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
-    bool serve_api_exists,
+    ServeApi const* serve,
+    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<Storage const*> const& storage,
     bool fetch_absent,
     std::size_t jobs) -> ForeignFileGitMap {
-    auto setup_foreign_file =
-        [content_cas_map, import_to_git_map, fetch_absent, serve_api_exists](
-            auto ts,
-            auto setter,
-            auto logger,
-            auto /* unused */,
-            auto const& key) {
-            if (key.absent and not fetch_absent) {
-                HandleAbsentForeignFile(key, serve_api_exists, setter, logger);
+    auto setup_foreign_file = [content_cas_map,
+                               import_to_git_map,
+                               fetch_absent,
+                               serve,
+                               storage,
+                               storage_config](auto ts,
+                                               auto setter,
+                                               auto logger,
+                                               auto /* unused */,
+                                               auto const& key) {
+        if (key.absent and not fetch_absent) {
+            HandleAbsentForeignFile(key, serve, setter, logger);
+            return;
+        }
+        auto tree_id_file = StorageUtils::GetForeignFileTreeIDFile(
+            *storage_config, key.archive.content, key.name, key.executable);
+        if (FileSystemManager::Exists(tree_id_file)) {
+            auto tree_id = FileSystemManager::ReadFile(tree_id_file);
+            if (not tree_id) {
+                (*logger)(fmt::format("Failed to read tree id from file {}",
+                                      tree_id_file.string()),
+                          /*fatal=*/true);
                 return;
             }
-            auto tree_id_file = StorageUtils::GetForeignFileTreeIDFile(
-                key.archive.content, key.name, key.executable);
-            if (FileSystemManager::Exists(tree_id_file)) {
-                auto tree_id = FileSystemManager::ReadFile(tree_id_file);
-                if (not tree_id) {
-                    (*logger)(fmt::format("Failed to read tree id from file {}",
-                                          tree_id_file.string()),
-                              /*fatal=*/true);
-                    return;
-                }
-                UseCacheHit(*tree_id, setter);
-                return;
-            }
-            content_cas_map->ConsumeAfterKeysReady(
-                ts,
-                {key.archive},
-                [key, import_to_git_map, setter, logger, ts](
-                    [[maybe_unused]] auto const& values) {
-                    WithFetchedFile(key, import_to_git_map, ts, setter, logger);
-                },
-                [logger, content = key.archive.content](auto const& msg,
-                                                        bool fatal) {
-                    (*logger)(fmt::format("While ensuring content {} is in "
-                                          "CAS:\n{}",
-                                          content,
-                                          msg),
-                              fatal);
-                });
-        };
+            UseCacheHit(*storage_config, *tree_id, setter);
+            return;
+        }
+        content_cas_map->ConsumeAfterKeysReady(
+            ts,
+            {key.archive},
+            [key,
+             import_to_git_map,
+             storage,
+             storage_config,
+             setter,
+             logger,
+             ts]([[maybe_unused]] auto const& values) {
+                WithFetchedFile(key,
+                                storage_config,
+                                *storage,
+                                import_to_git_map,
+                                ts,
+                                setter,
+                                logger);
+            },
+            [logger, content = key.archive.content](auto const& msg,
+                                                    bool fatal) {
+                (*logger)(fmt::format("While ensuring content {} is in "
+                                      "CAS:\n{}",
+                                      content,
+                                      msg),
+                          fatal);
+            });
+    };
     return AsyncMapConsumer<ForeignFileInfo, std::pair<nlohmann::json, bool>>(
         setup_foreign_file, jobs);
 }

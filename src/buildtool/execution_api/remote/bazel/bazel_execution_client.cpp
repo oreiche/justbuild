@@ -17,7 +17,6 @@
 #include <utility>  // std::move
 
 #include "grpcpp/grpcpp.h"
-#include "gsl/gsl"
 #include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/common/remote/retry.hpp"
 #include "src/buildtool/logging/log_level.hpp"
@@ -38,8 +37,8 @@ void LogExecutionStatus(gsl::not_null<Logger const*> const& logger,
             // (and the server does not support a queue), the action could not
             // be started. The client should retry.
             logger->Emit(LogLevel::Debug,
-                         fmt::format("Execution could not be started.\n{}",
-                                     s.ShortDebugString()));
+                         "Execution could not be started.\n{}",
+                         s.ShortDebugString());
             break;
         default:
             // fallback to default status logging
@@ -56,10 +55,14 @@ auto DebugString(grpc::Status const& status) -> std::string {
 
 }  // namespace
 
-BazelExecutionClient::BazelExecutionClient(std::string const& server,
-                                           Port port) noexcept {
+BazelExecutionClient::BazelExecutionClient(
+    std::string const& server,
+    Port port,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RetryConfig const*> const& retry_config) noexcept
+    : retry_config_{*retry_config} {
     stub_ = bazel_re::Execution::NewStub(
-        CreateChannelWithCredentials(server, port));
+        CreateChannelWithCredentials(server, port, auth));
 }
 
 auto BazelExecutionClient::Execute(std::string const& instance_name,
@@ -88,7 +91,7 @@ auto BazelExecutionClient::Execute(std::string const& instance_name,
             reader(stub_->Execute(&context, request));
 
         auto [op, fatal, error_msg] = ReadExecution(reader.get(), wait);
-        if (!op.has_value()) {
+        if (not op.has_value()) {
             return {
                 .ok = false, .exit_retry_loop = fatal, .error_msg = error_msg};
         }
@@ -102,7 +105,7 @@ auto BazelExecutionClient::Execute(std::string const& instance_name,
                     response.state != ExecutionResponse::State::Retry,
                 .error_msg = contents.error_msg};
     };
-    if (not WithRetry(execute, logger_)) {
+    if (not WithRetry(execute, retry_config_, logger_)) {
         logger_.Emit(LogLevel::Error,
                      "Failed to execute action {}.",
                      action_digest.ShortDebugString());
@@ -124,7 +127,7 @@ auto BazelExecutionClient::WaitExecution(std::string const& execution_handle)
 
         auto [op, fatal, error_msg] =
             ReadExecution(reader.get(), /*wait=*/true);
-        if (!op.has_value()) {
+        if (not op.has_value()) {
             return {
                 .ok = false, .exit_retry_loop = fatal, .error_msg = error_msg};
         }
@@ -138,7 +141,7 @@ auto BazelExecutionClient::WaitExecution(std::string const& execution_handle)
                     response.state != ExecutionResponse::State::Retry,
                 .error_msg = contents.error_msg};
     };
-    if (not WithRetry(wait_execution, logger_)) {
+    if (not WithRetry(wait_execution, retry_config_, logger_)) {
         logger_.Emit(
             LogLevel::Error, "Failed to Execute action {}.", request.name());
     }

@@ -36,6 +36,8 @@ def dump_results() -> None:
         f.write("%s\n" % (stdout, ))
     with open("stderr", "w") as f:
         f.write("%s\n" % (stderr, ))
+    with open("pwd", "w") as f:
+        f.write("%s\n" % (os.getcwd(), ))
 
 
 dump_results()
@@ -113,7 +115,7 @@ with open(SERVE_CONFIG_FILE, "w") as f:
             }
         }))
 
-serve_cmd = ["./bin/just", "serve", SERVE_CONFIG_FILE]
+serve_cmd = ["./staged/bin/just", "serve", SERVE_CONFIG_FILE]
 
 servestdout = open("servestdout", "w")
 servestderr = open("servestderr", "w")

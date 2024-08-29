@@ -42,6 +42,8 @@ def dump_results() -> None:
         f.write("%s\n" % (stdout, ))
     with open("stderr", "w") as f:
         f.write("%s\n" % (stderr, ))
+    with open("pwd", "w") as f:
+        f.write("%s\n" % (os.getcwd(), ))
 
 
 def run_cmd(cmd: List[str],
@@ -96,7 +98,7 @@ if not standalone_serve:
         os.remove(REMOTE_INFO)
 
     remote_cmd = [
-        "./bin/just",
+        "./staged/bin/just",
         "execute",
         "-L",
         json.dumps(["env", "PATH=" + PATH]),
@@ -248,7 +250,7 @@ with open(SERVE_CONFIG_FILE, "w") as f:
 servestdout = open("servestdout", "w")
 servestderr = open("servestderr", "w")
 serve_proc = subprocess.Popen(
-    ["./bin/just", "serve", SERVE_CONFIG_FILE],
+    ["./staged/bin/just", "serve", SERVE_CONFIG_FILE],
     stdout=servestdout,
     stderr=servestderr,
 )

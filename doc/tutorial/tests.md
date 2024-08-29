@@ -127,6 +127,13 @@ as well as the file `tutorial-defaults/shell/test/TARGETS` with content
 {}
 ```
 
+and the file `tutorial-defulats/shell` with content
+
+``` {.jsonc srcname="tutorial-defaults/shell/TARGETS"}
+{"defaults": {"type": "defaults"}}
+```
+
+indicating that we just use defaults for the shell defaults.
 Now we can run the test (i.e., build the test result):
 
 ``` sh
@@ -323,6 +330,12 @@ the `tests/TARGETS` file:
   }
 ...
 ```
+
+A shell test depends on the default settings for the shell. Therefore,
+if we bring our own toolchain defaults for our rules, we have to do this
+here as well. In this case, however, we have already created the toolchain
+description before running the C++ test, as that also uses the shell toolchain
+for the summarizing results.
 
 Now we can run the shell test (i.e., build the test result):
 

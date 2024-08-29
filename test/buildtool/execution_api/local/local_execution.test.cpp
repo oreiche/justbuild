@@ -19,14 +19,17 @@
 #include <vector>
 
 #include "catch2/catch_test_macros.hpp"
-#include "src/buildtool/common/artifact_factory.hpp"
+#include "src/buildtool/common/artifact_description.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/execution_api/local/local_api.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
-#include "test/utils/hermeticity/local.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
+#include "test/utils/hermeticity/test_storage_config.hpp"
 
 namespace {
 
@@ -39,7 +42,8 @@ namespace {
            "test/buildtool/execution_api/local";
 }
 
-inline void SetLauncher() {
+[[nodiscard]] inline auto CreateLocalExecConfig() noexcept
+    -> LocalExecutionConfig {
     std::vector<std::string> launcher{"env"};
     auto* env_path = std::getenv("PATH");
     if (env_path != nullptr) {
@@ -48,27 +52,35 @@ inline void SetLauncher() {
     else {
         launcher.emplace_back("PATH=/bin:/usr/bin");
     }
-    if (not LocalExecutionConfig::SetLauncher(launcher)) {
-        Logger::Log(LogLevel::Error, "Failure setting the local launcher.");
-        std::exit(EXIT_FAILURE);
+    LocalExecutionConfig::Builder builder;
+    if (auto config = builder.SetLauncher(std::move(launcher)).Build()) {
+        return *std::move(config);
     }
+    Logger::Log(LogLevel::Error, "Failure setting the local launcher.");
+    std::exit(EXIT_FAILURE);
 }
 
 }  // namespace
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalExecution: No input, no output",
-                 "[execution_api]") {
+TEST_CASE("LocalExecution: No input, no output", "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
     RepositoryConfig repo_config{};
-    auto api = LocalApi(&repo_config);
+
+    auto api = LocalApi(&local_context, &repo_config);
 
     std::string test_content("test");
     std::vector<std::string> const cmdline = {"echo", "-n", test_content};
     auto action =
-        api.CreateAction(*api.UploadTree({}), cmdline, {}, {}, {}, {});
+        api.CreateAction(*api.UploadTree({}), cmdline, "", {}, {}, {}, {});
     REQUIRE(action);
-
-    SetLauncher();
 
     SECTION("Cache execution result in action cache") {
         // run execution
@@ -102,17 +114,27 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalExecution: No input, no output, env variables used",
-                 "[execution_api]") {
+TEST_CASE("LocalExecution: No input, no output, env variables used",
+          "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
     RepositoryConfig repo_config{};
-    auto api = LocalApi(&repo_config);
+
+    auto api = LocalApi(&local_context, &repo_config);
 
     std::string test_content("test from env var");
     std::vector<std::string> const cmdline = {
         "/bin/sh", "-c", "set -e\necho -n ${MYCONTENT}"};
     auto action = api.CreateAction(*api.UploadTree({}),
                                    cmdline,
+                                   "",
                                    {},
                                    {},
                                    {{"MYCONTENT", test_content}},
@@ -152,14 +174,23 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalExecution: No input, create output",
-                 "[execution_api]") {
+TEST_CASE("LocalExecution: No input, create output", "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
     RepositoryConfig repo_config{};
-    auto api = LocalApi(&repo_config);
+
+    auto api = LocalApi(&local_context, &repo_config);
 
     std::string test_content("test");
-    auto test_digest = ArtifactDigest::Create<ObjectType::File>(test_content);
+    auto test_digest = ArtifactDigest::Create<ObjectType::File>(
+        storage_config.Get().hash_function, test_content);
 
     std::string output_path{"output_file"};
     std::vector<std::string> const cmdline = {
@@ -168,7 +199,7 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
         "set -e\necho -n " + test_content + " > " + output_path};
 
     auto action = api.CreateAction(
-        *api.UploadTree({}), cmdline, {output_path}, {}, {}, {});
+        *api.UploadTree({}), cmdline, "", {output_path}, {}, {}, {});
     REQUIRE(action);
 
     SECTION("Cache execution result in action cache") {
@@ -208,15 +239,24 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalExecution: One input copied to output",
-                 "[execution_api]") {
+TEST_CASE("LocalExecution: One input copied to output", "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
     RepositoryConfig repo_config{};
-    auto api = LocalApi(&repo_config);
+
+    auto api = LocalApi(&local_context, &repo_config);
 
     std::string test_content("test");
-    auto test_digest = ArtifactDigest::Create<ObjectType::File>(test_content);
-    REQUIRE(api.Upload(BlobContainer{{BazelBlob{
+    auto test_digest = ArtifactDigest::Create<ObjectType::File>(
+        storage_config.Get().hash_function, test_content);
+    REQUIRE(api.Upload(ArtifactBlobContainer{{ArtifactBlob{
                            test_digest, test_content, /*is_exec=*/false}}},
                        false));
 
@@ -226,15 +266,15 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     std::vector<std::string> const cmdline = {"cp", input_path, output_path};
 
     auto local_artifact_opt =
-        ArtifactFactory::FromDescription(ArtifactFactory::DescribeKnownArtifact(
-            test_digest.hash(), test_digest.size(), ObjectType::File));
-    REQUIRE(local_artifact_opt);
+        ArtifactDescription::CreateKnown(test_digest, ObjectType::File)
+            .ToArtifact();
     auto local_artifact =
-        DependencyGraph::ArtifactNode{std::move(*local_artifact_opt)};
+        DependencyGraph::ArtifactNode{std::move(local_artifact_opt)};
 
     auto action =
         api.CreateAction(*api.UploadTree({{input_path, &local_artifact}}),
                          cmdline,
+                         "",
                          {output_path},
                          {},
                          {},
@@ -278,18 +318,26 @@ TEST_CASE_METHOD(HermeticLocalTestFixture,
     }
 }
 
-TEST_CASE_METHOD(HermeticLocalTestFixture,
-                 "LocalExecution: Cache failed action's result",
-                 "[execution_api]") {
+TEST_CASE("LocalExecution: Cache failed action's result", "[execution_api]") {
+    auto const storage_config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&storage_config.Get());
+    auto const local_exec_config = CreateLocalExecConfig();
+
+    // pack the local context instances to be passed to LocalApi
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config.Get(),
+                                     .storage = &storage};
+
     RepositoryConfig repo_config{};
-    auto api = LocalApi(&repo_config);
+
+    auto api = LocalApi(&local_context, &repo_config);
 
     auto flag = GetTestDir() / "flag";
     std::vector<std::string> const cmdline = {
         "sh", "-c", fmt::format("[ -f '{}' ]", flag.string())};
 
     auto action =
-        api.CreateAction(*api.UploadTree({}), cmdline, {}, {}, {}, {});
+        api.CreateAction(*api.UploadTree({}), cmdline, "", {}, {}, {}, {});
     REQUIRE(action);
 
     action->SetCacheFlag(IExecutionAction::CacheFlag::CacheOutput);

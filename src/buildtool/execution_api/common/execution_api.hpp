@@ -21,21 +21,20 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact.hpp"  // Artifact::ObjectInfo
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
-#include "src/buildtool/file_system/object_type.hpp"
+#include "src/buildtool/execution_engine/dag/dag.hpp"
 
 /// \brief Abstract remote execution API
 /// Can be used to create actions.
 class IExecutionApi {
   public:
-    using Ptr = std::unique_ptr<IExecutionApi>;
+    using Ptr = std::shared_ptr<IExecutionApi const>;
 
     IExecutionApi() = default;
     IExecutionApi(IExecutionApi const&) = delete;
@@ -47,7 +46,8 @@ class IExecutionApi {
     /// \brief Create a new action.
     /// \param[in] root_digest  Digest of the build root.
     /// \param[in] command      Command as argv vector
-    /// \param[in] output_files List of paths to output files.
+    /// \param[in] cwd          Working direcotry, relative to execution root
+    /// \param[in] output_files List of paths to output files, relative to cwd
     /// \param[in] output_dirs  List of paths to output directories.
     /// \param[in] env_vars     The environment variables to set.
     /// \param[in] properties   Platform properties to set.
@@ -55,10 +55,11 @@ class IExecutionApi {
     [[nodiscard]] virtual auto CreateAction(
         ArtifactDigest const& root_digest,
         std::vector<std::string> const& command,
+        std::string const& cwd,
         std::vector<std::string> const& output_files,
         std::vector<std::string> const& output_dirs,
         std::map<std::string, std::string> const& env_vars,
-        std::map<std::string, std::string> const& properties) noexcept
+        std::map<std::string, std::string> const& properties) const noexcept
         -> IExecutionAction::Ptr = 0;
 
     /// \brief Retrieve artifacts from CAS and store to specified paths.
@@ -71,8 +72,7 @@ class IExecutionApi {
     [[nodiscard]] virtual auto RetrieveToPaths(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<std::filesystem::path> const& output_paths,
-        std::optional<gsl::not_null<IExecutionApi*>> const& alternative =
-            std::nullopt) noexcept -> bool = 0;
+        IExecutionApi const* alternative = nullptr) const noexcept -> bool = 0;
 
     /// \brief Retrieve artifacts from CAS and write to file descriptors.
     /// Tree artifacts are not resolved and instead the tree object will be
@@ -82,14 +82,14 @@ class IExecutionApi {
     [[nodiscard]] virtual auto RetrieveToFds(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<int> const& fds,
-        bool raw_tree) noexcept -> bool = 0;
+        bool raw_tree) const noexcept -> bool = 0;
 
     /// \brief Synchronization of artifacts between two CASes. Retrieves
     /// artifacts from one CAS and writes to another CAS. Tree artifacts are
     /// resolved and its containing file artifacts are recursively retrieved.
     [[nodiscard]] virtual auto RetrieveToCas(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
-        gsl::not_null<IExecutionApi*> const& api) noexcept -> bool = 0;
+        IExecutionApi const& api) const noexcept -> bool = 0;
 
     /// \brief A variant of RetrieveToCas that is allowed to internally use
     /// the specified number of threads to carry out the task in parallel.
@@ -99,16 +99,16 @@ class IExecutionApi {
     /// the remote blobs.
     [[nodiscard]] virtual auto ParallelRetrieveToCas(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
-        gsl::not_null<IExecutionApi*> const& api,
+        IExecutionApi const& api,
         std::size_t /* jobs */,
-        bool /* use_blob_splitting */) noexcept -> bool {
+        bool /* use_blob_splitting */) const noexcept -> bool {
         return RetrieveToCas(artifacts_info, api);
     }
 
     /// \brief Retrieve one artifact from CAS and make it available for
     /// furter in-memory processing
     [[nodiscard]] virtual auto RetrieveToMemory(
-        Artifact::ObjectInfo const& artifact_info) noexcept
+        Artifact::ObjectInfo const& artifact_info) const noexcept
         -> std::optional<std::string> = 0;
 
     /// \brief Upload blobs to CAS. Uploads only the blobs that are not yet
@@ -116,19 +116,13 @@ class IExecutionApi {
     /// \param blobs                Container of blobs to upload.
     /// \param skip_find_missing    Skip finding missing blobs, just upload all.
     /// NOLINTNEXTLINE(google-default-arguments)
-    [[nodiscard]] virtual auto Upload(BlobContainer const& blobs,
-                                      bool skip_find_missing = false) noexcept
-        -> bool = 0;
-
-    /// \brief Upload a file to CAS as an object of the specified type.
-    /// It may be assumed that the file is owned entirely by the build process.
-    [[nodiscard]] virtual auto UploadFile(
-        std::filesystem::path const& file_path,
-        ObjectType type) noexcept -> bool;
+    [[nodiscard]] virtual auto Upload(
+        ArtifactBlobContainer&& blobs,
+        bool skip_find_missing = false) const noexcept -> bool = 0;
 
     [[nodiscard]] virtual auto UploadTree(
-        std::vector<DependencyGraph::NamedArtifactNodePtr> const&
-            artifacts) noexcept -> std::optional<ArtifactDigest> = 0;
+        std::vector<DependencyGraph::NamedArtifactNodePtr> const& artifacts)
+        const noexcept -> std::optional<ArtifactDigest> = 0;
 
     [[nodiscard]] virtual auto IsAvailable(
         ArtifactDigest const& digest) const noexcept -> bool = 0;

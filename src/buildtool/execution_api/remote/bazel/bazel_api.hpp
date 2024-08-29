@@ -24,11 +24,14 @@
 #include <vector>
 
 #include "gsl/gsl"
+#include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/remote/port.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
-#include "src/buildtool/execution_api/bazel_msg/blob_tree.hpp"
+#include "src/buildtool/execution_api/common/blob_tree.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 
@@ -42,50 +45,55 @@ class BazelApi final : public IExecutionApi {
     BazelApi(std::string const& instance_name,
              std::string const& host,
              Port port,
-             ExecutionConfiguration const& exec_config) noexcept;
+             gsl::not_null<Auth const*> const& auth,
+             gsl::not_null<RetryConfig const*> const& retry_config,
+             ExecutionConfiguration const& exec_config,
+             HashFunction hash_function) noexcept;
     BazelApi(BazelApi const&) = delete;
     BazelApi(BazelApi&& other) noexcept;
     auto operator=(BazelApi const&) -> BazelApi& = delete;
     auto operator=(BazelApi&&) -> BazelApi& = delete;
     ~BazelApi() final;
 
-    auto CreateAction(
+    [[nodiscard]] auto CreateAction(
         ArtifactDigest const& root_digest,
         std::vector<std::string> const& command,
+        std::string const& cwd,
         std::vector<std::string> const& output_files,
         std::vector<std::string> const& output_dirs,
         std::map<std::string, std::string> const& env_vars,
-        std::map<std::string, std::string> const& properties) noexcept
+        std::map<std::string, std::string> const& properties) const noexcept
         -> IExecutionAction::Ptr final;
 
     // NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] auto RetrieveToPaths(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<std::filesystem::path> const& output_paths,
-        std::optional<gsl::not_null<IExecutionApi*>> const& alternative =
-            std::nullopt) noexcept -> bool final;
+        IExecutionApi const* alternative = nullptr) const noexcept
+        -> bool final;
 
     [[nodiscard]] auto RetrieveToFds(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<int> const& fds,
-        bool raw_tree) noexcept -> bool final;
+        bool raw_tree) const noexcept -> bool final;
 
     [[nodiscard]] auto ParallelRetrieveToCas(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
-        gsl::not_null<IExecutionApi*> const& api,
+        IExecutionApi const& api,
         std::size_t jobs,
-        bool use_blob_splitting) noexcept -> bool final;
+        bool use_blob_splitting) const noexcept -> bool final;
 
     [[nodiscard]] auto RetrieveToCas(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
-        gsl::not_null<IExecutionApi*> const& api) noexcept -> bool final;
+        IExecutionApi const& api) const noexcept -> bool final;
 
-    [[nodiscard]] auto Upload(BlobContainer const& blobs,
-                              bool skip_find_missing) noexcept -> bool final;
+    [[nodiscard]] auto Upload(ArtifactBlobContainer&& blobs,
+                              bool skip_find_missing) const noexcept
+        -> bool final;
 
     [[nodiscard]] auto UploadTree(
-        std::vector<DependencyGraph::NamedArtifactNodePtr> const&
-            artifacts) noexcept -> std::optional<ArtifactDigest> final;
+        std::vector<DependencyGraph::NamedArtifactNodePtr> const& artifacts)
+        const noexcept -> std::optional<ArtifactDigest> final;
 
     [[nodiscard]] auto IsAvailable(ArtifactDigest const& digest) const noexcept
         -> bool final;
@@ -94,7 +102,7 @@ class BazelApi final : public IExecutionApi {
         const noexcept -> std::vector<ArtifactDigest> final;
 
     [[nodiscard]] auto RetrieveToMemory(
-        Artifact::ObjectInfo const& artifact_info) noexcept
+        Artifact::ObjectInfo const& artifact_info) const noexcept
         -> std::optional<std::string> final;
 
     [[nodiscard]] auto SplitBlob(ArtifactDigest const& blob_digest)
@@ -112,8 +120,13 @@ class BazelApi final : public IExecutionApi {
   private:
     std::shared_ptr<BazelNetwork> network_;
 
-    [[nodiscard]] auto UploadBlobTree(BlobTreePtr const& blob_tree) noexcept
-        -> bool;
+    [[nodiscard]] auto ParallelRetrieveToCasWithCache(
+        std::vector<Artifact::ObjectInfo> const& all_artifacts_info,
+        IExecutionApi const& api,
+        std::size_t jobs,
+        bool use_blob_splitting,
+        gsl::not_null<std::unordered_set<Artifact::ObjectInfo>*> done)
+        const noexcept -> bool;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_BAZEL_BAZEL_API_HPP

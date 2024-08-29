@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef BOOTSTRAP_BUILD_TOOL
+
 #include "src/buildtool/main/describe.hpp"
 
 #include <iostream>
@@ -24,12 +26,6 @@
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/main/exit_codes.hpp"
-#ifndef BOOTSTRAP_BUILD_TOOL
-#include "src/buildtool/execution_api/common/create_execution_api.hpp"
-#include "src/buildtool/execution_api/remote/config.hpp"
-#include "src/buildtool/serve_api/remote/config.hpp"
-#include "src/buildtool/serve_api/remote/serve_api.hpp"
-#endif  // BOOTSTRAP_BUILD_TOOL
 
 namespace {
 
@@ -59,9 +55,10 @@ void PrintFields(nlohmann::json const& fields,
     }
 }
 
-void PrettyPrintRule(nlohmann::json const& rdesc,
-                     BuildMaps::Base::EntityName const& rule_name,
-                     gsl::not_null<RepositoryConfig*> const& repo_config) {
+void PrettyPrintRule(
+    nlohmann::json const& rdesc,
+    BuildMaps::Base::EntityName const& rule_name,
+    gsl::not_null<const RepositoryConfig*> const& repo_config) {
     auto doc = rdesc.find("doc");
     if (doc != rdesc.end()) {
         PrintDoc(*doc, " | ");
@@ -228,7 +225,7 @@ void PrintRuleAsOrderedJson(nlohmann::json const& rdesc,
 
 auto DescribeUserDefinedRule(
     BuildMaps::Base::EntityName const& rule_name,
-    gsl::not_null<RepositoryConfig*> const& repo_config,
+    gsl::not_null<const RepositoryConfig*> const& repo_config,
     std::size_t jobs,
     bool print_json) -> int {
     bool failed{};
@@ -266,14 +263,15 @@ auto DescribeUserDefinedRule(
 }
 
 auto DescribeTarget(BuildMaps::Target::ConfiguredTarget const& id,
-                    gsl::not_null<RepositoryConfig*> const& repo_config,
+                    gsl::not_null<const RepositoryConfig*> const& repo_config,
+                    std::optional<ServeApi> const& serve,
+                    ApiBundle const& apis,
                     std::size_t jobs,
                     bool print_json) -> int {
-#ifndef BOOTSTRAP_BUILD_TOOL
     // check if target root is absent
     if (repo_config->TargetRoot(id.target.ToModule().repository)->IsAbsent()) {
         // check that we have a serve endpoint configured
-        if (not RemoteServeConfig::RemoteAddress()) {
+        if (not serve) {
             Logger::Log(LogLevel::Error,
                         fmt::format("Root for target {} is absent but no serve "
                                     "endpoint was configured. Please provide "
@@ -284,7 +282,7 @@ auto DescribeTarget(BuildMaps::Target::ConfiguredTarget const& id,
         // check that just serve and the client use same remote execution
         // endpoint; it might make sense in the future to remove or avoid this
         // check, e.g., if remote endpoints are behind proxies.
-        if (not ServeApi::CheckServeRemoteExecution()) {
+        if (not serve->CheckServeRemoteExecution()) {
             Logger::Log(LogLevel::Error,
                         "Inconsistent remote execution endpoint and serve "
                         "endpoint configuration detected.");
@@ -294,14 +292,14 @@ auto DescribeTarget(BuildMaps::Target::ConfiguredTarget const& id,
         auto const& repo_name = id.target.ToModule().repository;
         auto target_root_id =
             repo_config->TargetRoot(repo_name)->GetAbsentTreeId();
-        if (!target_root_id) {
+        if (not target_root_id) {
             Logger::Log(
                 LogLevel::Error,
                 "Failed to get the target root id for repository \"{}\"",
                 repo_name);
             return kExitFailure;
         }
-        if (auto dgst = ServeApi::ServeTargetDescription(
+        if (auto dgst = serve->ServeTargetDescription(
                 *target_root_id,
                 *(repo_config->TargetFileName(repo_name)),
                 id.target.GetNamedTarget().name)) {
@@ -313,23 +311,17 @@ auto DescribeTarget(BuildMaps::Target::ConfiguredTarget const& id,
                           << std::endl;
                 return kExitSuccess;
             }
-            // get description from remote CAS
-            auto const local_api = CreateExecutionApi(
-                std::nullopt, std::make_optional(repo_config));
-            auto const remote_api =
-                CreateExecutionApi(RemoteExecutionConfig::RemoteAddress(),
-                                   std::make_optional(repo_config));
             auto const& desc_info =
                 Artifact::ObjectInfo{.digest = *dgst, .type = ObjectType::File};
-            if (!local_api->IsAvailable(*dgst)) {
-                if (!remote_api->RetrieveToCas({desc_info}, &*local_api)) {
+            if (not apis.local->IsAvailable(*dgst)) {
+                if (not apis.remote->RetrieveToCas({desc_info}, *apis.local)) {
                     Logger::Log(LogLevel::Error,
                                 "Failed to retrieve blob {} from remote CAS",
                                 desc_info.ToString());
                     return kExitFailure;
                 }
             }
-            auto const desc_str = local_api->RetrieveToMemory(desc_info);
+            auto const desc_str = apis.local->RetrieveToMemory(desc_info);
             if (not desc_str) {
                 Logger::Log(LogLevel::Error,
                             "Could not load in memory blob {}",
@@ -376,7 +368,6 @@ auto DescribeTarget(BuildMaps::Target::ConfiguredTarget const& id,
                     id.target.ToJson().dump());
         return kExitFailure;
     }
-#endif  // BOOTSTRAP_BUILD_TOOL
 
     // process with a present target root
     auto targets_file_map = Base::CreateTargetsFileMap(repo_config, jobs);
@@ -440,6 +431,17 @@ auto DescribeTarget(BuildMaps::Target::ConfiguredTarget const& id,
                 PrintFields(*flexible_config, config_doc, " - ", "   | ");
             }
         }
+        else if (*rule_it == "configure") {
+            auto target = desc.find("target");
+            auto doc = desc.find("doc");
+            if (doc != desc.end()) {
+                PrintDoc(*doc, " | ");
+            }
+            if (target != desc.end()) {
+                std::cout << "The target to be configured is defined as "
+                          << target->dump() << "." << std::endl;
+            }
+        }
         return kExitSuccess;
     }
     auto rule_name = BuildMaps::Base::ParseEntityNameFromJson(
@@ -462,3 +464,5 @@ auto DescribeTarget(BuildMaps::Target::ConfiguredTarget const& id,
     }
     return DescribeUserDefinedRule(*rule_name, repo_config, jobs, print_json);
 }
+
+#endif  // BOOTSTRAP_BUILD_TOOL

@@ -32,6 +32,8 @@
 #include "src/buildtool/build_engine/expression/expression_ptr.hpp"
 #include "src/buildtool/build_engine/target_map/export.hpp"
 #include "src/buildtool/build_engine/target_map/utils.hpp"
+#include "src/buildtool/common/artifact_description.hpp"
+#include "src/buildtool/common/repository_config.hpp"
 #include "src/utils/cpp/path.hpp"
 #include "src/utils/cpp/vector.hpp"
 
@@ -40,6 +42,7 @@ namespace {
 auto const kGenericRuleFields =
     std::unordered_set<std::string>{"arguments_config",
                                     "cmds",
+                                    "cwd",
                                     "deps",
                                     "env",
                                     "execution properties",
@@ -75,6 +78,7 @@ auto const kInstallRuleFields =
 auto const kConfigureRuleFields =
     std::unordered_set<std::string>{"arguments_config",
                                     "config",
+                                    "doc",
                                     "tainted",
                                     "target",
                                     "type"};
@@ -119,11 +123,11 @@ void ReportStagingConflict(
 }
 
 void BlobGenRuleWithDeps(
+    const gsl::not_null<AnalyseContext*>& context,
     const std::vector<BuildMaps::Target::ConfiguredTarget>& transition_keys,
     const std::vector<AnalysedTargetPtr const*>& dependency_values,
     const BuildMaps::Base::FieldReader::Ptr& desc,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
     const gsl::not_null<BuildMaps::Target::ResultTargetMap*>& result_map,
@@ -163,7 +167,7 @@ void BlobGenRuleWithDeps(
     auto string_fields_fcts =
         FunctionMap::MakePtr(FunctionMap::underlying_map_t{
             {"outs",
-             [&deps_by_transition, &key, repo_config](
+             [&deps_by_transition, &key, context](
                  auto&& eval, auto const& expr, auto const& env) {
                  return BuildMaps::Target::Utils::keys_expr(
                      BuildMaps::Target::Utils::obtainTargetByName(
@@ -171,12 +175,12 @@ void BlobGenRuleWithDeps(
                          expr,
                          env,
                          key.target,
-                         repo_config,
+                         context->repo_config,
                          deps_by_transition)
                          ->Artifacts());
              }},
             {"runfiles",
-             [&deps_by_transition, &key, repo_config](
+             [&deps_by_transition, &key, context](
                  auto&& eval, auto const& expr, auto const& env) {
                  return BuildMaps::Target::Utils::keys_expr(
                      BuildMaps::Target::Utils::obtainTargetByName(
@@ -184,7 +188,7 @@ void BlobGenRuleWithDeps(
                          expr,
                          env,
                          key.target,
-                         repo_config,
+                         context->repo_config,
                          deps_by_transition)
                          ->RunFiles());
              }}});
@@ -266,9 +270,10 @@ void BlobGenRuleWithDeps(
 
     auto stage = ExpressionPtr{Expression::map_t{
         name_val->String(),
-        ExpressionPtr{ArtifactDescription{
-            ArtifactDigest::Create<ObjectType::File>(data_val->String()),
-            blob_type}}}};
+        ExpressionPtr{ArtifactDescription::CreateKnown(
+            ArtifactDigest::Create<ObjectType::File>(
+                context->storage->GetHashFunction(), data_val->String()),
+            blob_type)}}};
 
     auto analysis_result = std::make_shared<AnalysedTarget const>(
         TargetResult{.artifact_stage = stage,
@@ -287,9 +292,9 @@ void BlobGenRuleWithDeps(
 }
 
 void BlobGenRule(
+    const gsl::not_null<AnalyseContext*>& context,
     const nlohmann::json& desc_json,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
     const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
@@ -337,7 +342,7 @@ void BlobGenRule(
         auto dep_target = BuildMaps::Base::ParseEntityNameFromExpression(
             dep_name,
             key.target,
-            repo_config,
+            context->repo_config,
             [&logger, &dep_name](std::string const& parse_err) {
                 (*logger)(fmt::format("Parsing dep entry {} failed with:\n{}",
                                       dep_name->ToString(),
@@ -354,19 +359,19 @@ void BlobGenRule(
     }
     (*subcaller)(
         dependency_keys,
-        [transition_keys = std::move(transition_keys),
+        [context,
+         transition_keys = std::move(transition_keys),
          desc,
          setter,
          logger,
          key,
-         repo_config,
          result_map,
          blob_type](auto const& values) {
-            BlobGenRuleWithDeps(transition_keys,
+            BlobGenRuleWithDeps(context,
+                                transition_keys,
                                 values,
                                 desc,
                                 key,
-                                repo_config,
                                 setter,
                                 logger,
                                 result_map,
@@ -376,19 +381,16 @@ void BlobGenRule(
 }
 
 void FileGenRule(
+    const gsl::not_null<AnalyseContext*>& context,
     const nlohmann::json& desc_json,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
-    [[maybe_unused]] const ActiveTargetCache& /*target_cache*/,
-    [[maybe_unused]] const gsl::not_null<Statistics*>& /*stats*/,
-    [[maybe_unused]] const gsl::not_null<Progress*>& /*exports_progress*/,
     const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
     const gsl::not_null<BuildMaps::Target::ResultTargetMap*>& result_map) {
-    BlobGenRule(desc_json,
+    BlobGenRule(context,
+                desc_json,
                 key,
-                repo_config,
                 subcaller,
                 setter,
                 logger,
@@ -397,19 +399,16 @@ void FileGenRule(
 }
 
 void SymlinkRule(
+    const gsl::not_null<AnalyseContext*>& context,
     const nlohmann::json& desc_json,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
-    [[maybe_unused]] const ActiveTargetCache& /*target_cache*/,
-    [[maybe_unused]] const gsl::not_null<Statistics*>& /*stats*/,
-    [[maybe_unused]] const gsl::not_null<Progress*>& /*exports_progress*/,
     const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
     const gsl::not_null<BuildMaps::Target::ResultTargetMap*>& result_map) {
-    BlobGenRule(desc_json,
+    BlobGenRule(context,
+                desc_json,
                 key,
-                repo_config,
                 subcaller,
                 setter,
                 logger,
@@ -515,7 +514,7 @@ void TreeRuleWithDeps(
     std::vector<Tree::Ptr> trees{};
     trees.emplace_back(std::move(tree));
     auto result_stage = Expression::map_t::underlying_map_t{};
-    result_stage.emplace(name, ArtifactDescription{tree_id});
+    result_stage.emplace(name, ArtifactDescription::CreateTree(tree_id));
     auto result = ExpressionPtr{Expression::map_t{result_stage}};
 
     auto analysis_result = std::make_shared<AnalysedTarget const>(
@@ -535,12 +534,9 @@ void TreeRuleWithDeps(
 }
 
 void TreeRule(
+    const gsl::not_null<AnalyseContext*>& context,
     const nlohmann::json& desc_json,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
-    [[maybe_unused]] const ActiveTargetCache& /*target_cache*/,
-    [[maybe_unused]] const gsl::not_null<Statistics*>& /*stats*/,
-    [[maybe_unused]] const gsl::not_null<Progress*>& /*exports_progress*/,
     const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
@@ -579,7 +575,7 @@ void TreeRule(
         auto dep_target = BuildMaps::Base::ParseEntityNameFromExpression(
             dep_name,
             key.target,
-            repo_config,
+            context->repo_config,
             [&logger, &dep_name](std::string const& parse_err) {
                 (*logger)(fmt::format("Parsing dep entry {} failed with:\n{}",
                                       dep_name->ToString(),
@@ -797,12 +793,9 @@ void InstallRuleWithDeps(
 }
 
 void InstallRule(
+    const gsl::not_null<AnalyseContext*>& context,
     const nlohmann::json& desc_json,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
-    [[maybe_unused]] const ActiveTargetCache& /*target_cache*/,
-    [[maybe_unused]] const gsl::not_null<Statistics*>& /*stats*/,
-    [[maybe_unused]] const gsl::not_null<Progress*>& /*exports_progress*/,
     const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
@@ -843,7 +836,7 @@ void InstallRule(
         auto dep_target = BuildMaps::Base::ParseEntityNameFromExpression(
             dep_name,
             key.target,
-            repo_config,
+            context->repo_config,
             [&logger, &dep_name](std::string const& parse_err) {
                 (*logger)(fmt::format("Parsing dep entry {} failed with:\n{}",
                                       dep_name->ToString(),
@@ -888,7 +881,7 @@ void InstallRule(
         auto dep_target = BuildMaps::Base::ParseEntityNameFromExpression(
             dep_name,
             key.target,
-            repo_config,
+            context->repo_config,
             [&logger, &dep_name, &path = path](std::string const& parse_err) {
                 (*logger)(fmt::format("Parsing file entry {} for key {} failed "
                                       "with:\n{}",
@@ -939,7 +932,7 @@ void InstallRule(
         auto dep_target = BuildMaps::Base::ParseEntityNameFromExpression(
             entry->List()[0],
             key.target,
-            repo_config,
+            context->repo_config,
             [&logger, &entry](std::string const& parse_err) {
                 (*logger)(fmt::format("Parsing dir entry {} for path {} failed "
                                       "with:\n{}",
@@ -987,7 +980,7 @@ void GenericRuleWithDeps(
     const std::vector<AnalysedTargetPtr const*>& dependency_values,
     const BuildMaps::Base::FieldReader::Ptr& desc,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
+    const gsl::not_null<const RepositoryConfig*>& repo_config,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
     const gsl::not_null<BuildMaps::Target::ResultTargetMap*>& result_map) {
@@ -1113,7 +1106,7 @@ void GenericRuleWithDeps(
                               true);
                     return;
                 }
-                outs.emplace_back(x->String());
+                outs.emplace_back(ToNormalPath(x->String()).string());
             }
         }
     }
@@ -1144,7 +1137,7 @@ void GenericRuleWithDeps(
                         true);
                     return;
                 }
-                out_dirs.emplace_back(x->String());
+                out_dirs.emplace_back(ToNormalPath(x->String()).string());
             }
         }
     }
@@ -1203,6 +1196,31 @@ void GenericRuleWithDeps(
         }
         cmd_ss << x->String();
         cmd_ss << "\n";
+    }
+    auto cwd_exp =
+        desc->ReadOptionalExpression("cwd", Expression::kEmptyString);
+    if (not cwd_exp) {
+        return;
+    }
+    auto cwd_value = cwd_exp.Evaluate(
+        param_config, string_fields_fcts, [&logger](auto const& msg) {
+            (*logger)(fmt::format("While evaluating cwd:\n{}", msg), true);
+        });
+    if (not cwd_value) {
+        return;
+    }
+    if (not cwd_value->IsString()) {
+        (*logger)(fmt::format("cwd has to evaluate to a string, but found {}",
+                              cwd_value->ToString()),
+                  true);
+        return;
+    }
+    if (not PathIsNonUpwards(cwd_value->String())) {
+        (*logger)(fmt::format("cwd has to evalute to a non-upwards relative "
+                              "path, but found {}",
+                              cwd_value->ToString()),
+                  true);
+        return;
     }
     auto const& empty_map_exp = Expression::kEmptyMapExpr;
     auto env_exp = desc->ReadOptionalExpression("env", empty_map_exp);
@@ -1336,6 +1354,9 @@ void GenericRuleWithDeps(
     for (auto const& dep : dependency_values) {
         inputs = ExpressionPtr{Expression::map_t{inputs, (*dep)->Artifacts()}};
     }
+    std::vector<Tree::Ptr> trees{};
+    inputs = BuildMaps::Target::Utils::add_dir_for(
+        cwd_value->String(), inputs, &trees);
 
     std::vector<std::string> argv{};
     argv.reserve(sh_val->List().size() + 1);
@@ -1349,6 +1370,7 @@ void GenericRuleWithDeps(
         outs,
         out_dirs,
         argv,
+        cwd_value->String(),
         env_val,
         std::nullopt,
         false,
@@ -1361,20 +1383,28 @@ void GenericRuleWithDeps(
         for (const auto& path : container) {
             artifacts.emplace(
                 path,
-                ExpressionPtr{ArtifactDescription{
-                    action_identifier, std::filesystem::path{path}}});
+                ExpressionPtr{ArtifactDescription::CreateAction(
+                    action_identifier, std::filesystem::path{path})});
         }
+    }
+    auto artifacts_stage = ExpressionPtr{Expression::map_t{artifacts}};
+    auto artifacts_conflict =
+        BuildMaps::Target::Utils::tree_conflict(artifacts_stage);
+    if (artifacts_conflict) {
+        (*logger)(fmt::format("artifacts have staging conflicts on {}",
+                              nlohmann::json(*artifacts_conflict).dump()),
+                  /*fatal=*/true);
+        return;
     }
 
     auto const& empty_map = Expression::kEmptyMap;
     auto result = std::make_shared<AnalysedTarget const>(
-        TargetResult{
-            .artifact_stage = ExpressionPtr{Expression::map_t{artifacts}},
-            .provides = empty_map,
-            .runfiles = empty_map},
+        TargetResult{.artifact_stage = std::move(artifacts_stage),
+                     .provides = empty_map,
+                     .runfiles = empty_map},
         std::vector<ActionDescription::Ptr>{action},
         std::vector<std::string>{},
-        std::vector<Tree::Ptr>{},
+        std::move(trees),
         std::move(effective_vars),
         std::move(tainted),
         std::move(implied_export),
@@ -1385,16 +1415,13 @@ void GenericRuleWithDeps(
 }
 
 void GenericRule(
+    const gsl::not_null<AnalyseContext*>& context,
     const nlohmann::json& desc_json,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
-    [[maybe_unused]] const ActiveTargetCache& /*target_cache*/,
-    [[maybe_unused]] const gsl::not_null<Statistics*>& /*stats*/,
-    [[maybe_unused]] const gsl::not_null<Progress*>& /*exports_progress*/,
     const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
-    const gsl::not_null<BuildMaps::Target::ResultTargetMap*> result_map) {
+    const gsl::not_null<BuildMaps::Target::ResultTargetMap*>& result_map) {
     auto desc = BuildMaps::Base::FieldReader::CreatePtr(
         desc_json, key.target, "generic target", logger);
     desc->ExpectFields(kGenericRuleFields);
@@ -1428,7 +1455,7 @@ void GenericRule(
         auto dep_target = BuildMaps::Base::ParseEntityNameFromExpression(
             dep_name,
             key.target,
-            repo_config,
+            context->repo_config,
             [&logger, &dep_name](std::string const& parse_err) {
                 (*logger)(fmt::format("Parsing dep entry {} failed with:\n{}",
                                       dep_name->ToString(),
@@ -1450,13 +1477,13 @@ void GenericRule(
          setter,
          logger,
          key,
-         repo_config,
+         context,
          result_map](auto const& values) {
             GenericRuleWithDeps(transition_keys,
                                 values,
                                 desc,
                                 key,
-                                repo_config,
+                                context->repo_config,
                                 setter,
                                 logger,
                                 result_map);
@@ -1465,12 +1492,9 @@ void GenericRule(
 }
 
 void ConfigureRule(
+    const gsl::not_null<AnalyseContext*>& context,
     const nlohmann::json& desc_json,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
-    [[maybe_unused]] const ActiveTargetCache& /*target_cache*/,
-    [[maybe_unused]] const gsl::not_null<Statistics*>& /*stats*/,
-    [[maybe_unused]] const gsl::not_null<Progress*>& /*exports_progress*/,
     const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
@@ -1500,7 +1524,7 @@ void ConfigureRule(
     auto configured_target = BuildMaps::Base::ParseEntityNameFromExpression(
         configured_target_name,
         key.target,
-        repo_config,
+        context->repo_config,
         [&logger, &configured_target_name](std::string const& parse_err) {
             (*logger)(fmt::format("Parsing target name {} failed with:\n{}",
                                   configured_target_name->ToString(),
@@ -1608,16 +1632,13 @@ void ConfigureRule(
 auto const kBuiltIns = std::unordered_map<
     std::string,
     std::function<void(
+        const gsl::not_null<AnalyseContext*>&,
         const nlohmann::json&,
         const BuildMaps::Target::ConfiguredTarget&,
-        const gsl::not_null<RepositoryConfig*>&,
-        const ActiveTargetCache&,
-        const gsl::not_null<Statistics*>&,
-        const gsl::not_null<Progress*>&,
         const BuildMaps::Target::TargetMap::SubCallerPtr&,
         const BuildMaps::Target::TargetMap::SetterPtr&,
         const BuildMaps::Target::TargetMap::LoggerPtr&,
-        const gsl::not_null<BuildMaps::Target::ResultTargetMap*>)>>{
+        const gsl::not_null<BuildMaps::Target::ResultTargetMap*>&)>>{
     {"export", ExportRule},
     {"file_gen", FileGenRule},
     {"tree", TreeRule},
@@ -1639,19 +1660,15 @@ auto IsBuiltInRule(nlohmann::json const& rule_type) -> bool {
     return kBuiltIns.contains(rule_name);
 }
 
-auto HandleBuiltin(
-    const nlohmann::json& rule_type,
-    const nlohmann::json& desc,
-    const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
-    const ActiveTargetCache& target_cache,
-    const gsl::not_null<Statistics*>& stats,
-    const gsl::not_null<Progress*>& exports_progress,
-    const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
-    const BuildMaps::Target::TargetMap::SetterPtr& setter,
-    const BuildMaps::Target::TargetMap::LoggerPtr& logger,
-    const gsl::not_null<BuildMaps::Target::ResultTargetMap*>& result_map)
-    -> bool {
+auto HandleBuiltin(const gsl::not_null<AnalyseContext*>& context,
+                   const nlohmann::json& rule_type,
+                   const nlohmann::json& desc,
+                   const BuildMaps::Target::ConfiguredTarget& key,
+                   const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
+                   const BuildMaps::Target::TargetMap::SetterPtr& setter,
+                   const BuildMaps::Target::TargetMap::LoggerPtr& logger,
+                   const gsl::not_null<BuildMaps::Target::ResultTargetMap*>&
+                       result_map) -> bool {
     if (not rule_type.is_string()) {
         // Names for built-in rules are always strings
         return false;
@@ -1665,20 +1682,12 @@ auto HandleBuiltin(
         [logger, rule_name, key](auto msg, auto fatal) {
             (*logger)(fmt::format("While evaluating {} target {}:\n{}",
                                   rule_name,
-                                  key.ToString(),
+                                  key.ToShortString(),
                                   msg),
                       fatal);
         });
-    (it->second)(desc,
-                 key,
-                 repo_config,
-                 target_cache,
-                 stats,
-                 exports_progress,
-                 subcaller,
-                 setter,
-                 target_logger,
-                 result_map);
+    (it->second)(
+        context, desc, key, subcaller, setter, target_logger, result_map);
     return true;
 }
 }  // namespace BuildMaps::Target

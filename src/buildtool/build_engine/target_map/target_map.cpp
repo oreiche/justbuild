@@ -37,6 +37,9 @@
 #include "src/buildtool/build_engine/expression/function_map.hpp"
 #include "src/buildtool/build_engine/target_map/built_in_rules.hpp"
 #include "src/buildtool/build_engine/target_map/utils.hpp"
+#include "src/buildtool/common/artifact_description.hpp"
+#include "src/buildtool/common/repository_config.hpp"
+#include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/gsl.hpp"
@@ -302,6 +305,7 @@ auto ListDependencies(
 }
 
 void withDependencies(
+    const gsl::not_null<AnalyseContext*>& context,
     const std::vector<BuildMaps::Target::ConfiguredTarget>& transition_keys,
     const std::vector<AnalysedTargetPtr const*>& dependency_values,
     std::size_t declared_count,
@@ -309,7 +313,6 @@ void withDependencies(
     const BuildMaps::Base::UserRulePtr& rule,
     const TargetData::Ptr& data,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
     std::unordered_map<std::string, ExpressionPtr> params,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
@@ -397,7 +400,7 @@ void withDependencies(
     auto string_fields_fcts =
         FunctionMap::MakePtr(FunctionMap::underlying_map_t{
             {"outs",
-             [&deps_by_transition, &key, repo_config](
+             [&deps_by_transition, &key, context](
                  auto&& eval, auto const& expr, auto const& env) {
                  return BuildMaps::Target::Utils::keys_expr(
                      BuildMaps::Target::Utils::obtainTargetByName(
@@ -405,12 +408,12 @@ void withDependencies(
                          expr,
                          env,
                          key.target,
-                         repo_config,
+                         context->repo_config,
                          deps_by_transition)
                          ->Artifacts());
              }},
             {"runfiles",
-             [&deps_by_transition, &key, repo_config](
+             [&deps_by_transition, &key, context](
                  auto&& eval, auto const& expr, auto const& env) {
                  return BuildMaps::Target::Utils::keys_expr(
                      BuildMaps::Target::Utils::obtainTargetByName(
@@ -418,7 +421,7 @@ void withDependencies(
                          expr,
                          env,
                          key.target,
-                         repo_config,
+                         context->repo_config,
                          deps_by_transition)
                          ->RunFiles());
              }}});
@@ -510,7 +513,8 @@ void withDependencies(
               return eval(expr->Get("default", empty_list), env);
           }},
          {"ACTION",
-          [&actions, &rule](auto&& eval, auto const& expr, auto const& env) {
+          [&actions, &rule, &trees](
+              auto&& eval, auto const& expr, auto const& env) {
               auto const& empty_map_exp = Expression::kEmptyMapExpr;
               auto inputs_exp = eval(expr->Get("inputs", empty_map_exp), env);
               if (not inputs_exp->IsMap()) {
@@ -552,16 +556,29 @@ void withDependencies(
                   throw Evaluator::EvaluationError{
                       "either outs or out_dirs must be specified for ACTION"};
               }
+              ActionDescription::outputs_t outputs_norm{};
+              ActionDescription::outputs_t output_dirs_norm{};
+              outputs_norm.reserve(outputs.size());
+              output_dirs_norm.reserve(output_dirs.size());
+              std::for_each(
+                  outputs.begin(), outputs.end(), [&outputs_norm](auto p) {
+                      outputs_norm.emplace_back(ToNormalPath(p));
+                  });
+              std::for_each(output_dirs.begin(),
+                            output_dirs.end(),
+                            [&output_dirs_norm](auto p) {
+                                output_dirs_norm.emplace_back(ToNormalPath(p));
+                            });
 
-              sort_and_deduplicate(&outputs);
-              sort_and_deduplicate(&output_dirs);
+              sort_and_deduplicate(&outputs_norm);
+              sort_and_deduplicate(&output_dirs_norm);
 
               // find entries present on both fields
               std::vector<std::string> dups{};
-              std::set_intersection(outputs.begin(),
-                                    outputs.end(),
-                                    output_dirs.begin(),
-                                    output_dirs.end(),
+              std::set_intersection(outputs_norm.begin(),
+                                    outputs_norm.end(),
+                                    output_dirs_norm.begin(),
+                                    output_dirs_norm.end(),
                                     std::back_inserter(dups));
               if (not dups.empty()) {
                   throw Evaluator::EvaluationError{
@@ -590,6 +607,20 @@ void withDependencies(
                   }
                   cmd.emplace_back(arg->String());
               }
+              auto cwd_exp =
+                  eval(expr->Get("cwd", Expression::kEmptyString), env);
+              if (not cwd_exp->IsString()) {
+                  throw Evaluator::EvaluationError{
+                      fmt::format("cwd has to be a string, but found {}",
+                                  cwd_exp->ToString())};
+              }
+              if (not PathIsNonUpwards(cwd_exp->String())) {
+                  throw Evaluator::EvaluationError{fmt::format(
+                      "cwd has to be a non-upwards relative path, but found {}",
+                      cwd_exp->ToString())};
+              }
+              auto final_inputs = BuildMaps::Target::Utils::add_dir_for(
+                  cwd_exp->String(), inputs_exp, &trees);
               auto env_exp = eval(expr->Get("env", empty_map_exp), env);
               if (not env_exp->IsMap()) {
                   throw Evaluator::EvaluationError{
@@ -691,33 +722,36 @@ void withDependencies(
                   }
               }
               auto action = BuildMaps::Target::Utils::createAction(
-                  outputs,
-                  output_dirs,
+                  outputs_norm,
+                  output_dirs_norm,
                   std::move(cmd),
+                  cwd_exp->String(),
                   env_exp,
                   may_fail,
                   no_cache,
                   timeout_scale_exp->IsNumber() ? timeout_scale_exp->Number()
                                                 : 1.0,
                   execution_properties,
-                  inputs_exp);
+                  final_inputs);
               auto action_id = action->Id();
               actions.emplace_back(std::move(action));
               for (auto const& out : outputs) {
-                  result.emplace(out,
-                                 ExpressionPtr{ArtifactDescription{
-                                     action_id, std::filesystem::path{out}}});
+                  result.emplace(
+                      out,
+                      ExpressionPtr{ArtifactDescription::CreateAction(
+                          action_id, ToNormalPath(out))});
               }
               for (auto const& out : output_dirs) {
-                  result.emplace(out,
-                                 ExpressionPtr{ArtifactDescription{
-                                     action_id, std::filesystem::path{out}}});
+                  result.emplace(
+                      out,
+                      ExpressionPtr{ArtifactDescription::CreateAction(
+                          action_id, ToNormalPath(out))});
               }
 
               return ExpressionPtr{Expression::map_t{result}};
           }},
          {"BLOB",
-          [&blobs](auto&& eval, auto const& expr, auto const& env) {
+          [&blobs, context](auto&& eval, auto const& expr, auto const& env) {
               auto data = eval(expr->Get("data", ""s), env);
               if (not data->IsString()) {
                   throw Evaluator::EvaluationError{
@@ -725,10 +759,33 @@ void withDependencies(
                                   data->ToString())};
               }
               blobs.emplace_back(data->String());
-              return ExpressionPtr{ArtifactDescription{
-                  ArtifactDigest::Create<ObjectType::File>(data->String()),
-                  ObjectType::File}};
+              return ExpressionPtr{ArtifactDescription::CreateKnown(
+                  ArtifactDigest::Create<ObjectType::File>(
+                      context->storage->GetHashFunction(), data->String()),
+                  ObjectType::File)};
           }},
+
+         {"SYMLINK",
+          [&blobs, context](auto&& eval, auto const& expr, auto const& env) {
+              auto data = eval(expr->Get("data", ""s), env);
+              if (not data->IsString()) {
+                  throw Evaluator::EvaluationError{
+                      fmt::format("SYMLINK data has to be a string, but got {}",
+                                  data->ToString())};
+              }
+              if (not PathIsNonUpwards(data->String())) {
+                  throw Evaluator::EvaluationError{fmt::format(
+                      "SYMLINK data has to be non-upwards relative, but got {}",
+                      data->ToString())};
+              }
+              blobs.emplace_back(data->String());
+
+              return ExpressionPtr{ArtifactDescription::CreateKnown(
+                  ArtifactDigest::Create<ObjectType::Symlink>(
+                      context->storage->GetHashFunction(), data->String()),
+                  ObjectType::Symlink)};
+          }},
+
          {"TREE",
           [&trees](auto&& eval, auto const& expr, auto const& env) {
               auto val = eval(expr->Get("$1", Expression::kEmptyMapExpr), env);
@@ -760,7 +817,7 @@ void withDependencies(
               auto tree = std::make_shared<Tree>(std::move(artifacts));
               auto tree_id = tree->Id();
               trees.emplace_back(std::move(tree));
-              return ExpressionPtr{ArtifactDescription{tree_id}};
+              return ExpressionPtr{ArtifactDescription::CreateTree(tree_id)};
           }},
          {"VALUE_NODE",
           [](auto&& eval, auto const& expr, auto const& env) {
@@ -929,7 +986,7 @@ void withDependencies(
             }
             auto occurrences =
                 ListDependencies(object, deps_by_transition, effective_conf);
-            if (!occurrences.empty()) {
+            if (not occurrences.empty()) {
                 return fmt::format(
                     "\nArtifact {} occurs in direct dependencies{}",
                     object->ToString(),
@@ -991,10 +1048,10 @@ void withDependencies(
 }
 
 void withRuleDefinition(
+    const gsl::not_null<AnalyseContext*>& context,
     const BuildMaps::Base::UserRulePtr& rule,
     const TargetData::Ptr& data,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
     const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
@@ -1165,7 +1222,7 @@ void withRuleDefinition(
                 auto target = BuildMaps::Base::ParseEntityNameFromExpression(
                     dep_name,
                     key.target,
-                    repo_config,
+                    context->repo_config,
                     [&logger, &target_field_name, &dep_name](
                         std::string const& parse_err) {
                         (*logger)(fmt::format("Parsing entry {} in target "
@@ -1232,13 +1289,13 @@ void withRuleDefinition(
 
     (*subcaller)(
         dependency_keys,
-        [transition_keys = std::move(transition_keys),
+        [context,
+         transition_keys = std::move(transition_keys),
          declared_count,
          declared_and_implicit_count,
          rule,
          data,
          key,
-         repo_config,
          params = std::move(params),
          setter,
          logger,
@@ -1315,14 +1372,14 @@ void withRuleDefinition(
             }
             (*subcaller)(
                 anonymous_keys,
-                [dependency_values = values,
+                [context,
+                 dependency_values = values,
                  transition_keys = std::move(transition_keys),
                  declared_count,
                  declared_and_implicit_count,
                  rule,
                  data,
                  key,
-                 repo_config,
                  params = std::move(params),
                  setter,
                  logger,
@@ -1330,14 +1387,14 @@ void withRuleDefinition(
                     // Join dependency values and anonymous values
                     dependency_values.insert(
                         dependency_values.end(), values.begin(), values.end());
-                    withDependencies(transition_keys,
+                    withDependencies(context,
+                                     transition_keys,
                                      dependency_values,
                                      declared_count,
                                      declared_and_implicit_count,
                                      rule,
                                      data,
                                      key,
-                                     repo_config,
                                      params,
                                      setter,
                                      logger,
@@ -1349,11 +1406,8 @@ void withRuleDefinition(
 }
 
 void withTargetsFile(
+    const gsl::not_null<AnalyseContext*>& context,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
-    const ActiveTargetCache& target_cache,
-    const gsl::not_null<Statistics*>& stats,
-    const gsl::not_null<Progress*>& exports_progress,
     const nlohmann::json& targets_file,
     const gsl::not_null<BuildMaps::Base::SourceTargetMap*>& source_target,
     const gsl::not_null<BuildMaps::Base::UserRuleMap*>& rule_map,
@@ -1388,18 +1442,14 @@ void withTargetsFile(
             return;
         }
         // Handle built-in rule, if it is
-        auto handled_as_builtin =
-            BuildMaps::Target::HandleBuiltin(*rule_it,
-                                             desc,
-                                             key,
-                                             repo_config,
-                                             target_cache,
-                                             stats,
-                                             exports_progress,
-                                             subcaller,
-                                             setter,
-                                             logger,
-                                             result_map);
+        auto handled_as_builtin = BuildMaps::Target::HandleBuiltin(context,
+                                                                   *rule_it,
+                                                                   desc,
+                                                                   key,
+                                                                   subcaller,
+                                                                   setter,
+                                                                   logger,
+                                                                   result_map);
         if (handled_as_builtin) {
             return;
         }
@@ -1408,7 +1458,7 @@ void withTargetsFile(
         auto rule_name = BuildMaps::Base::ParseEntityNameFromJson(
             *rule_it,
             key.target,
-            repo_config,
+            context->repo_config,
             [&logger, &rule_it, &key](std::string const& parse_err) {
                 (*logger)(fmt::format("Parsing rule name {} for target {} "
                                       "failed with:\n{}",
@@ -1436,7 +1486,7 @@ void withTargetsFile(
              setter,
              logger,
              key,
-             repo_config,
+             context,
              result_map,
              rn = *rule_name](auto values) {
                 auto data = TargetData::FromFieldReader(*values[0], desc);
@@ -1449,10 +1499,10 @@ void withTargetsFile(
                     return;
                 }
                 withRuleDefinition(
+                    context,
                     *values[0],
                     data,
                     key,
-                    repo_config,
                     subcaller,
                     setter,
                     std::make_shared<AsyncMapConsumerLogger>(
@@ -1460,7 +1510,7 @@ void withTargetsFile(
                             (*logger)(
                                 fmt::format("While analysing {} target {}:\n{}",
                                             rn.ToString(),
-                                            key.ToString(),
+                                            key.ToShortString(),
                                             msg),
                                 fatal);
                         }),
@@ -1478,8 +1528,8 @@ void withTargetsFile(
 }
 
 void withTargetNode(
+    const gsl::not_null<AnalyseContext*>& context,
     const BuildMaps::Target::ConfiguredTarget& key,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
     const gsl::not_null<BuildMaps::Base::UserRuleMap*>& rule_map,
     const gsl::not_null<TaskSystem*>& ts,
     const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
@@ -1523,7 +1573,7 @@ void withTargetNode(
              setter,
              logger,
              key,
-             repo_config,
+             context,
              result_map,
              rn = **rule_name](auto values) {
                 auto data = TargetData::FromTargetNode(
@@ -1539,10 +1589,10 @@ void withTargetNode(
                               /*fatal=*/true);
                     return;
                 }
-                withRuleDefinition(*values[0],
+                withRuleDefinition(context,
+                                   *values[0],
                                    data,
                                    key,
-                                   repo_config,
                                    subcaller,
                                    setter,
                                    std::make_shared<AsyncMapConsumerLogger>(
@@ -1677,7 +1727,9 @@ void TreeTarget(
                     auto tree = std::make_shared<Tree>(std::move(artifacts));
                     auto tree_id = tree->Id();
                     auto tree_map = ExpressionPtr{Expression::map_t{
-                        name, ExpressionPtr{ArtifactDescription{tree_id}}}};
+                        name,
+                        ExpressionPtr{
+                            ArtifactDescription::CreateTree(tree_id)}}};
                     auto analysis_result =
                         std::make_shared<AnalysedTarget const>(
                             TargetResult{.artifact_stage = tree_map,
@@ -1770,6 +1822,7 @@ void GlobTargetWithDirEntry(
 
 namespace BuildMaps::Target {
 auto CreateTargetMap(
+    const gsl::not_null<AnalyseContext*>& context,
     const gsl::not_null<BuildMaps::Base::SourceTargetMap*>& source_target_map,
     const gsl::not_null<BuildMaps::Base::TargetsFileMap*>& targets_file_map,
     const gsl::not_null<BuildMaps::Base::UserRuleMap*>& rule_map,
@@ -1777,10 +1830,6 @@ auto CreateTargetMap(
         directory_entries_map,
     const gsl::not_null<AbsentTargetMap*>& absent_target_map,
     const gsl::not_null<ResultTargetMap*>& result_map,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
-    const ActiveTargetCache& target_cache,
-    const gsl::not_null<Statistics*>& stats,
-    const gsl::not_null<Progress*>& exports_progress,
     std::size_t jobs) -> TargetMap {
     auto target_reader = [source_target_map,
                           targets_file_map,
@@ -1788,17 +1837,14 @@ auto CreateTargetMap(
                           directory_entries_map,
                           absent_target_map,
                           result_map,
-                          repo_config,
-                          target_cache,
-                          stats,
-                          exports_progress](auto ts,
-                                            auto setter,
-                                            auto logger,
-                                            auto subcaller,
-                                            auto key) {
+                          context](auto ts,
+                                   auto setter,
+                                   auto logger,
+                                   auto subcaller,
+                                   auto key) {
         if (key.target.IsAnonymousTarget()) {
-            withTargetNode(key,
-                           repo_config,
+            withTargetNode(context,
+                           key,
                            rule_map,
                            ts,
                            subcaller,
@@ -1824,7 +1870,7 @@ auto CreateTargetMap(
                        wrapped_logger,
                        result_map,
                        directory_entries_map,
-                       stats);
+                       context->statistics);
         }
         else if (key.target.GetNamedTarget().reference_t ==
                  BuildMaps::Base::ReferenceType::kFile) {
@@ -1892,9 +1938,10 @@ auto CreateTargetMap(
             );
         }
 #ifndef BOOTSTRAP_BUILD_TOOL
-        else if (repo_config->TargetRoot(key.target.ToModule().repository)
+        else if (context->repo_config
+                     ->TargetRoot(key.target.ToModule().repository)
                      ->IsAbsent()) {
-            if (not RemoteServeConfig::RemoteAddress()) {
+            if (context->serve == nullptr) {
                 (*logger)(
                     fmt::format("Root for target {} is absent, but no serve "
                                 "endpoint was configured. Please provide "
@@ -1903,7 +1950,7 @@ auto CreateTargetMap(
                     /*is_fatal=*/true);
                 return;
             }
-            if (not ServeApi::CheckServeRemoteExecution()) {
+            if (not context->serve->CheckServeRemoteExecution()) {
                 (*logger)(
                     "Inconsistent remote execution endpoint and serve endpoint"
                     "configuration detected.",
@@ -1919,7 +1966,7 @@ auto CreateTargetMap(
                 [logger, key](auto msg, auto fatal) {
                     (*logger)(
                         fmt::format("While processing absent target {}:\n{}",
-                                    key.ToString(),
+                                    key.ToShortString(),
                                     msg),
                         fatal);
                 });
@@ -1930,10 +1977,7 @@ auto CreateTargetMap(
                 ts,
                 {key.target.ToModule()},
                 [key,
-                 repo_config,
-                 target_cache,
-                 stats,
-                 exports_progress,
+                 context,
                  source_target_map,
                  rule_map,
                  ts,
@@ -1941,11 +1985,8 @@ auto CreateTargetMap(
                  setter = std::move(setter),
                  logger,
                  result_map](auto values) {
-                    withTargetsFile(key,
-                                    repo_config,
-                                    target_cache,
-                                    stats,
-                                    exports_progress,
+                    withTargetsFile(context,
+                                    key,
                                     *values[0],
                                     source_target_map,
                                     rule_map,

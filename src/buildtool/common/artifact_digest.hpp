@@ -74,20 +74,42 @@ class ArtifactDigest {
     }
 
     template <ObjectType kType>
-    [[nodiscard]] static auto Create(std::string const& content) noexcept
+    [[nodiscard]] static auto Create(HashFunction hash_function,
+                                     std::string const& content) noexcept
         -> ArtifactDigest {
         if constexpr (kType == ObjectType::Tree) {
             return ArtifactDigest{
-                HashFunction::ComputeTreeHash(content).HexString(),
+                hash_function.HashTreeData(content).HexString(),
                 content.size(),
                 /*is_tree=*/true};
         }
         else {
             return ArtifactDigest{
-                HashFunction::ComputeBlobHash(content).HexString(),
+                hash_function.HashBlobData(content).HexString(),
                 content.size(),
                 /*is_tree=*/false};
         }
+    }
+
+    template <ObjectType kType>
+    [[nodiscard]] static auto CreateFromFile(
+        HashFunction hash_function,
+        std::filesystem::path const& path) noexcept
+        -> std::optional<ArtifactDigest> {
+        static constexpr bool kIsTree = IsTreeObject(kType);
+        auto const hash = kIsTree ? hash_function.HashTreeFile(path)
+                                  : hash_function.HashBlobFile(path);
+        if (hash) {
+            return ArtifactDigest{
+                hash->first.HexString(), hash->second, kIsTree};
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] auto operator<(ArtifactDigest const& other) const -> bool {
+        return (hash_ < other.hash_) or
+               ((hash_ == other.hash_) and (static_cast<int>(is_tree_) <
+                                            static_cast<int>(other.is_tree_)));
     }
 
   private:

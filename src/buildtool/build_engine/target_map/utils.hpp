@@ -36,7 +36,7 @@ auto obtainTargetByName(const SubExprEvaluator&,
                         const ExpressionPtr&,
                         const Configuration&,
                         const Base::EntityName&,
-                        const gsl::not_null<RepositoryConfig*>&,
+                        const gsl::not_null<const RepositoryConfig*>&,
                         std::unordered_map<BuildMaps::Target::ConfiguredTarget,
                                            AnalysedTargetPtr> const&)
     -> AnalysedTargetPtr;
@@ -56,6 +56,10 @@ auto artifacts_tree(const ExpressionPtr& map)
 auto tree_conflict(const ExpressionPtr& /* map */)
     -> std::optional<std::string>;
 
+auto add_dir_for(const std::string& cwd,
+                 ExpressionPtr stage,
+                 gsl::not_null<std::vector<Tree::Ptr>*> trees) -> ExpressionPtr;
+
 auto getTainted(std::set<std::string>* tainted,
                 const Configuration& config,
                 const ExpressionPtr& tainted_exp,
@@ -64,6 +68,7 @@ auto getTainted(std::set<std::string>* tainted,
 auto createAction(const ActionDescription::outputs_t& output_files,
                   const ActionDescription::outputs_t& output_dirs,
                   std::vector<std::string> command,
+                  std::string cwd,
                   const ExpressionPtr& env,
                   std::optional<std::string> may_fail,
                   bool no_cache,

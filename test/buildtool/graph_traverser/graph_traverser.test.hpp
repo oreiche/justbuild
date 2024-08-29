@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -25,17 +26,26 @@
 #include <vector>
 
 #include "catch2/catch_test_macros.hpp"
+#include "gsl/gsl"
 #include "nlohmann/json.hpp"
+#include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
+#include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_api/remote/context.hpp"
+#include "src/buildtool/execution_engine/executor/context.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/jsonfs.hpp"
 #include "src/buildtool/graph_traverser/graph_traverser.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/progress_reporting/progress.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
 #include "src/utils/cpp/json.hpp"
-#include "test/utils/test_env.hpp"
 
 // NOLINTNEXTLINE(google-build-namespaces)
 namespace {
@@ -131,7 +141,8 @@ class TestProject {
     }
 };
 
-inline void SetLauncher() {
+[[nodiscard]] inline auto CreateLocalExecConfig() noexcept
+    -> LocalExecutionConfig {
     std::vector<std::string> launcher{"env"};
     auto* env_path = std::getenv("PATH");
     if (env_path != nullptr) {
@@ -140,28 +151,53 @@ inline void SetLauncher() {
     else {
         launcher.emplace_back("PATH=/bin:/usr/bin");
     }
-    if (not LocalExecutionConfig::SetLauncher(launcher)) {
-        Logger::Log(LogLevel::Error, "Failure setting the local launcher.");
-        std::exit(EXIT_FAILURE);
+    LocalExecutionConfig::Builder builder;
+    if (auto config = builder.SetLauncher(std::move(launcher)).Build()) {
+        return *std::move(config);
     }
+    Logger::Log(LogLevel::Error, "Failure setting the local launcher.");
+    std::exit(EXIT_FAILURE);
 }
 
 }  // namespace
 
 [[maybe_unused]] static void TestHelloWorldCopyMessage(
+    StorageConfig const& storage_config,
+    Storage const& storage,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RemoteExecutionConfig const*> const& remote_config,
     bool is_hermetic = true) {
     TestProject p("hello_world_copy_message");
 
-    SetLauncher();
+    auto const local_exec_config = CreateLocalExecConfig();
     auto const clargs = p.CmdLineArgs();
+
     Statistics stats{};
     Progress progress{};
-    GraphTraverser const gt{clargs.gtargs,
-                            p.GetRepoConfig(),
-                            RemoteExecutionConfig::PlatformProperties(),
-                            RemoteExecutionConfig::DispatchList(),
-                            &stats,
-                            &progress};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config,
+                                     .storage = &storage};
+
+    RetryConfig retry_config{};  // default retry config
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = remote_config};
+
+    auto const apis =
+        ApiBundle::Create(&local_context, &remote_context, p.GetRepoConfig());
+
+    ExecutionContext const exec_context{.repo_config = p.GetRepoConfig(),
+                                        .apis = &apis,
+                                        .remote_context = &remote_context,
+                                        .statistics = &stats,
+                                        .progress = &progress};
+
+    GraphTraverser const gt{
+        clargs.gtargs, &exec_context, [](auto done, auto cv) {}};
     auto const result =
         gt.BuildAndStage(clargs.graph_description, clargs.artifacts);
 
@@ -181,12 +217,7 @@ inline void SetLauncher() {
     SECTION("Executable is retrieved as executable") {
         auto const clargs_exec = p.CmdLineArgs("_entry_points_get_executable");
         GraphTraverser const gt_get_exec{
-            clargs_exec.gtargs,
-            p.GetRepoConfig(),
-            RemoteExecutionConfig::PlatformProperties(),
-            RemoteExecutionConfig::DispatchList(),
-            &stats,
-            &progress};
+            clargs_exec.gtargs, &exec_context, [](auto done, auto cv) {}};
         auto const exec_result = gt_get_exec.BuildAndStage(
             clargs_exec.graph_description, clargs_exec.artifacts);
 
@@ -205,19 +236,43 @@ inline void SetLauncher() {
     }
 }
 
-[[maybe_unused]] static void TestCopyLocalFile(bool is_hermetic = true) {
+[[maybe_unused]] static void TestCopyLocalFile(
+    StorageConfig const& storage_config,
+    Storage const& storage,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RemoteExecutionConfig const*> const& remote_config,
+    bool is_hermetic = true) {
     TestProject p("copy_local_file");
 
-    SetLauncher();
+    auto const local_exec_config = CreateLocalExecConfig();
     auto const clargs = p.CmdLineArgs();
+
     Statistics stats{};
     Progress progress{};
-    GraphTraverser const gt{clargs.gtargs,
-                            p.GetRepoConfig(),
-                            RemoteExecutionConfig::PlatformProperties(),
-                            RemoteExecutionConfig::DispatchList(),
-                            &stats,
-                            &progress};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config,
+                                     .storage = &storage};
+
+    RetryConfig retry_config{};  // default retry config
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = remote_config};
+
+    auto const apis =
+        ApiBundle::Create(&local_context, &remote_context, p.GetRepoConfig());
+
+    ExecutionContext const exec_context{.repo_config = p.GetRepoConfig(),
+                                        .apis = &apis,
+                                        .remote_context = &remote_context,
+                                        .statistics = &stats,
+                                        .progress = &progress};
+
+    GraphTraverser const gt{
+        clargs.gtargs, &exec_context, [](auto done, auto cv) {}};
     auto const result =
         gt.BuildAndStage(clargs.graph_description, clargs.artifacts);
 
@@ -232,19 +287,42 @@ inline void SetLauncher() {
 }
 
 [[maybe_unused]] static void TestSequencePrinterBuildLibraryOnly(
+    StorageConfig const& storage_config,
+    Storage const& storage,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RemoteExecutionConfig const*> const& remote_config,
     bool is_hermetic = true) {
     TestProject p("sequence_printer_build_library_only");
 
-    SetLauncher();
+    auto const local_exec_config = CreateLocalExecConfig();
     auto const clargs = p.CmdLineArgs();
+
     Statistics stats{};
     Progress progress{};
-    GraphTraverser const gt{clargs.gtargs,
-                            p.GetRepoConfig(),
-                            RemoteExecutionConfig::PlatformProperties(),
-                            RemoteExecutionConfig::DispatchList(),
-                            &stats,
-                            &progress};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config,
+                                     .storage = &storage};
+
+    RetryConfig retry_config{};  // default retry config
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = remote_config};
+
+    auto const apis =
+        ApiBundle::Create(&local_context, &remote_context, p.GetRepoConfig());
+
+    ExecutionContext const exec_context{.repo_config = p.GetRepoConfig(),
+                                        .apis = &apis,
+                                        .remote_context = &remote_context,
+                                        .statistics = &stats,
+                                        .progress = &progress};
+
+    GraphTraverser const gt{
+        clargs.gtargs, &exec_context, [](auto done, auto cv) {}};
     auto const result =
         gt.BuildAndStage(clargs.graph_description, clargs.artifacts);
 
@@ -254,12 +332,7 @@ inline void SetLauncher() {
 
     auto const clargs_full_build = p.CmdLineArgs("_entry_points_full_build");
     GraphTraverser const gt_full_build{
-        clargs_full_build.gtargs,
-        p.GetRepoConfig(),
-        RemoteExecutionConfig::PlatformProperties(),
-        RemoteExecutionConfig::DispatchList(),
-        &stats,
-        &progress};
+        clargs_full_build.gtargs, &exec_context, [](auto done, auto cv) {}};
     auto const full_build_result = gt_full_build.BuildAndStage(
         clargs_full_build.graph_description, clargs_full_build.artifacts);
 
@@ -277,20 +350,44 @@ inline void SetLauncher() {
 }
 
 [[maybe_unused]] static void TestHelloWorldWithKnownSource(
+    StorageConfig const& storage_config,
+    Storage const& storage,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RemoteExecutionConfig const*> const& remote_config,
     bool is_hermetic = true) {
     TestProject full_hello_world("hello_world_copy_message");
 
-    SetLauncher();
+    auto const local_exec_config = CreateLocalExecConfig();
     auto const clargs_update_cpp =
         full_hello_world.CmdLineArgs("_entry_points_upload_source");
+
     Statistics stats{};
     Progress progress{};
-    GraphTraverser const gt_upload{clargs_update_cpp.gtargs,
-                                   full_hello_world.GetRepoConfig(),
-                                   RemoteExecutionConfig::PlatformProperties(),
-                                   RemoteExecutionConfig::DispatchList(),
-                                   &stats,
-                                   &progress};
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config,
+                                     .storage = &storage};
+
+    RetryConfig retry_config{};  // default retry config
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = remote_config};
+
+    auto const full_apis = ApiBundle::Create(
+        &local_context, &remote_context, full_hello_world.GetRepoConfig());
+
+    ExecutionContext const full_context{
+        .repo_config = full_hello_world.GetRepoConfig(),
+        .apis = &full_apis,
+        .remote_context = &remote_context,
+        .statistics = &stats,
+        .progress = &progress};
+
+    GraphTraverser const gt_upload{
+        clargs_update_cpp.gtargs, &full_context, [](auto done, auto cv) {}};
     auto const cpp_result = gt_upload.BuildAndStage(
         clargs_update_cpp.graph_description, clargs_update_cpp.artifacts);
 
@@ -306,12 +403,18 @@ inline void SetLauncher() {
     TestProject hello_world_known_cpp("hello_world_known_source");
 
     auto const clargs = hello_world_known_cpp.CmdLineArgs();
-    GraphTraverser const gt{clargs.gtargs,
-                            full_hello_world.GetRepoConfig(),
-                            RemoteExecutionConfig::PlatformProperties(),
-                            RemoteExecutionConfig::DispatchList(),
-                            &stats,
-                            &progress};
+
+    auto const apis_known = ApiBundle::Create(
+        &local_context, &remote_context, hello_world_known_cpp.GetRepoConfig());
+
+    ExecutionContext const context_known{
+        .repo_config = hello_world_known_cpp.GetRepoConfig(),
+        .apis = &apis_known,
+        .remote_context = &remote_context,
+        .statistics = &stats,
+        .progress = &progress};
+    GraphTraverser const gt{
+        clargs.gtargs, &context_known, [](auto done, auto cv) {}};
     auto const result =
         gt.BuildAndStage(clargs.graph_description, clargs.artifacts);
 
@@ -328,19 +431,42 @@ inline void SetLauncher() {
     }
 }
 
-static void TestBlobsUploadedAndUsed(bool is_hermetic = true) {
+static void TestBlobsUploadedAndUsed(
+    StorageConfig const& storage_config,
+    Storage const& storage,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RemoteExecutionConfig const*> const& remote_config,
+    bool is_hermetic = true) {
     TestProject p("use_uploaded_blobs");
     auto const clargs = p.CmdLineArgs();
 
-    SetLauncher();
     Statistics stats{};
     Progress progress{};
-    GraphTraverser gt{clargs.gtargs,
-                      p.GetRepoConfig(),
-                      RemoteExecutionConfig::PlatformProperties(),
-                      RemoteExecutionConfig::DispatchList(),
-                      &stats,
-                      &progress};
+
+    auto const local_exec_config = CreateLocalExecConfig();
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config,
+                                     .storage = &storage};
+
+    RetryConfig retry_config{};  // default retry config
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = remote_config};
+
+    auto const apis =
+        ApiBundle::Create(&local_context, &remote_context, p.GetRepoConfig());
+
+    ExecutionContext const exec_context{.repo_config = p.GetRepoConfig(),
+                                        .apis = &apis,
+                                        .remote_context = &remote_context,
+                                        .statistics = &stats,
+                                        .progress = &progress};
+
+    GraphTraverser gt{clargs.gtargs, &exec_context, [](auto done, auto cv) {}};
     auto const result =
         gt.BuildAndStage(clargs.graph_description, clargs.artifacts);
 
@@ -362,19 +488,42 @@ static void TestBlobsUploadedAndUsed(bool is_hermetic = true) {
     }
 }
 
-static void TestEnvironmentVariablesSetAndUsed(bool is_hermetic = true) {
+static void TestEnvironmentVariablesSetAndUsed(
+    StorageConfig const& storage_config,
+    Storage const& storage,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RemoteExecutionConfig const*> const& remote_config,
+    bool is_hermetic = true) {
     TestProject p("use_env_variables");
     auto const clargs = p.CmdLineArgs();
 
-    SetLauncher();
     Statistics stats{};
     Progress progress{};
-    GraphTraverser gt{clargs.gtargs,
-                      p.GetRepoConfig(),
-                      RemoteExecutionConfig::PlatformProperties(),
-                      RemoteExecutionConfig::DispatchList(),
-                      &stats,
-                      &progress};
+
+    auto const local_exec_config = CreateLocalExecConfig();
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config,
+                                     .storage = &storage};
+
+    RetryConfig retry_config{};  // default retry config
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = remote_config};
+
+    auto const apis =
+        ApiBundle::Create(&local_context, &remote_context, p.GetRepoConfig());
+
+    ExecutionContext const exec_context{.repo_config = p.GetRepoConfig(),
+                                        .apis = &apis,
+                                        .remote_context = &remote_context,
+                                        .statistics = &stats,
+                                        .progress = &progress};
+
+    GraphTraverser gt{clargs.gtargs, &exec_context, [](auto done, auto cv) {}};
     auto const result =
         gt.BuildAndStage(clargs.graph_description, clargs.artifacts);
 
@@ -396,19 +545,42 @@ static void TestEnvironmentVariablesSetAndUsed(bool is_hermetic = true) {
     }
 }
 
-static void TestTreesUsed(bool is_hermetic = true) {
+static void TestTreesUsed(
+    StorageConfig const& storage_config,
+    Storage const& storage,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RemoteExecutionConfig const*> const& remote_config,
+    bool is_hermetic = true) {
     TestProject p("use_trees");
     auto const clargs = p.CmdLineArgs();
 
-    SetLauncher();
     Statistics stats{};
     Progress progress{};
-    GraphTraverser gt{clargs.gtargs,
-                      p.GetRepoConfig(),
-                      RemoteExecutionConfig::PlatformProperties(),
-                      RemoteExecutionConfig::DispatchList(),
-                      &stats,
-                      &progress};
+
+    auto const local_exec_config = CreateLocalExecConfig();
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config,
+                                     .storage = &storage};
+
+    RetryConfig retry_config{};  // default retry config
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = remote_config};
+
+    auto const apis =
+        ApiBundle::Create(&local_context, &remote_context, p.GetRepoConfig());
+
+    ExecutionContext const exec_context{.repo_config = p.GetRepoConfig(),
+                                        .apis = &apis,
+                                        .remote_context = &remote_context,
+                                        .statistics = &stats,
+                                        .progress = &progress};
+
+    GraphTraverser gt{clargs.gtargs, &exec_context, [](auto done, auto cv) {}};
     auto const result =
         gt.BuildAndStage(clargs.graph_description, clargs.artifacts);
 
@@ -430,19 +602,42 @@ static void TestTreesUsed(bool is_hermetic = true) {
     }
 }
 
-static void TestNestedTreesUsed(bool is_hermetic = true) {
+static void TestNestedTreesUsed(
+    StorageConfig const& storage_config,
+    Storage const& storage,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RemoteExecutionConfig const*> const& remote_config,
+    bool is_hermetic = true) {
     TestProject p("use_nested_trees");
     auto const clargs = p.CmdLineArgs();
 
-    SetLauncher();
     Statistics stats{};
     Progress progress{};
-    GraphTraverser gt{clargs.gtargs,
-                      p.GetRepoConfig(),
-                      RemoteExecutionConfig::PlatformProperties(),
-                      RemoteExecutionConfig::DispatchList(),
-                      &stats,
-                      &progress};
+
+    auto const local_exec_config = CreateLocalExecConfig();
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config,
+                                     .storage = &storage};
+
+    RetryConfig retry_config{};  // default retry config
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = remote_config};
+
+    auto const apis =
+        ApiBundle::Create(&local_context, &remote_context, p.GetRepoConfig());
+
+    ExecutionContext const exec_context{.repo_config = p.GetRepoConfig(),
+                                        .apis = &apis,
+                                        .remote_context = &remote_context,
+                                        .statistics = &stats,
+                                        .progress = &progress};
+
+    GraphTraverser gt{clargs.gtargs, &exec_context, [](auto done, auto cv) {}};
     auto const result =
         gt.BuildAndStage(clargs.graph_description, clargs.artifacts);
 
@@ -464,21 +659,44 @@ static void TestNestedTreesUsed(bool is_hermetic = true) {
     }
 }
 
-static void TestFlakyHelloWorldDetected(bool /*is_hermetic*/ = true) {
+static void TestFlakyHelloWorldDetected(
+    StorageConfig const& storage_config,
+    Storage const& storage,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RemoteExecutionConfig const*> const& remote_config,
+    bool /*is_hermetic*/ = true) {
     TestProject p("flaky_hello_world");
 
     Statistics stats{};
     Progress progress{};
 
+    auto const local_exec_config = CreateLocalExecConfig();
+
+    // pack the local context instances to be passed to ApiBundle
+    LocalContext const local_context{.exec_config = &local_exec_config,
+                                     .storage_config = &storage_config,
+                                     .storage = &storage};
+
+    RetryConfig retry_config{};  // default retry config
+
+    // pack the remote context instances to be passed to ApiBundle
+    RemoteContext const remote_context{.auth = auth,
+                                       .retry_config = &retry_config,
+                                       .exec_config = remote_config};
+
+    auto const apis =
+        ApiBundle::Create(&local_context, &remote_context, p.GetRepoConfig());
+
+    ExecutionContext const exec_context{.repo_config = p.GetRepoConfig(),
+                                        .apis = &apis,
+                                        .remote_context = &remote_context,
+                                        .statistics = &stats,
+                                        .progress = &progress};
+
     {
-        SetLauncher();
         auto clargs = p.CmdLineArgs("_entry_points_ctimes");
-        GraphTraverser const gt{clargs.gtargs,
-                                p.GetRepoConfig(),
-                                RemoteExecutionConfig::PlatformProperties(),
-                                RemoteExecutionConfig::DispatchList(),
-                                &stats,
-                                &progress};
+        GraphTraverser const gt{
+            clargs.gtargs, &exec_context, [](auto done, auto cv) {}};
         auto const result =
             gt.BuildAndStage(clargs.graph_description, clargs.artifacts);
 
@@ -492,12 +710,8 @@ static void TestFlakyHelloWorldDetected(bool /*is_hermetic*/ = true) {
     // make_exe[flaky]->make_output[miss]
     auto clargs_output = p.CmdLineArgs();
     clargs_output.gtargs.rebuild = RebuildArguments{};
-    GraphTraverser const gt_output{clargs_output.gtargs,
-                                   p.GetRepoConfig(),
-                                   RemoteExecutionConfig::PlatformProperties(),
-                                   RemoteExecutionConfig::DispatchList(),
-                                   &stats,
-                                   &progress};
+    GraphTraverser const gt_output{
+        clargs_output.gtargs, &exec_context, [](auto done, auto cv) {}};
     REQUIRE(gt_output.BuildAndStage(clargs_output.graph_description,
                                     clargs_output.artifacts));
     CHECK(stats.ActionsFlakyCounter() == 1);
@@ -509,12 +723,7 @@ static void TestFlakyHelloWorldDetected(bool /*is_hermetic*/ = true) {
     auto clargs_stripped = p.CmdLineArgs("_entry_points_stripped");
     clargs_stripped.gtargs.rebuild = RebuildArguments{};
     GraphTraverser const gt_stripped{
-        clargs_stripped.gtargs,
-        p.GetRepoConfig(),
-        RemoteExecutionConfig::PlatformProperties(),
-        RemoteExecutionConfig::DispatchList(),
-        &stats,
-        &progress};
+        clargs_stripped.gtargs, &exec_context, [](auto done, auto cv) {}};
     REQUIRE(gt_stripped.BuildAndStage(clargs_stripped.graph_description,
                                       clargs_stripped.artifacts));
     CHECK(stats.ActionsFlakyCounter() == 1);
@@ -525,12 +734,8 @@ static void TestFlakyHelloWorldDetected(bool /*is_hermetic*/ = true) {
     // make_exe[flaky]->make_output[miss]->strip_time[miss]->list_ctimes [flaky]
     auto clargs_ctimes = p.CmdLineArgs("_entry_points_ctimes");
     clargs_ctimes.gtargs.rebuild = RebuildArguments{};
-    GraphTraverser const gt_ctimes{clargs_ctimes.gtargs,
-                                   p.GetRepoConfig(),
-                                   RemoteExecutionConfig::PlatformProperties(),
-                                   RemoteExecutionConfig::DispatchList(),
-                                   &stats,
-                                   &progress};
+    GraphTraverser const gt_ctimes{
+        clargs_ctimes.gtargs, &exec_context, [](auto done, auto cv) {}};
     REQUIRE(gt_ctimes.BuildAndStage(clargs_ctimes.graph_description,
                                     clargs_ctimes.artifacts));
     CHECK(stats.ActionsFlakyCounter() == 2);

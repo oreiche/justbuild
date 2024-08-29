@@ -21,6 +21,8 @@
 #include <utility>  // std::move
 #include <vector>
 
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/crypto/hasher.hpp"
 #include "src/utils/cpp/path.hpp"
 #include "src/utils/cpp/path_hash.hpp"
 
@@ -29,7 +31,7 @@ auto BuildMaps::Target::Utils::obtainTargetByName(
     const ExpressionPtr& expr,
     const Configuration& env,
     const Base::EntityName& current,
-    const gsl::not_null<RepositoryConfig*>& repo_config,
+    const gsl::not_null<const RepositoryConfig*>& repo_config,
     std::unordered_map<BuildMaps::Target::ConfiguredTarget,
                        AnalysedTargetPtr> const& deps_by_transition)
     -> AnalysedTargetPtr {
@@ -101,7 +103,7 @@ auto BuildMaps::Target::Utils::artifacts_tree(const ExpressionPtr& map)
     for (auto const& [key, artifact] : map->Map()) {
         auto location = ToNormalPath(std::filesystem::path{key}).string();
         if (auto it = result.find(location);
-            it != result.end() && !(it->second == artifact)) {
+            it != result.end() and not(it->second == artifact)) {
             return location;
         }
         result.emplace(std::move(location), artifact);
@@ -147,6 +149,47 @@ auto BuildMaps::Target::Utils::tree_conflict(const ExpressionPtr& map)
     return std::nullopt;
 }
 
+auto BuildMaps::Target::Utils::add_dir_for(
+    const std::string& cwd,
+    ExpressionPtr stage,
+    gsl::not_null<std::vector<Tree::Ptr>*> trees) -> ExpressionPtr {
+    // if working top-level, there is nothing to add; this is also
+    // the common case
+    if ((cwd.empty()) or (cwd == ".")) {
+        return stage;
+    }
+    auto cwd_path = std::filesystem::path{cwd};
+    for (auto const& [path, artifact] : stage->Map()) {
+        if ((path.empty()) or (path == ".")) {
+            // top-level artifact (tree); cannot add tree for cwd
+            return stage;
+        }
+        auto p = std::filesystem::path{path};
+        for (auto c = cwd_path; not c.empty(); c = c.parent_path()) {
+            if (c == p) {
+                // adding cwd would add a tree conflict; so nothing to add
+                return stage;
+            }
+        }
+        for (; not p.empty(); p = p.parent_path()) {
+            if (p == cwd_path) {
+                // adding cwd would add a tree conflict; so nothing to add
+                return stage;
+            }
+        }
+    }
+    // As we can add cwd without tree conflicts, we have to in order to
+    // ensure that installing this stage implies a directory at cwd.
+    std::unordered_map<std::string, ArtifactDescription> artifacts{};
+    auto empty_tree = std::make_shared<Tree>(std::move(artifacts));
+    auto empty_tree_id = empty_tree->Id();
+    trees->emplace_back(std::move(empty_tree));
+    auto empty_tree_exp =
+        ExpressionPtr{ArtifactDescription::CreateTree(empty_tree_id)};
+    auto cwd_tree = ExpressionPtr{Expression::map_t{cwd, empty_tree_exp}};
+    return ExpressionPtr{Expression::map_t{stage, cwd_tree}};
+}
+
 auto BuildMaps::Target::Utils::getTainted(
     std::set<std::string>* tainted,
     const Configuration& config,
@@ -183,10 +226,11 @@ auto BuildMaps::Target::Utils::getTainted(
 }
 
 namespace {
-auto hash_vector(std::vector<std::string> const& vec) -> std::string {
-    auto hasher = HashFunction::Hasher();
+auto hash_vector(HashFunction hash_function,
+                 std::vector<std::string> const& vec) -> std::string {
+    auto hasher = hash_function.MakeHasher();
     for (auto const& s : vec) {
-        hasher.Update(HashFunction::ComputeHash(s).Bytes());
+        hasher.Update(hash_function.PlainHashData(s).Bytes());
     }
     return std::move(hasher).Finalize().Bytes();
 }
@@ -196,18 +240,25 @@ auto BuildMaps::Target::Utils::createAction(
     const ActionDescription::outputs_t& output_files,
     const ActionDescription::outputs_t& output_dirs,
     std::vector<std::string> command,
+    std::string cwd,
     const ExpressionPtr& env,
     std::optional<std::string> may_fail,
     bool no_cache,
     double timeout_scale,
     const ExpressionPtr& execution_properties_exp,
     const ExpressionPtr& inputs_exp) -> ActionDescription::Ptr {
-    auto hasher = HashFunction::Hasher();
-    hasher.Update(hash_vector(output_files));
-    hasher.Update(hash_vector(output_dirs));
-    hasher.Update(hash_vector(command));
+    // The type of HashFunction is irrelevant here. It is used for
+    // identification and quick comparison of descriptions. SHA256 is used.
+    HashFunction hash_function{HashFunction::Type::PlainSHA256};
+    auto hasher = hash_function.MakeHasher();
+
+    hasher.Update(hash_vector(hash_function, output_files));
+    hasher.Update(hash_vector(hash_function, output_dirs));
+    hasher.Update(hash_vector(hash_function, command));
+    hasher.Update(hash_vector(hash_function, std::vector<std::string>{cwd}));
     hasher.Update(env->ToHash());
-    hasher.Update(hash_vector(may_fail ? std::vector<std::string>{*may_fail}
+    hasher.Update(hash_vector(hash_function,
+                              may_fail ? std::vector<std::string>{*may_fail}
                                        : std::vector<std::string>{}));
     hasher.Update(no_cache ? std::string{"N"} : std::string{"Y"});
     hasher.Update(fmt::format("{:+24a}", timeout_scale));
@@ -234,6 +285,7 @@ auto BuildMaps::Target::Utils::createAction(
                                                output_dirs,
                                                Action{std::move(action_id),
                                                       std::move(command),
+                                                      std::move(cwd),
                                                       std::move(env_vars),
                                                       std::move(may_fail),
                                                       no_cache,

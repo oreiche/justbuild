@@ -1,12 +1,12 @@
 { "bazel_msg":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["bazel_msg"]
-  , "hdrs": ["bazel_blob.hpp", "bazel_blob_container.hpp", "bazel_common.hpp"]
+  , "hdrs": ["bazel_blob_container.hpp", "bazel_common.hpp"]
   , "deps":
     [ ["src/buildtool/common", "common"]
     , ["src/buildtool/file_system", "file_system_manager"]
-    , ["src/utils/cpp", "concepts"]
     , ["src/buildtool/common", "bazel_types"]
+    , ["src/buildtool/execution_api/common", "content_blob_container"]
     ]
   , "stage": ["src", "buildtool", "execution_api", "bazel_msg"]
   , "private-deps":
@@ -24,17 +24,18 @@
     [ "bazel_msg"
     , "directory_tree"
     , ["src/buildtool/common", "common"]
-    , ["src/buildtool/file_system", "git_repo"]
     , ["src/buildtool/execution_engine/dag", "dag"]
     , ["src/buildtool/common", "bazel_types"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
+    , ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/crypto", "hash_function"]
     ]
   , "private-deps":
     [ ["src/buildtool/compatibility", "compatibility"]
     , ["src/utils/cpp", "hex_string"]
-    , ["@", "gsl", "", "gsl"]
     , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/file_system", "git_repo"]
     ]
   , "stage": ["src", "buildtool", "execution_api", "bazel_msg"]
   }
@@ -52,26 +53,6 @@
     [ ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
-    ]
-  , "stage": ["src", "buildtool", "execution_api", "bazel_msg"]
-  }
-, "blob_tree":
-  { "type": ["@", "rules", "CC", "library"]
-  , "name": ["blob_tree"]
-  , "hdrs": ["blob_tree.hpp"]
-  , "srcs": ["blob_tree.cpp"]
-  , "deps":
-    [ "bazel_msg"
-    , "directory_tree"
-    , ["@", "gsl", "", "gsl"]
-    , ["src/buildtool/compatibility", "compatibility"]
-    ]
-  , "private-deps":
-    [ ["src/buildtool/common", "common"]
-    , ["src/buildtool/common", "bazel_types"]
-    , ["src/buildtool/file_system", "git_repo"]
-    , ["src/buildtool/file_system", "object_type"]
-    , ["src/utils/cpp", "hex_string"]
     ]
   , "stage": ["src", "buildtool", "execution_api", "bazel_msg"]
   }

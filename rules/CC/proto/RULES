@@ -7,8 +7,15 @@
     ]
   , "target_fields": ["base", "toolchain", "deps"]
   , "string_fields":
-    ["PROTOC", "LDFLAGS", "ADD_LDFLAGS", "GRPC_PLUGIN", "PATH"]
-  , "config_vars": ["ARCH", "HOST_ARCH"]
+    [ "PROTOC"
+    , "PROTOCFLAGS"
+    , "ADD_PROTOCFLAGS"
+    , "LDFLAGS"
+    , "ADD_LDFLAGS"
+    , "GRPC_PLUGIN"
+    , "PATH"
+    ]
+  , "config_vars": ["ARCH", "HOST_ARCH", "DEBUG"]
   , "field_doc":
     { "base":
       [ "Other targets (using the same rule) to inherit values from. If"
@@ -41,6 +48,14 @@
       , "to be the relative path to the plugin in \"toolchain\". Specifying"
       , "this field overwrites values from \"base\"."
       ]
+    , "PROTOCFLAGS":
+      [ "Protobuf compiler flags. Specifying this field overwrites values from"
+      , "\"base\"."
+      ]
+    , "ADD_PROTOCFLAGS":
+      [ "Additional protobuf compiler flags. Specifying this field extends"
+      , "values from \"base\"."
+      ]
     , "LDFLAGS":
       [ "Linker flags for linking the final CC library. Specifying this field"
       , "overwrites values from \"base\"."
@@ -53,6 +68,15 @@
       [ "Path for looking up the proto compiler. Individual paths are joined"
       , "with \":\". Specifying this field extends values from \"base\"."
       ]
+    }
+  , "config_doc":
+    { "ARCH":
+      [ "The unqualified architecture. Is taken as a default for \"HOST_ARCH\""
+      , "and \"TARGET_ARCH\" if not set."
+      ]
+    , "HOST_ARCH":
+      ["The architecture on which the build actions are carried out."]
+    , "DEBUG": ["Compute the debug-stage, needed for local debugging."]
     }
   , "imports":
     { "base-provides": ["./", "..", "defaults-base-provides"]
@@ -67,6 +91,7 @@
     , "cflags-files-deps": ["CC", "cflags-files-deps"]
     , "ldflags-files-deps": ["CC", "ldflags-files-deps"]
     , "for host": ["transitions", "for host"]
+    , "debug-deps": ["CC", "debug-deps"]
     }
   , "config_transitions":
     {"toolchain": [{"type": "CALL_EXPRESSION", "name": "for host"}]}
@@ -74,6 +99,7 @@
     { "type": "let*"
     , "bindings":
       [ ["PROTOC", {"type": "FIELD", "name": "PROTOC"}]
+      , ["PROTOCFLAGS", {"type": "FIELD", "name": "PROTOCFLAGS"}]
       , ["LDFLAGS", {"type": "FIELD", "name": "LDFLAGS"}]
       , ["GRPC_PLUGIN", {"type": "FIELD", "name": "GRPC_PLUGIN"}]
       , ["PATH", {"type": "FIELD", "name": "PATH"}]
@@ -83,6 +109,14 @@
           , "cond": {"type": "var", "name": "PROTOC"}
           , "then": {"type": "var", "name": "PROTOC"}
           , "else": {"type": "CALL_EXPRESSION", "name": "base-provides"}
+          }
+        ]
+      , ["provider", "PROTOCFLAGS"]
+      , [ "PROTOCFLAGS"
+        , { "type": "if"
+          , "cond": {"type": "var", "name": "PROTOCFLAGS"}
+          , "then": {"type": "var", "name": "PROTOCFLAGS"}
+          , "else": {"type": "CALL_EXPRESSION", "name": "base-provides-++"}
           }
         ]
       , ["provider", "LDFLAGS"]
@@ -186,6 +220,14 @@
             }
           }
         ]
+      , [ "PROTOCFLAGS"
+        , { "type": "++"
+          , "$1":
+            [ {"type": "var", "name": "PROTOCFLAGS"}
+            , {"type": "FIELD", "name": "ADD_PROTOCFLAGS"}
+            ]
+          }
+        ]
       , [ "LDFLAGS"
         , { "type": "++"
           , "$1":
@@ -208,6 +250,33 @@
         , {"type": "CALL_EXPRESSION", "name": "ldflags-files-deps"}
         ]
       , ["package", {"type": "env", "vars": ["cflags-files", "ldflags-files"]}]
+      , [ "debug-srcs"
+        , { "type": "if"
+          , "cond": {"type": "var", "name": "DEBUG"}
+          , "then":
+            { "type": "let*"
+            , "bindings": [["deps-provider", "debug-srcs"]]
+            , "body": {"type": "CALL_EXPRESSION", "name": "debug-deps"}
+            }
+          , "else": {"type": "empty_map"}
+          }
+        ]
+      , [ "debug-hdrs"
+        , { "type": "if"
+          , "cond": {"type": "var", "name": "DEBUG"}
+          , "then":
+            { "type": "map_union"
+            , "$1":
+              [ { "type": "let*"
+                , "bindings": [["deps-provider", "debug-hdrs"]]
+                , "body": {"type": "CALL_EXPRESSION", "name": "debug-deps"}
+                }
+              , {"type": "var", "name": "compile-deps"}
+              ]
+            }
+          , "else": {"type": "empty_map"}
+          }
+        ]
       ]
     , "body":
       { "type": "RESULT"
@@ -215,6 +284,7 @@
         { "type": "env"
         , "vars":
           [ "PROTOC"
+          , "PROTOCFLAGS"
           , "LDFLAGS"
           , "GRPC_PLUGIN"
           , "PATH"
@@ -226,6 +296,8 @@
           , "link-deps"
           , "link-args"
           , "package"
+          , "debug-srcs"
+          , "debug-hdrs"
           ]
         }
       }
@@ -233,14 +305,14 @@
   }
 , "library":
   { "doc":
-    [ "A library C++ library, generated from proto files."
+    [ "A C++ library, generated from proto files."
     , ""
     , "This rule usually is used to bind anonymous targets generated from"
     , "proto libraries."
     ]
   , "string_fields": ["name", "stage"]
   , "target_fields": ["srcs", "deps"]
-  , "config_vars": ["CXX", "CXXFLAGS", "ADD_CXXFLAGS", "AR", "ENV"]
+  , "config_vars": ["CXX", "CXXFLAGS", "ADD_CXXFLAGS", "AR", "ENV", "DEBUG"]
   , "implicit":
     {"defaults": [["./", "..", "defaults"]], "proto-defaults": ["defaults"]}
   , "imports": {"protoc-compile": "protoc-compile"}
@@ -262,14 +334,14 @@
   }
 , "service library":
   { "doc":
-    [ "A service library C++ library, generated from proto files."
+    [ "A service C++ library, generated from proto files."
     , ""
     , "Calls protoc with gRPC plugin to additionally generate gRPC services"
     , "from proto libraries."
     ]
   , "string_fields": ["name", "stage"]
   , "target_fields": ["srcs", "deps"]
-  , "config_vars": ["CXX", "CXXFLAGS", "ADD_CXXFLAGS", "AR", "ENV"]
+  , "config_vars": ["CXX", "CXXFLAGS", "ADD_CXXFLAGS", "AR", "ENV", "DEBUG"]
   , "implicit":
     { "defaults": [["./", "..", "defaults"]]
     , "proto-defaults": ["service defaults"]

@@ -104,14 +104,14 @@ targets are subject to high-level target caching, which allows to skip
 the analysis and traversal of entire subgraphs in the action graph.
 Therefore, we create an export target that exports the target
 `["src", "fmt"]`, with only the variables in the field
-`"flexible_config"` being propagated. The top-level `TARGETS` file
-contains the following content:
+`"flexible_config"` being propagated.
+The top-level `TARGETS` file contains the following content:
 
 ``` {.jsonc srcname="fmt-layer/TARGETS"}
 { "fmt":
   { "type": "export"
   , "target": ["src", "fmt"]
-  , "flexible_config": ["CXX", "CXXFLAGS", "ADD_CXXFLAGS", "AR", "ENV"]
+  , "flexible_config": ["CXX", "CXXFLAGS", "ADD_CXXFLAGS", "AR", "ENV", "DEBUG"]
   }
 }
 ```
@@ -140,7 +140,7 @@ additional binding `"format"` for it:
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "307c96681e6626286804c45273082dff94127878"
+      , "commit": "0e9d13a761c878a647fde5a543946a02bf2c693d"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -240,7 +240,7 @@ $
 Employing high-level target caching
 -----------------------------------
 
-The make use of high-level target caching for exported targets, we need
+To make use of high-level target caching for exported targets, we need
 to ensure that all inputs to an export target are transitively
 content-fixed. This is automatically the case for `"type":"git"`
 repositories. However, the `libfmt` repository also depends on
@@ -273,7 +273,7 @@ be set for them in `repos.json`:
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "307c96681e6626286804c45273082dff94127878"
+      , "commit": "0e9d13a761c878a647fde5a543946a02bf2c693d"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -389,14 +389,14 @@ target description for each repository is implemented. For the given
 example, the following `repos.json` defines the overlay
 `"common-targets-layer"`, which is used by `"fmtlib"` and `"gsl-lite"`:
 
-``` {.jsonc srcname="repos.json"}
+``` {.jsonc srcname="repos.gsl-lite.json"}
 { "main": "tutorial"
 , "repositories":
   { "rules-cc":
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "307c96681e6626286804c45273082dff94127878"
+      , "commit": "0e9d13a761c878a647fde5a543946a02bf2c693d"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -499,7 +499,7 @@ staging mechanism the logical repository it belongs to is rooted in the
 ```
 
 However, even specifying all the include locations and headers can
-be tedious and in the end, it is information that `pkg-config` can
+be tedious and, in the end, it is information that `pkg-config` can
 provide as well. So there is a rule to import libraries that way
 and the actual packaging-build version of `libfmt`, as provided in
 `etc/import.pkgconfig`, looks as follows.

@@ -18,23 +18,23 @@
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/execution_api/git/git_api.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
-#include "src/buildtool/storage/config.hpp"
-#include "src/buildtool/storage/storage.hpp"
 #include "src/other_tools/root_maps/root_utils.hpp"
 
 namespace {
 
 /// \brief Guarantees it terminates by either calling the setter or calling the
 /// logger with fatal.
-void UploadToServeAndSetRoot(std::string const& tree_id,
+void UploadToServeAndSetRoot(ServeApi const& serve,
+                             StorageConfig const& storage_config,
+                             std::string const& tree_id,
                              ArtifactDigest const& digest,
-                             gsl::not_null<IExecutionApi*> const& remote_api,
+                             IExecutionApi const& remote_api,
                              bool ignore_special,
                              TreeIdGitMap::SetterPtr const& setter,
                              TreeIdGitMap::LoggerPtr const& logger) {
     // upload to remote CAS
     auto repo_config = RepositoryConfig{};
-    if (repo_config.SetGitCAS(StorageConfig::GitRoot())) {
+    if (repo_config.SetGitCAS(storage_config.GitRoot())) {
         auto git_api = GitApi{&repo_config};
         if (not git_api.RetrieveToCas(
                 {Artifact::ObjectInfo{.digest = digest,
@@ -49,15 +49,16 @@ void UploadToServeAndSetRoot(std::string const& tree_id,
     }
     else {
         (*logger)(fmt::format("Failed to SetGitCAS at {}",
-                              StorageConfig::GitRoot().string()),
+                              storage_config.GitRoot().string()),
                   /*fatal=*/true);
         return;
     }
     // tell serve to set up the root from the remote CAS tree;
     // upload can be skipped
-    if (EnsureAbsentRootOnServe(tree_id,
+    if (EnsureAbsentRootOnServe(serve,
+                                tree_id,
                                 /*repo_path=*/"",
-                                /*remote_api=*/std::nullopt,
+                                /*remote_api=*/nullptr,
                                 logger,
                                 /*no_sync_is_fatal=*/true)) {
         // set workspace root as absent
@@ -73,17 +74,19 @@ void UploadToServeAndSetRoot(std::string const& tree_id,
 /// \brief Guarantees it terminates by either calling the setter or calling the
 /// logger with fatal.
 void MoveCASTreeToGitAndProcess(
+    ServeApi const& serve,
+    gsl::not_null<StorageConfig const*> const& storage_config,
     std::string const& tree_id,
     ArtifactDigest const& digest,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
-    gsl::not_null<IExecutionApi*> const& local_api,
-    gsl::not_null<IExecutionApi*> const& remote_api,
+    gsl::not_null<IExecutionApi const*> const& local_api,
+    gsl::not_null<IExecutionApi const*> const& remote_api,
     bool ignore_special,
     gsl::not_null<TaskSystem*> const& ts,
     TreeIdGitMap::SetterPtr const& setter,
     TreeIdGitMap::LoggerPtr const& logger) {
     // Move tree from CAS to local Git storage
-    auto tmp_dir = StorageConfig::CreateTypedTmpDir("fetch-remote-git-tree");
+    auto tmp_dir = storage_config->CreateTypedTmpDir("fetch-remote-git-tree");
     if (not tmp_dir) {
         (*logger)(fmt::format("Failed to create tmp directory for copying "
                               "git-tree {} from remote CAS",
@@ -104,7 +107,9 @@ void MoveCASTreeToGitAndProcess(
     import_to_git_map->ConsumeAfterKeysReady(
         ts,
         {std::move(c_info)},
-        [tmp_dir,  // keep tmp_dir alive
+        [&serve,
+         storage_config,
+         tmp_dir,  // keep tmp_dir alive
          tree_id,
          digest,
          remote_api,
@@ -118,8 +123,14 @@ void MoveCASTreeToGitAndProcess(
             }
             // upload tree from Git cache to remote CAS and tell serve to set up
             // the root from the remote CAS tree; set root as absent on success
-            UploadToServeAndSetRoot(
-                tree_id, digest, remote_api, ignore_special, setter, logger);
+            UploadToServeAndSetRoot(serve,
+                                    *storage_config,
+                                    tree_id,
+                                    digest,
+                                    *remote_api,
+                                    ignore_special,
+                                    setter,
+                                    logger);
         },
         [logger, tmp_dir, tree_id](auto const& msg, bool fatal) {
             (*logger)(fmt::format(
@@ -138,15 +149,17 @@ auto CreateTreeIdGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     bool fetch_absent,
-    bool serve_api_exists,
-    gsl::not_null<IExecutionApi*> const& local_api,
-    std::optional<gsl::not_null<IExecutionApi*>> const& remote_api,
+    ServeApi const* serve,
+    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<IExecutionApi const*> const& local_api,
+    IExecutionApi const* remote_api,
     std::size_t jobs) -> TreeIdGitMap {
     auto tree_to_git = [git_tree_fetch_map,
                         critical_git_op_map,
                         import_to_git_map,
                         fetch_absent,
-                        serve_api_exists,
+                        serve,
+                        storage_config,
                         local_api,
                         remote_api](auto ts,
                                     auto setter,
@@ -158,10 +171,10 @@ auto CreateTreeIdGitMap(
         // found on the serve endpoint or it can be made available to it;
         // otherwise, error out
         if (key.absent and not fetch_absent) {
-            if (serve_api_exists) {
+            if (serve != nullptr) {
                 // check serve endpoint
                 auto has_tree =
-                    CheckServeHasAbsentRoot(key.tree_info.hash, logger);
+                    CheckServeHasAbsentRoot(*serve, key.tree_info.hash, logger);
                 if (not has_tree) {
                     return;
                 }
@@ -177,7 +190,7 @@ auto CreateTreeIdGitMap(
                     return;
                 }
                 // we cannot continue without a suitable remote set up
-                if (not remote_api) {
+                if (remote_api == nullptr) {
                     (*logger)(
                         fmt::format("Cannot create workspace root {} as absent "
                                     "for the provided serve endpoint.",
@@ -188,12 +201,13 @@ auto CreateTreeIdGitMap(
                 // check if tree in already in remote CAS
                 auto digest =
                     ArtifactDigest{key.tree_info.hash, 0, /*is_tree=*/true};
-                if (remote_api.value()->IsAvailable({digest})) {
+                if (remote_api->IsAvailable({digest})) {
                     // tell serve to set up the root from the remote CAS tree;
                     // upload can be skipped
-                    if (EnsureAbsentRootOnServe(key.tree_info.hash,
+                    if (EnsureAbsentRootOnServe(*serve,
+                                                key.tree_info.hash,
                                                 /*repo_path=*/"",
-                                                /*remote_api=*/std::nullopt,
+                                                /*remote_api=*/nullptr,
                                                 logger,
                                                 /*no_sync_is_fatal=*/true)) {
                         // set workspace root as absent
@@ -218,17 +232,19 @@ auto CreateTreeIdGitMap(
                 GitOpKey op_key = {
                     .params =
                         {
-                            StorageConfig::GitRoot(),  // target_path
-                            "",                        // git_hash
-                            "",                        // branch
-                            std::nullopt,              // message
-                            true                       // init_bare
+                            storage_config->GitRoot(),  // target_path
+                            "",                         // git_hash
+                            std::nullopt,               // message
+                            std::nullopt,               // source_path
+                            true                        // init_bare
                         },
                     .op_type = GitOpType::ENSURE_INIT};
                 critical_git_op_map->ConsumeAfterKeysReady(
                     ts,
                     {std::move(op_key)},
-                    [digest,
+                    [serve,
+                     storage_config,
+                     digest,
                      import_to_git_map,
                      local_api,
                      remote_api,
@@ -250,7 +266,7 @@ auto CreateTreeIdGitMap(
                         if (not git_repo) {
                             (*logger)(
                                 fmt::format("Could not open repository {}",
-                                            StorageConfig::GitRoot().string()),
+                                            storage_config->GitRoot().string()),
                                 /*fatal=*/true);
                             return;
                         }
@@ -275,7 +291,9 @@ auto CreateTreeIdGitMap(
                             // upload tree from Git cache to remote CAS and tell
                             // serve to set up the root from the remote CAS
                             // tree, then set root as absent
-                            UploadToServeAndSetRoot(key.tree_info.hash,
+                            UploadToServeAndSetRoot(*serve,
+                                                    *storage_config,
+                                                    key.tree_info.hash,
                                                     digest,
                                                     *remote_api,
                                                     key.ignore_special,
@@ -285,15 +303,16 @@ auto CreateTreeIdGitMap(
                             return;
                         }
                         // check if tree is known to local CAS
-                        auto const& cas = Storage::Instance().CAS();
-                        if (auto path = cas.TreePath(digest)) {
+                        if (local_api->IsAvailable(digest)) {
                             // Move tree locally from CAS to Git cache, then
                             // continue processing it by UploadToServeAndSetRoot
-                            MoveCASTreeToGitAndProcess(key.tree_info.hash,
+                            MoveCASTreeToGitAndProcess(*serve,
+                                                       storage_config,
+                                                       key.tree_info.hash,
                                                        digest,
                                                        import_to_git_map,
                                                        local_api,
-                                                       *remote_api,
+                                                       remote_api,
                                                        key.ignore_special,
                                                        ts,
                                                        setter,
@@ -310,7 +329,7 @@ auto CreateTreeIdGitMap(
                                               key.tree_info.hash),
                                   /*fatal=*/true);
                     },
-                    [logger, target_path = StorageConfig::GitRoot()](
+                    [logger, target_path = storage_config->GitRoot()](
                         auto const& msg, bool fatal) {
                         (*logger)(
                             fmt::format("While running critical Git op "
@@ -341,7 +360,7 @@ auto CreateTreeIdGitMap(
         git_tree_fetch_map->ConsumeAfterKeysReady(
             ts,
             {key.tree_info},
-            [key, setter](auto const& values) {
+            [storage_config, key, setter](auto const& values) {
                 // tree is now in Git cache;
                 // get cache hit info
                 auto is_cache_hit = *values[0];
@@ -352,7 +371,7 @@ auto CreateTreeIdGitMap(
                                        ? FileRoot::kGitTreeIgnoreSpecialMarker
                                        : FileRoot::kGitTreeMarker,
                                    key.tree_info.hash,
-                                   StorageConfig::GitRoot().string()}),
+                                   storage_config->GitRoot().string()}),
                               is_cache_hit));
             },
             [logger, tree_id = key.tree_info.hash](auto const& msg,

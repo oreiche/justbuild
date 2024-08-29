@@ -18,11 +18,18 @@
 #include "build/bazel/remote/execution/v2/remote_execution.grpc.pb.h"
 #include "gsl/gsl"
 #include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
 
 class ActionCacheServiceImpl final : public bazel_re::ActionCache::Service {
   public:
+    explicit ActionCacheServiceImpl(
+        gsl::not_null<LocalContext const*> const& local_context) noexcept
+        : storage_config_{*local_context->storage_config},
+          storage_{*local_context->storage} {}
+
     // Retrieve a cached execution result.
     //
     // Implementations SHOULD ensure that any blobs referenced from the
@@ -61,7 +68,8 @@ class ActionCacheServiceImpl final : public bazel_re::ActionCache::Service {
         ::bazel_re::ActionResult* response) -> ::grpc::Status override;
 
   private:
-    gsl::not_null<Storage const*> storage_ = &Storage::Instance();
+    StorageConfig const& storage_config_;
+    Storage const& storage_;
     Logger logger_{"execution-service"};
 };
 

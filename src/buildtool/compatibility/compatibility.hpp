@@ -39,9 +39,6 @@ class Compatibility {
     }
     static void SetCompatible(bool value = true) noexcept {
         Instance().compatible_ = value;
-        auto const hasher_type = value ? HashFunction::JustHash::Compatible
-                                       : HashFunction::JustHash::Native;
-        HashFunction::SetHashType(hasher_type);
     }
 
     [[nodiscard]] static auto RegisterGitEntry(std::string const& git_hash,
@@ -57,9 +54,9 @@ class Compatibility {
                 return it->second;
             }
         }
-        // This is only used in compatible mode. Therefore, the default hash
-        // function produces the compatible hash.
-        auto compatible_hash = HashFunction::ComputeHash(data).HexString();
+        // This is only used in compatible mode.
+        HashFunction const hash_function{HashFunction::Type::PlainSHA256};
+        auto compatible_hash = hash_function.PlainHashData(data).HexString();
         std::unique_lock lock_{Instance().mutex_};
         Instance().git_to_compatible_[git_hash] = compatible_hash;
         Instance().compatible_to_git_[compatible_hash] = {git_hash, repo};

@@ -12,65 +12,181 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/execution_api/remote/bazel/bazel_api.hpp"
+
 #include <cstdlib>
 #include <string>
 
 #include "catch2/catch_test_macros.hpp"
-#include "src/buildtool/execution_api/remote/bazel/bazel_api.hpp"
+#include "src/buildtool/common/remote/retry_config.hpp"
+#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "test/buildtool/execution_api/common/api_test.hpp"
-#include "test/utils/test_env.hpp"
+#include "test/utils/remote_execution/test_auth_config.hpp"
+#include "test/utils/remote_execution/test_remote_config.hpp"
 
 namespace {
 
-auto const kApiFactory = []() {
-    static auto const& server = RemoteExecutionConfig::RemoteAddress();
-    return IExecutionApi::Ptr{
-        new BazelApi{"remote-execution", server->host, server->port, {}}};
+class FactoryApi final {
+  public:
+    explicit FactoryApi(
+        gsl::not_null<ServerAddress const*> const& server_address,
+        gsl::not_null<Auth const*> const& auth,
+        HashFunction hash_function) noexcept
+        : address_{*server_address},
+          auth_{*auth},
+          hash_function_{hash_function} {}
+
+    [[nodiscard]] auto operator()() const -> IExecutionApi::Ptr {
+        static RetryConfig retry_config{};  // default retry config
+        return IExecutionApi::Ptr{new BazelApi{"remote-execution",
+                                               address_.host,
+                                               address_.port,
+                                               &auth_,
+                                               &retry_config,
+                                               {},
+                                               hash_function_}};
+    }
+
+  private:
+    ServerAddress const& address_;
+    Auth const& auth_;
+    HashFunction const hash_function_;
 };
 
 }  // namespace
 
 TEST_CASE("BazelAPI: No input, no output", "[execution_api]") {
-    TestNoInputNoOutput(kApiFactory,
-                        RemoteExecutionConfig::PlatformProperties());
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+    auto auth = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth);
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    FactoryApi api_factory{
+        &*remote_config->remote_address, &*auth, hash_function};
+    TestNoInputNoOutput(api_factory, remote_config->platform_properties);
 }
 
 TEST_CASE("BazelAPI: No input, create output", "[execution_api]") {
-    TestNoInputCreateOutput(kApiFactory,
-                            RemoteExecutionConfig::PlatformProperties());
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+    auto auth = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth);
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    FactoryApi api_factory{
+        &*remote_config->remote_address, &*auth, hash_function};
+    TestNoInputCreateOutput(api_factory, remote_config->platform_properties);
 }
 
 TEST_CASE("BazelAPI: One input copied to output", "[execution_api]") {
-    TestOneInputCopiedToOutput(kApiFactory,
-                               RemoteExecutionConfig::PlatformProperties());
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+    auto auth = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth);
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    FactoryApi api_factory{
+        &*remote_config->remote_address, &*auth, hash_function};
+    TestOneInputCopiedToOutput(api_factory, remote_config->platform_properties);
 }
 
 TEST_CASE("BazelAPI: Non-zero exit code, create output", "[execution_api]") {
-    TestNonZeroExitCodeCreateOutput(
-        kApiFactory, RemoteExecutionConfig::PlatformProperties());
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+    auto auth = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth);
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    FactoryApi api_factory{
+        &*remote_config->remote_address, &*auth, hash_function};
+    TestNonZeroExitCodeCreateOutput(api_factory,
+                                    remote_config->platform_properties);
 }
 
 TEST_CASE("BazelAPI: Retrieve two identical trees to path", "[execution_api]") {
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+    auto auth = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth);
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    FactoryApi api_factory{
+        &*remote_config->remote_address, &*auth, hash_function};
     TestRetrieveTwoIdenticalTreesToPath(
-        kApiFactory, RemoteExecutionConfig::PlatformProperties(), "two_trees");
+        api_factory, remote_config->platform_properties, "two_trees");
 }
 
 TEST_CASE("BazelAPI: Retrieve file and symlink with same content to path",
           "[execution_api]") {
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+    auto auth = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth);
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    FactoryApi api_factory{
+        &*remote_config->remote_address, &*auth, hash_function};
     TestRetrieveFileAndSymlinkWithSameContentToPath(
-        kApiFactory,
-        RemoteExecutionConfig::PlatformProperties(),
-        "file_and_symlink");
+        api_factory, remote_config->platform_properties, "file_and_symlink");
 }
 
 TEST_CASE("BazelAPI: Retrieve mixed blobs and trees", "[execution_api]") {
-    TestRetrieveMixedBlobsAndTrees(kApiFactory,
-                                   RemoteExecutionConfig::PlatformProperties(),
-                                   "blobs_and_trees");
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+    auto auth = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth);
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    FactoryApi api_factory{
+        &*remote_config->remote_address, &*auth, hash_function};
+    TestRetrieveMixedBlobsAndTrees(
+        api_factory, remote_config->platform_properties, "blobs_and_trees");
 }
 
 TEST_CASE("BazelAPI: Create directory prior to execution", "[execution_api]") {
-    TestCreateDirPriorToExecution(kApiFactory,
-                                  RemoteExecutionConfig::PlatformProperties());
+    auto remote_config = TestRemoteConfig::ReadFromEnvironment();
+    REQUIRE(remote_config);
+    REQUIRE(remote_config->remote_address);
+    auto auth = TestAuthConfig::ReadFromEnvironment();
+    REQUIRE(auth);
+
+    HashFunction const hash_function{Compatibility::IsCompatible()
+                                         ? HashFunction::Type::PlainSHA256
+                                         : HashFunction::Type::GitSHA1};
+
+    FactoryApi api_factory{
+        &*remote_config->remote_address, &*auth, hash_function};
+    TestCreateDirPriorToExecution(api_factory,
+                                  remote_config->platform_properties);
 }

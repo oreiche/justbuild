@@ -18,7 +18,9 @@
 #include <chrono>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>  // std::move
 #include <vector>
 
@@ -26,8 +28,9 @@
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_response.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/logging/logger.hpp"
-#include "src/buildtool/storage/storage.hpp"
+#include "src/utils/cpp/tmp_dir.hpp"
 
 class LocalApi;
 
@@ -46,6 +49,8 @@ class LocalAction final : public IExecutionAction {
     using OutputDirOrSymlink =
         std::variant<bazel_re::OutputDirectory, bazel_re::OutputSymlink>;
 
+    using FileCopies = std::unordered_map<Artifact::ObjectInfo, TmpDirPtr>;
+
     auto Execute(Logger const* logger) noexcept
         -> IExecutionResponse::Ptr final;
 
@@ -57,26 +62,30 @@ class LocalAction final : public IExecutionAction {
 
   private:
     Logger logger_{"LocalExecution"};
-    gsl::not_null<Storage const*> storage_;
-    ArtifactDigest root_digest_{};
-    std::vector<std::string> cmdline_{};
+    LocalContext const& local_context_;
+    ArtifactDigest const root_digest_{};
+    std::vector<std::string> const cmdline_{};
+    std::string const cwd_{};
     std::vector<std::string> output_files_{};
     std::vector<std::string> output_dirs_{};
-    std::map<std::string, std::string> env_vars_{};
-    std::vector<bazel_re::Platform_Property> properties_;
+    std::map<std::string, std::string> const env_vars_{};
+    std::vector<bazel_re::Platform_Property> const properties_;
     std::chrono::milliseconds timeout_{kDefaultTimeout};
     CacheFlag cache_flag_{CacheFlag::CacheOutput};
 
-    LocalAction(gsl::not_null<Storage const*> const& storage,
-                ArtifactDigest root_digest,
-                std::vector<std::string> command,
-                std::vector<std::string> output_files,
-                std::vector<std::string> output_dirs,
-                std::map<std::string, std::string> env_vars,
-                std::map<std::string, std::string> const& properties) noexcept
-        : storage_{storage},
+    explicit LocalAction(
+        gsl::not_null<LocalContext const*> local_context,
+        ArtifactDigest root_digest,
+        std::vector<std::string> command,
+        std::string cwd,
+        std::vector<std::string> output_files,
+        std::vector<std::string> output_dirs,
+        std::map<std::string, std::string> env_vars,
+        std::map<std::string, std::string> const& properties) noexcept
+        : local_context_{*local_context},
           root_digest_{std::move(root_digest)},
           cmdline_{std::move(command)},
+          cwd_{std::move(cwd)},
           output_files_{std::move(output_files)},
           output_dirs_{std::move(output_dirs)},
           env_vars_{std::move(env_vars)},
@@ -88,17 +97,22 @@ class LocalAction final : public IExecutionAction {
 
     [[nodiscard]] auto CreateActionDigest(bazel_re::Digest const& exec_dir,
                                           bool do_not_cache)
-        -> bazel_re::Digest {
-        return BazelMsgFactory::CreateActionDigestFromCommandLine(
-            cmdline_,
-            exec_dir,
-            output_files_,
-            output_dirs_,
-            BazelMsgFactory::CreateMessageVectorFromMap<
-                bazel_re::Command_EnvironmentVariable>(env_vars_),
-            properties_,
-            do_not_cache,
-            timeout_);
+        -> std::optional<bazel_re::Digest> {
+        auto const env_vars = BazelMsgFactory::CreateMessageVectorFromMap<
+            bazel_re::Command_EnvironmentVariable>(env_vars_);
+
+        BazelMsgFactory::ActionDigestRequest request{
+            .command_line = &cmdline_,
+            .cwd = &cwd_,
+            .output_files = &output_files_,
+            .output_dirs = &output_dirs_,
+            .env_vars = &env_vars,
+            .properties = &properties_,
+            .exec_dir = &exec_dir,
+            .hash_function = local_context_.storage_config->hash_function,
+            .timeout = timeout_,
+            .skip_action_cache = do_not_cache};
+        return BazelMsgFactory::CreateActionDigestFromCommandLine(request);
     }
 
     [[nodiscard]] auto Run(bazel_re::Digest const& action_id) const noexcept
@@ -106,7 +120,8 @@ class LocalAction final : public IExecutionAction {
 
     [[nodiscard]] auto StageInput(
         std::filesystem::path const& target_path,
-        Artifact::ObjectInfo const& info) const noexcept -> bool;
+        Artifact::ObjectInfo const& info,
+        gsl::not_null<FileCopies*> copies) const noexcept -> bool;
 
     /// \brief Stage input artifacts and leaf trees to the execution directory.
     /// Stage artifacts and their parent directory structure from CAS to the
@@ -114,7 +129,8 @@ class LocalAction final : public IExecutionAction {
     /// \param[in] exec_path Absolute path to the execution directory.
     /// \returns Success indicator.
     [[nodiscard]] auto StageInputs(
-        std::filesystem::path const& exec_path) const noexcept -> bool;
+        std::filesystem::path const& exec_path,
+        gsl::not_null<FileCopies*> copies) const noexcept -> bool;
 
     [[nodiscard]] auto CreateDirectoryStructure(
         std::filesystem::path const& exec_path) const noexcept -> bool;

@@ -15,15 +15,20 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_STORAGE_LOCAL_AC_HPP
 #define INCLUDED_SRC_BUILDTOOL_STORAGE_LOCAL_AC_HPP
 
-#include <utility>  // std::move
+#include <memory>
+#include <optional>
+#include <string>
 
 #include "gsl/gsl"
-#include "src/buildtool/execution_api/common/execution_common.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/logger.hpp"
-#include "src/buildtool/storage/garbage_collector.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/local_cas.hpp"
+#include "src/buildtool/storage/uplinker.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 // forward declarations
 namespace build::bazel::remote::execution::v2 {
@@ -33,19 +38,21 @@ class ActionResult;
 namespace bazel_re = build::bazel::remote::execution::v2;
 
 /// \brief The action cache for storing action results.
-/// Supports global uplinking across all generations using the garbage
-/// collector. The uplink is automatically performed for every entry that is
-/// read and already exists in an older generation.
-/// \tparam kDoGlobalUplink     Enable global uplinking via garbage collector.
+/// Supports global uplinking across all generations. The uplink is
+/// automatically performed for every entry that is read and already exists in
+/// an older generation.
+/// \tparam kDoGlobalUplink     Enable global uplinking.
 template <bool kDoGlobalUplink>
 class LocalAC {
   public:
     /// Local AC generation used by GC without global uplink.
     using LocalGenerationAC = LocalAC</*kDoGlobalUplink=*/false>;
 
-    LocalAC(std::shared_ptr<LocalCAS<kDoGlobalUplink>> cas,
-            std::filesystem::path const& store_path) noexcept
-        : cas_{std::move(cas)}, file_store_{store_path} {};
+    explicit LocalAC(gsl::not_null<LocalCAS<kDoGlobalUplink> const*> const& cas,
+                     GenerationConfig const& config,
+                     gsl::not_null<Uplinker<kDoGlobalUplink> const*> const&
+                         uplinker) noexcept
+        : cas_{*cas}, file_store_{config.action_cache}, uplinker_{*uplinker} {}
 
     LocalAC(LocalAC const&) = default;
     LocalAC(LocalAC&&) noexcept = default;
@@ -75,7 +82,8 @@ class LocalAC {
     /// \param action_id    The id of the action used as entry key.
     /// \returns True if entry was successfully uplinked.
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
-    requires(kIsLocalGeneration) [[nodiscard]] auto LocalUplinkEntry(
+        requires(kIsLocalGeneration)
+    [[nodiscard]] auto LocalUplinkEntry(
         LocalGenerationAC const& latest,
         bazel_re::Digest const& action_id) const noexcept -> bool;
 
@@ -88,12 +96,40 @@ class LocalAC {
         kDoGlobalUplink ? StoreMode::LastWins : StoreMode::FirstWins;
 
     std::shared_ptr<Logger> logger_{std::make_shared<Logger>("LocalAC")};
-    gsl::not_null<std::shared_ptr<LocalCAS<kDoGlobalUplink>>> cas_;
+    LocalCAS<kDoGlobalUplink> const& cas_;
     FileStorage<ObjectType::File, kStoreMode, /*kSetEpochTime=*/false>
         file_store_;
+    Uplinker<kDoGlobalUplink> const& uplinker_;
 
-    [[nodiscard]] auto ReadResult(bazel_re::Digest const& digest) const noexcept
-        -> std::optional<bazel_re::ActionResult>;
+    /// \brief Add an entry to the ActionCache.
+    /// \param action_id The id of the action that produced the result.
+    /// \param cas_key The key pointing at an ActionResult in the LocalCAS.
+    /// \return True if an entry was successfully added to the storage.
+    [[nodiscard]] auto WriteActionKey(
+        ArtifactDigest const& action_id,
+        ArtifactDigest const& cas_key) const noexcept -> bool;
+
+    /// \brief Get the key pointing at an ActionResult in the LocalCAS.
+    /// \param action_id The id of the action that produced the result.
+    /// \return The key of an Action pointing at an ActionResult in the LocalCAS
+    /// on success or an error message on failure.
+    [[nodiscard]] auto ReadActionKey(bazel_re::Digest const& action_id)
+        const noexcept -> expected<bazel_re::Digest, std::string>;
+
+    /// \brief Add an action to the LocalCAS.
+    /// \param action The action result to store.
+    /// \return The key pointing at an ActionResult present in the LocalCAS on
+    /// success or std::nullopt on failure.
+    [[nodiscard]] auto WriteAction(bazel_re::ActionResult const& action)
+        const noexcept -> std::optional<bazel_re::Digest>;
+
+    /// \brief Get the action specified by a key from the LocalCAS.
+    /// \param cas_key The key pointing at an ActionResult present in the
+    /// LocalCAS.
+    /// \return The ActionResult corresponding to a cas_key on success
+    /// or std::nullopt on failure.
+    [[nodiscard]] auto ReadAction(bazel_re::Digest const& cas_key)
+        const noexcept -> std::optional<bazel_re::ActionResult>;
 };
 
 #ifndef BOOTSTRAP_BUILD_TOOL

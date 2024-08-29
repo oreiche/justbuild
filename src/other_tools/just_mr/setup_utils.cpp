@@ -15,62 +15,16 @@
 #include "src/other_tools/just_mr/setup_utils.hpp"
 
 #include <fstream>
-#include <memory>
-#include <optional>
-#include <string>
 #include <unordered_set>
+#include <variant>
 
 #include "nlohmann/json.hpp"
-#include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/build_engine/expression/expression.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
-#include "src/buildtool/execution_api/remote/bazel/bazel_api.hpp"
+#include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
-#include "src/buildtool/serve_api/remote/config.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
-
-namespace {
-
-void SetupAuthConfig(MultiRepoRemoteAuthArguments const& authargs) noexcept {
-    bool use_tls{false};
-    if (authargs.tls_ca_cert) {
-        use_tls = true;
-        if (not Auth::TLS::SetCACertificate(*authargs.tls_ca_cert)) {
-            Logger::Log(LogLevel::Error,
-                        "Could not read '{}' certificate.",
-                        authargs.tls_ca_cert->string());
-            std::exit(kExitConfigError);
-        }
-    }
-    if (authargs.tls_client_cert) {
-        use_tls = true;
-        if (not Auth::TLS::SetClientCertificate(*authargs.tls_client_cert)) {
-            Logger::Log(LogLevel::Error,
-                        "Could not read '{}' certificate.",
-                        authargs.tls_client_cert->string());
-            std::exit(kExitConfigError);
-        }
-    }
-    if (authargs.tls_client_key) {
-        use_tls = true;
-        if (not Auth::TLS::SetClientKey(*authargs.tls_client_key)) {
-            Logger::Log(LogLevel::Error,
-                        "Could not read '{}' key.",
-                        authargs.tls_client_key->string());
-            std::exit(kExitConfigError);
-        }
-    }
-
-    if (use_tls) {
-        if (not Auth::TLS::Validate()) {
-            std::exit(kExitConfigError);
-        }
-    }
-}
-
-}  // namespace
 
 namespace JustMR::Utils {
 
@@ -239,47 +193,77 @@ auto ReadConfiguration(
     }
 }
 
-auto GetRemoteApi(std::optional<std::string> const& remote_exec_addr,
-                  std::optional<std::string> const& remote_serve_addr,
-                  MultiRepoRemoteAuthArguments const& auth) noexcept
-    -> IExecutionApi::Ptr {
+auto CreateAuthConfig(MultiRepoRemoteAuthArguments const& authargs) noexcept
+    -> std::optional<Auth> {
+
+    Auth::TLS::Builder tls_builder;
+    tls_builder.SetCACertificate(authargs.tls_ca_cert)
+        .SetClientCertificate(authargs.tls_client_cert)
+        .SetClientKey(authargs.tls_client_key);
+
+    // create auth config (including validation)
+    auto result = tls_builder.Build();
+    if (result) {
+        if (*result) {
+            // correctly configured TLS/SSL certification
+            return *std::move(*result);
+        }
+        Logger::Log(LogLevel::Error, result->error());
+        return std::nullopt;
+    }
+
+    // no TLS/SSL configuration was given, and we currently support no other
+    // certification method, so return an empty config (no certification)
+    return Auth{};
+}
+
+auto CreateLocalExecutionConfig(MultiRepoCommonArguments const& cargs) noexcept
+    -> std::optional<LocalExecutionConfig> {
+
+    LocalExecutionConfig::Builder builder;
+    if (cargs.local_launcher.has_value()) {
+        builder.SetLauncher(*cargs.local_launcher);
+    }
+
+    auto config = builder.Build();
+    if (config) {
+        return *std::move(config);
+    }
+    Logger::Log(LogLevel::Error, config.error());
+    return std::nullopt;
+}
+
+auto CreateRemoteExecutionConfig(
+    std::optional<std::string> const& remote_exec_addr,
+    std::optional<std::string> const& remote_serve_addr) noexcept
+    -> std::optional<RemoteExecutionConfig> {
     // if only a serve endpoint address is given, we assume it is one that acts
     // also as remote-execution
     auto remote_addr = remote_exec_addr ? remote_exec_addr : remote_serve_addr;
-    if (remote_addr) {
-        // setup authentication
-        SetupAuthConfig(auth);
-        // setup remote
-        if (not RemoteExecutionConfig::SetRemoteAddress(*remote_addr)) {
-            Logger::Log(LogLevel::Error,
-                        "setting remote execution address '{}' failed.",
-                        *remote_addr);
-            std::exit(kExitConfigError);
-        }
-        auto address = RemoteExecutionConfig::RemoteAddress();
-        ExecutionConfiguration config;
-        config.skip_cache_lookup = false;
-        return std::make_unique<BazelApi>(
-            "remote-execution", address->host, address->port, config);
+
+    RemoteExecutionConfig::Builder builder;
+    auto config = builder.SetRemoteAddress(remote_addr).Build();
+
+    if (config) {
+        return *std::move(config);
     }
-    return nullptr;
+
+    Logger::Log(LogLevel::Error, config.error());
+    return std::nullopt;
 }
 
-auto SetupServeApi(std::optional<std::string> const& remote_serve_addr,
-                   MultiRepoRemoteAuthArguments const& auth) noexcept -> bool {
-    if (remote_serve_addr) {
-        // setup authentication
-        SetupAuthConfig(auth);
-        // setup remote
-        if (not RemoteServeConfig::SetRemoteAddress(*remote_serve_addr)) {
-            Logger::Log(LogLevel::Error,
-                        "setting remote serve service address '{}' failed.",
-                        *remote_serve_addr);
-            std::exit(kExitConfigError);
-        }
-        return true;
+auto CreateServeConfig(
+    std::optional<std::string> const& remote_serve_addr) noexcept
+    -> std::optional<RemoteServeConfig> {
+    RemoteServeConfig::Builder builder;
+    auto config = builder.SetRemoteAddress(remote_serve_addr).Build();
+
+    if (config) {
+        return *std::move(config);
     }
-    return false;
+
+    Logger::Log(LogLevel::Error, config.error());
+    return std::nullopt;
 }
 
 }  // namespace JustMR::Utils

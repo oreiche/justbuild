@@ -18,13 +18,13 @@
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
-#include "src/buildtool/storage/config.hpp"
 
 auto ReadLocationObject(nlohmann::json const& location,
                         std::optional<std::filesystem::path> const& ws_root)
-    -> std::variant<std::string, std::optional<location_res_t>> {
+    -> expected<std::optional<location_res_t>, std::string> {
     if (not location.contains("path") or not location.contains("root")) {
-        return fmt::format("Malformed location object: {}", location.dump(-1));
+        return unexpected(
+            fmt::format("Malformed location object: {}", location.dump(-1)));
     }
     auto root = location["root"].get<std::string>();
     auto path = location["path"].get<std::string>();
@@ -37,18 +37,19 @@ auto ReadLocationObject(nlohmann::json const& location,
             Logger::Log(LogLevel::Warning,
                         "Not in workspace root, ignoring location {}.",
                         location.dump(-1));
-            return std::nullopt;
+            return std::optional<location_res_t>{std::nullopt};
         }
         root_path = *ws_root;
     }
     if (root == "home") {
-        root_path = StorageConfig::GetUserHome();
+        root_path = FileSystemManager::GetUserHome();
     }
     if (root == "system") {
         root_path = FileSystemManager::GetCurrentDirectory().root_path();
     }
-    return std::make_pair(std::filesystem::weakly_canonical(
-                              std::filesystem::absolute(root_path / path)),
-                          std::filesystem::weakly_canonical(
-                              std::filesystem::absolute(root_path / base)));
+    return std::optional<location_res_t>{
+        std::make_pair(std::filesystem::weakly_canonical(
+                           std::filesystem::absolute(root_path / path)),
+                       std::filesystem::weakly_canonical(
+                           std::filesystem::absolute(root_path / base)))};
 }

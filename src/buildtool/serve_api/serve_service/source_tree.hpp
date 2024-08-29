@@ -20,20 +20,26 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "gsl/gsl"
 #include "justbuild/just_serve/just_serve.grpc.pb.h"
 #include "src/buildtool/common/remote/remote_common.hpp"
-#include "src/buildtool/execution_api/common/create_execution_api.hpp"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/file_system/git_types.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
 #include "src/buildtool/file_system/symlinks_map/resolve_symlinks_map.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/serve_api/remote/config.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 // Service for improved interaction with the target-level cache.
 class SourceTreeService final
@@ -54,6 +60,15 @@ class SourceTreeService final
         ::justbuild::just_serve::CheckRootTreeResponse;
     using GetRemoteTreeResponse =
         ::justbuild::just_serve::GetRemoteTreeResponse;
+
+    explicit SourceTreeService(
+        gsl::not_null<RemoteServeConfig const*> const& serve_config,
+        gsl::not_null<LocalContext const*> const& local_context,
+        gsl::not_null<ApiBundle const*> const& apis) noexcept
+        : serve_config_{*serve_config},
+          storage_{*local_context->storage},
+          storage_config_{*local_context->storage_config},
+          apis_{*apis} {}
 
     // Retrieve the Git-subtree identifier from a given Git commit.
     //
@@ -119,58 +134,54 @@ class SourceTreeService final
         GetRemoteTreeResponse* response) -> ::grpc::Status override;
 
   private:
+    RemoteServeConfig const& serve_config_;
+    StorageConfig const& storage_config_;
+    Storage const& storage_;
+    ApiBundle const& apis_;
     mutable std::shared_mutex mutex_;
     std::shared_ptr<Logger> logger_{std::make_shared<Logger>("serve-service")};
-
-    // remote execution endpoint
-    gsl::not_null<IExecutionApi::Ptr> const remote_api_{
-        CreateExecutionApi(RemoteExecutionConfig::RemoteAddress(),
-                           std::nullopt,
-                           "serve-remote-execution")};
-    // local api
-    gsl::not_null<IExecutionApi::Ptr> const local_api_{
-        CreateExecutionApi(std::nullopt)};
     // symlinks resolver map
     ResolveSymlinksMap resolve_symlinks_map_{CreateResolveSymlinksMap()};
 
     /// \brief Check if commit exists and tries to get the subtree if found.
-    /// \returns An error + data union, where at index 0 is a failure type flag
-    /// and at index 1 is the subtree hash on success. The failure flag is false
-    /// if commit was not found and true if failed otherwise.
+    /// \returns The subtree hash on success or an unexpected error (fatal or
+    /// commit was not found).
     [[nodiscard]] static auto GetSubtreeFromCommit(
         std::filesystem::path const& repo_path,
         std::string const& commit,
         std::string const& subdir,
         std::shared_ptr<Logger> const& logger)
-        -> std::variant<bool, std::string>;
+        -> expected<std::string, GitLookupError>;
 
     /// \brief Check if tree exists and tries to get the subtree if found.
-    /// \returns An error + data union, where at index 0 is a failure type flag
-    /// and at index 1 is the subtree hash on success. The failure flag is true
-    /// if repository could not be opened (i.e., fatal failure), false if the
-    /// check for the subtree itself failed.
+    /// \returns The subtree hash on success or an unexpected error (fatal or
+    /// subtree not found).
     [[nodiscard]] static auto GetSubtreeFromTree(
         std::filesystem::path const& repo_path,
         std::string const& tree_id,
         std::string const& subdir,
         std::shared_ptr<Logger> const& logger)
-        -> std::variant<bool, std::string>;
+        -> expected<std::string, GitLookupError>;
 
     /// \brief Tries to retrieve the blob from a repository.
-    /// \returns An error + data union, where at index 0 is a failure type flag
-    /// and at index 1 is the subtree hash on success. The failure flag is false
-    /// if blob was not found and true if failed otherwise.
+    /// \returns The subtree hash on success or an unexpected error (fatal or
+    /// blob not found).
     [[nodiscard]] static auto GetBlobFromRepo(
         std::filesystem::path const& repo_path,
         std::string const& blob_id,
         std::shared_ptr<Logger> const& logger)
-        -> std::variant<bool, std::string>;
+        -> expected<std::string, GitLookupError>;
 
     [[nodiscard]] auto SyncArchive(std::string const& tree_id,
                                    std::filesystem::path const& repo_path,
                                    bool sync_tree,
                                    ServeArchiveTreeResponse* response)
         -> ::grpc::Status;
+
+    template <ObjectType kType, typename TResponse>
+    [[nodiscard]] auto SyncGitEntryToCas(std::string const& object_hash,
+                                         std::filesystem::path const& repo_path)
+        const noexcept -> std::remove_cvref_t<decltype(TResponse::OK)>;
 
     /// \brief Resolves a tree from given repository with respect to symlinks.
     /// The resolved tree will always be placed in the Git cache.
@@ -183,12 +194,11 @@ class SourceTreeService final
         ServeArchiveTreeResponse* response) -> ::grpc::Status;
 
     /// \brief Common import-to-git utility, used by both archives and distdirs.
-    /// \returns An error + data union, where at index 0 is the error message on
-    /// failure and at index 1 is the root tree id of the committed directory on
-    /// success.
+    /// \returns The root tree id on of the committed directory on success or an
+    /// unexpected error as string.
     [[nodiscard]] auto CommonImportToGit(std::filesystem::path const& root_path,
                                          std::string const& commit_message)
-        -> std::variant<std::string, std::string>;
+        -> expected<std::string, std::string>;
 
     [[nodiscard]] auto ArchiveImportToGit(
         std::filesystem::path const& unpack_path,

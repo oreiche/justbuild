@@ -12,74 +12,67 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/common/artifact_description.hpp"
+
 #include <filesystem>
 #include <string>
 
 #include "catch2/catch_test_macros.hpp"
+#include "nlohmann/json.hpp"
 #include "src/buildtool/common/artifact.hpp"
-#include "src/buildtool/common/artifact_description.hpp"
-#include "src/buildtool/common/artifact_factory.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 
-[[nodiscard]] auto operator==(Artifact const& lhs, Artifact const& rhs)
-    -> bool {
+[[nodiscard]] auto operator==(Artifact const& lhs,
+                              Artifact const& rhs) -> bool {
     return lhs.Id() == rhs.Id() and lhs.FilePath() == rhs.FilePath() and
            lhs.Info() == rhs.Info();
 }
 
 TEST_CASE("Local artifact", "[artifact_description]") {
-    auto local_desc =
-        ArtifactDescription{std::filesystem::path{"local_path"}, "repo"};
-    auto local = local_desc.ToArtifact();
-    auto local_from_factory =
-        ArtifactFactory::FromDescription(local_desc.ToJson());
-    CHECK(local == *local_from_factory);
+    auto local_desc = ArtifactDescription::CreateLocal(
+        std::filesystem::path{"local_path"}, "repo");
+    auto from_json = ArtifactDescription::FromJson(local_desc.ToJson());
+    CHECK(local_desc == *from_json);
 }
 
 TEST_CASE("Known artifact", "[artifact_description]") {
     SECTION("File object") {
-        auto known_desc = ArtifactDescription{
+        auto known_desc = ArtifactDescription::CreateKnown(
             ArtifactDigest{std::string{"f_fake_hash"}, 0, /*is_tree=*/false},
-            ObjectType::File};
-        auto known = known_desc.ToArtifact();
-        auto known_from_factory =
-            ArtifactFactory::FromDescription(known_desc.ToJson());
-        CHECK(known == *known_from_factory);
+            ObjectType::File);
+        auto from_json = ArtifactDescription::FromJson(known_desc.ToJson());
+        CHECK(known_desc == *from_json);
     }
     SECTION("Executable object") {
-        auto known_desc = ArtifactDescription{
+        auto known_desc = ArtifactDescription::CreateKnown(
             ArtifactDigest{std::string{"x_fake_hash"}, 1, /*is_tree=*/false},
-            ObjectType::Executable};
-        auto known = known_desc.ToArtifact();
-        auto known_from_factory =
-            ArtifactFactory::FromDescription(known_desc.ToJson());
-        CHECK(known == *known_from_factory);
+            ObjectType::Executable);
+        auto from_json = ArtifactDescription::FromJson(known_desc.ToJson());
+        CHECK(known_desc == *from_json);
     }
     SECTION("Symlink object") {
-        auto known_desc = ArtifactDescription{
+        auto known_desc = ArtifactDescription::CreateKnown(
             ArtifactDigest{std::string{"l_fake_hash"}, 2, /*is_tree=*/false},
-            ObjectType::Symlink};
-        auto known = known_desc.ToArtifact();
-        auto known_from_factory =
-            ArtifactFactory::FromDescription(known_desc.ToJson());
-        CHECK(known == *known_from_factory);
+            ObjectType::Symlink);
+        auto from_json = ArtifactDescription::FromJson(known_desc.ToJson());
+        CHECK(known_desc == *from_json);
     }
 }
 
 TEST_CASE("Action artifact", "[artifact_description]") {
-    auto action_desc =
-        ArtifactDescription{"action_id", std::filesystem::path{"out_path"}};
-    auto action = action_desc.ToArtifact();
-    auto action_from_factory =
-        ArtifactFactory::FromDescription(action_desc.ToJson());
-    CHECK(action == *action_from_factory);
+    auto action_desc = ArtifactDescription::CreateAction(
+        "action_id", std::filesystem::path{"out_path"});
+    auto from_json = ArtifactDescription::FromJson(action_desc.ToJson());
+    CHECK(action_desc == *from_json);
 }
 
 TEST_CASE("From JSON", "[artifact_description]") {
-    auto local = ArtifactFactory::DescribeLocalArtifact("local", "repo");
+    auto local = ArtifactDescription::CreateLocal("local", "repo").ToJson();
     auto known =
-        ArtifactFactory::DescribeKnownArtifact("hash", 0, ObjectType::File);
-    auto action = ArtifactFactory::DescribeActionArtifact("id", "output");
+        ArtifactDescription::CreateKnown(
+            ArtifactDigest{"hash", 0, /*is_tree=*/false}, ObjectType::File)
+            .ToJson();
+    auto action = ArtifactDescription::CreateAction("id", "output").ToJson();
 
     SECTION("Parse artifacts") {
         CHECK(ArtifactDescription::FromJson(local));
@@ -153,4 +146,54 @@ TEST_CASE("From JSON", "[artifact_description]") {
             CHECK_FALSE(ArtifactDescription::FromJson(action));
         }
     }
+}
+
+TEST_CASE("Description missing mandatory key/value pair",
+          "[artifact_description]") {
+    nlohmann::json const missing_type = {{"data", {{"path", "some/path"}}}};
+    CHECK(not ArtifactDescription::FromJson(missing_type));
+    nlohmann::json const missing_data = {{"type", "LOCAL"}};
+    CHECK(not ArtifactDescription::FromJson(missing_data));
+}
+
+TEST_CASE("Local artifact description contains incorrect value for \"data\"",
+          "[artifact_description]") {
+    nlohmann::json const local_art_missing_path = {
+        {"type", "LOCAL"}, {"data", nlohmann::json::object()}};
+    CHECK(not ArtifactDescription::FromJson(local_art_missing_path));
+}
+
+TEST_CASE("Known artifact description contains incorrect value for \"data\"",
+          "[artifact_description]") {
+    std::string file_type{};
+    file_type += ToChar(ObjectType::File);
+    SECTION("missing \"id\"") {
+        nlohmann::json const known_art_missing_id = {
+            {"type", "KNOWN"},
+            {"data", {{"size", 15}, {"file_type", file_type}}}};
+        CHECK(not ArtifactDescription::FromJson(known_art_missing_id));
+    }
+    SECTION("missing \"size\"") {
+        nlohmann::json const known_art_missing_size = {
+            {"type", "KNOWN"},
+            {"data", {{"id", "known_input"}, {"file_type", file_type}}}};
+        CHECK(not ArtifactDescription::FromJson(known_art_missing_size));
+    }
+    SECTION("missing \"file_type\"") {
+        nlohmann::json const known_art_missing_file_type = {
+            {"type", "KNOWN"}, {"data", {{"id", "known_input"}, {"size", 15}}}};
+
+        CHECK(not ArtifactDescription::FromJson(known_art_missing_file_type));
+    }
+}
+
+TEST_CASE("Action artifact description contains incorrect value for \"data\"",
+          "[artifact_description]") {
+    nlohmann::json const action_art_missing_id = {
+        {"type", "ACTION"}, {"data", {{"path", "output/path"}}}};
+    CHECK(not ArtifactDescription::FromJson(action_art_missing_id));
+
+    nlohmann::json const action_art_missing_path = {
+        {"type", "ACTION"}, {"data", {{"id", "action_id"}}}};
+    CHECK(not ArtifactDescription::FromJson(action_art_missing_path));
 }

@@ -20,13 +20,13 @@
   , "private-deps":
     [ ["@", "catch2", "", "catch2"]
     , ["", "catch-main"]
-    , ["@", "src", "src/buildtool/crypto", "hash_function"]
     , ["@", "src", "src/buildtool/file_system", "file_system_manager"]
     , ["@", "src", "src/buildtool/file_system", "object_cas"]
     , ["@", "src", "src/buildtool/file_system", "object_type"]
     , ["@", "src", "src/buildtool/common", "bazel_types"]
     , ["@", "src", "src/buildtool/common", "common"]
-    , ["utils", "local_hermeticity"]
+    , ["@", "src", "src/buildtool/storage", "config"]
+    , ["utils", "test_storage_config"]
     ]
   , "stage": ["test", "buildtool", "file_system"]
   }
@@ -124,7 +124,9 @@
     , ["@", "src", "src/buildtool/logging", "logging"]
     , ["@", "src", "src/utils/cpp", "atomic"]
     , ["@", "src", "src/utils/cpp", "hex_string"]
+    , ["@", "src", "src/buildtool/storage", "config"]
     , ["utils", "shell_quoting"]
+    , ["utils", "test_storage_config"]
     ]
   , "stage": ["test", "buildtool", "file_system"]
   }
@@ -153,8 +155,8 @@
   , "stage": ["test", "buildtool", "file_system"]
   }
 , "TESTS":
-  { "type": "install"
-  , "tainted": ["test"]
+  { "type": ["@", "rules", "test", "suite"]
+  , "stage": ["file_system"]
   , "deps":
     [ "file_root"
     , "file_system_manager"

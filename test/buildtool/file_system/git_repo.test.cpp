@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/file_system/git_repo.hpp"
+
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
@@ -19,7 +21,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <variant>
 #include <vector>
 
 #include "catch2/catch_test_macros.hpp"
@@ -27,11 +28,12 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/git_cas.hpp"
-#include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/utils/cpp/atomic.hpp"
 #include "src/utils/cpp/hex_string.hpp"
+#include "test/utils/hermeticity/test_storage_config.hpp"
 #include "test/utils/shell_quoting.hpp"
 
 namespace {
@@ -181,7 +183,7 @@ TEST_CASE("Single-threaded real repository local operations", "[git_repo]") {
                         std::string(msg));
         });
 
-    SECTION("Stage and commit all") {
+    SECTION("Commit directory") {
         // make blank repo
         auto repo_commit_path = TestUtils::GetRepoPath();
         auto repo_commit =
@@ -195,9 +197,9 @@ TEST_CASE("Single-threaded real repository local operations", "[git_repo]") {
         REQUIRE(FileSystemManager::WriteFile(
             "test no 2", repo_commit_path / "test2.txt", true));
 
-        // stage and commit all
-        auto commit =
-            repo_commit->StageAndCommitAllAnonymous("test commit", logger);
+        // commit subdir
+        auto commit = repo_commit->CommitDirectory(
+            repo_commit_path, "test commit", logger);
         CHECK(commit);
     }
 
@@ -277,6 +279,8 @@ TEST_CASE("Single-threaded real repository local operations", "[git_repo]") {
 // warning
 TEST_CASE("Single-threaded fake repository operations -- batch 1",
           "[git_repo]") {
+    auto const storage_config = TestStorageConfig::Create();
+
     auto repo_path = TestUtils::CreateTestRepoWithCheckout();
     REQUIRE(repo_path);
     auto cas = GitCAS::Open(*repo_path);
@@ -419,7 +423,7 @@ TEST_CASE("Single-threaded fake repository operations -- batch 1",
 
             // fetch all with base refspecs
             REQUIRE(repo_fetch_all->LocalFetchViaTmpRepo(
-                *repo_path, std::nullopt, logger));
+                storage_config.Get(), *repo_path, std::nullopt, logger));
 
             // check commit is there after fetch
             CHECK(*repo_fetch_all->CheckCommitExists(kRootCommit, logger));
@@ -438,7 +442,7 @@ TEST_CASE("Single-threaded fake repository operations -- batch 1",
 
             // fetch branch
             REQUIRE(repo_fetch_branch->LocalFetchViaTmpRepo(
-                *repo_path, "master", logger));
+                storage_config.Get(), *repo_path, "master", logger));
 
             // check commit is there after fetch
             CHECK(*repo_fetch_branch->CheckCommitExists(kRootCommit, logger));
@@ -468,15 +472,15 @@ TEST_CASE("Single-threaded fake repository operations -- batch 2",
         SECTION("Get base tree id") {
             auto entry_root_c =
                 repo->GetSubtreeFromCommit(kRootCommit, ".", logger);
-            REQUIRE(std::holds_alternative<std::string>(entry_root_c));
-            CHECK(std::get<std::string>(entry_root_c) == kRootId);
+            REQUIRE(entry_root_c);
+            CHECK(*entry_root_c == kRootId);
         }
 
         SECTION("Get inner tree id") {
             auto entry_baz_c =
                 repo->GetSubtreeFromCommit(kRootCommit, "baz", logger);
-            REQUIRE(std::holds_alternative<std::string>(entry_baz_c));
-            CHECK(std::get<std::string>(entry_baz_c) == kBazId);
+            REQUIRE(entry_baz_c);
+            CHECK(*entry_baz_c == kBazId);
         }
     }
 
@@ -580,6 +584,8 @@ TEST_CASE("Single-threaded fake repository operations -- batch 2",
 }
 
 TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
+    auto const storage_config = TestStorageConfig::Create();
+
     /*
     Test all fake repository operations while being done in parallel.
     They are supposed to be thread-safe, so no conflicts should exist.
@@ -608,8 +614,11 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
         constexpr int NUM_CASES = 10;
         for (int id{}; id < kNumThreads; ++id) {
             threads.emplace_back(
-                [&remote_cas, &remote_repo_path, &logger, &starting_signal](
-                    int tid) {
+                [&storage_config,
+                 &remote_cas,
+                 &remote_repo_path,
+                 &logger,
+                 &starting_signal](int tid) {
                     starting_signal.wait(false);
                     // cases based on thread number
                     switch (tid % NUM_CASES) {
@@ -621,9 +630,8 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
                             auto entry_baz_c =
                                 remote_repo->GetSubtreeFromCommit(
                                     kRootCommit, "baz", logger);
-                            REQUIRE(std::holds_alternative<std::string>(
-                                entry_baz_c));
-                            CHECK(std::get<std::string>(entry_baz_c) == kBazId);
+                            REQUIRE(entry_baz_c);
+                            CHECK(*entry_baz_c == kBazId);
                         } break;
                         case 1: {
                             auto remote_repo = GitRepo::Open(remote_cas);
@@ -730,7 +738,10 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
                             REQUIRE(remote_repo->IsRepoFake());
                             // fetch all
                             REQUIRE(remote_repo->LocalFetchViaTmpRepo(
-                                *remote_repo_path, std::nullopt, logger));
+                                storage_config.Get(),
+                                *remote_repo_path,
+                                std::nullopt,
+                                logger));
                         } break;
                     }
                 },

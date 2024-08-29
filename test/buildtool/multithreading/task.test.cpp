@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/buildtool/multithreading/task.hpp"
+
 #include <functional>
 #include <utility>  // std::move
 
 #include "catch2/catch_test_macros.hpp"
-#include "src/buildtool/multithreading/task.hpp"
 
 namespace {
 constexpr int kDummyValue{5};
@@ -47,18 +48,18 @@ struct RefCaptureCallable {
 
 TEST_CASE("Default constructed task is empty", "[task]") {
     Task t;
-    CHECK(!t);
-    CHECK(!(Task()));
-    CHECK(!(Task{}));
+    CHECK(not t);
+    CHECK(not(Task()));
+    CHECK(not(Task{}));
 }
 
 TEST_CASE("Task constructed from empty function is empty", "[task]") {
     std::function<void()> empty_function;
     Task t_from_empty_function{empty_function};
 
-    CHECK(!Task(std::function<void()>{}));
-    CHECK(!Task(empty_function));
-    CHECK(!t_from_empty_function);
+    CHECK(not Task(std::function<void()>{}));
+    CHECK(not Task(empty_function));
+    CHECK(not t_from_empty_function);
 }
 
 TEST_CASE("Task constructed from user defined callable object is not empty",

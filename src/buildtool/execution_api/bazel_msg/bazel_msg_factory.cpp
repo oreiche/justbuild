@@ -25,7 +25,6 @@
 #include <utility>  // std::move
 #include <vector>
 
-#include "gsl/gsl"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/compatibility/native_support.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
@@ -33,137 +32,10 @@
 #include "src/utils/cpp/hex_string.hpp"
 
 namespace {
-
-/// \brief Abstract interface for bundle (message, content, and digest).
-/// Provides getters for content, corresponding digest, and creating a blob.
-class IBundle {
-  public:
-    using Ptr = std::unique_ptr<IBundle>;
-    using ContentCreateFunc = std::function<std::optional<std::string>()>;
-    using DigestCreateFunc =
-        std::function<bazel_re::Digest(std::string const&)>;
-
-    IBundle() = default;
-    IBundle(IBundle const&) = delete;
-    IBundle(IBundle&&) = delete;
-    auto operator=(IBundle const&) -> IBundle& = delete;
-    auto operator=(IBundle&&) -> IBundle& = delete;
-    virtual ~IBundle() noexcept = default;
-
-    [[nodiscard]] virtual auto Content() const& noexcept
-        -> std::string const& = 0;
-    [[nodiscard]] virtual auto Digest() const& noexcept
-        -> bazel_re::Digest const& = 0;
-    [[nodiscard]] auto MakeBlob(bool is_exec) const noexcept -> BazelBlob {
-        return BazelBlob{Digest(), Content(), is_exec};
-    }
+struct DirectoryNodeBundle final {
+    bazel_re::DirectoryNode const message;
+    BazelBlob const bazel_blob;
 };
-
-/// \brief Sparse Bundle implementation for protobuf messages.
-/// It is called "Sparse" as it does not contain its own Digest. Instead, the
-/// protobuf message's Digest is used.
-/// \tparam T The actual protobuf message type.
-template <typename T>
-class SparseBundle final : public IBundle {
-  public:
-    using Ptr = std::unique_ptr<SparseBundle<T>>;
-
-    [[nodiscard]] auto Message() const noexcept -> T const& { return msg_; }
-
-    [[nodiscard]] auto Content() const& noexcept -> std::string const& final {
-        return content_;
-    }
-
-    [[nodiscard]] auto Digest() const& noexcept
-        -> bazel_re::Digest const& final {
-        return msg_.digest();
-    }
-
-    [[nodiscard]] static auto Create(T const& msg,
-                                     ContentCreateFunc const& content_creator,
-                                     DigestCreateFunc const& digest_creator)
-        -> Ptr {
-        auto content = content_creator();
-        if (content) {
-            // create bundle with message and content
-            Ptr bundle{new SparseBundle<T>{msg, std::move(*content)}};
-
-            // create digest
-            bundle->msg_.set_allocated_digest(gsl::owner<bazel_re::Digest*>{
-                new bazel_re::Digest{digest_creator(bundle->content_)}});
-            return bundle;
-        }
-        return Ptr{};
-    }
-
-    SparseBundle(SparseBundle const&) = delete;
-    SparseBundle(SparseBundle&&) = delete;
-    auto operator=(SparseBundle const&) -> SparseBundle& = delete;
-    auto operator=(SparseBundle&&) -> SparseBundle& = delete;
-    ~SparseBundle() noexcept final = default;
-
-  private:
-    T msg_{};               /**< Protobuf message */
-    std::string content_{}; /**< Content the message's digest refers to */
-
-    explicit SparseBundle(T msg, std::string&& content)
-        : msg_{std::move(msg)}, content_{std::move(content)} {}
-};
-
-/// \brief Full Bundle implementation for protobuf messages.
-/// Contains its own Digest memory, as the protobuf message does not contain
-/// one itself.
-/// \tparam T The actual protobuf message type.
-template <typename T>
-class FullBundle final : public IBundle {
-  public:
-    using Ptr = std::unique_ptr<FullBundle<T>>;
-
-    [[nodiscard]] auto Message() const noexcept -> T const& { return msg_; }
-
-    auto Content() const& noexcept -> std::string const& final {
-        return content_;
-    }
-
-    auto Digest() const& noexcept -> bazel_re::Digest const& final {
-        return digest_;
-    }
-
-    [[nodiscard]] static auto Create(T const& msg,
-                                     ContentCreateFunc const& content_creator,
-                                     DigestCreateFunc const& digest_creator)
-        -> Ptr {
-        auto content = content_creator();
-        if (content) {
-            // create bundle with message and content
-            Ptr bundle{new FullBundle<T>{msg, std::move(*content)}};
-
-            // create digest
-            bundle->digest_ = digest_creator(bundle->content_);
-            return bundle;
-        }
-        return Ptr{};
-    }
-
-    FullBundle(FullBundle const&) = delete;
-    FullBundle(FullBundle&&) = delete;
-    auto operator=(FullBundle const&) -> FullBundle& = delete;
-    auto operator=(FullBundle&&) -> FullBundle& = delete;
-    ~FullBundle() noexcept final = default;
-
-  private:
-    T msg_{};                   /**< Protobuf message */
-    bazel_re::Digest digest_{}; /**< Digest of content */
-    std::string content_{};     /**< Content the digest refers to */
-
-    explicit FullBundle(T msg, std::string&& content)
-        : msg_{std::move(msg)}, content_{std::move(content)} {}
-};
-
-using DirectoryNodeBundle = SparseBundle<bazel_re::DirectoryNode>;
-using SymlinkNodeBundle = FullBundle<bazel_re::SymlinkNode>;
-using ActionBundle = FullBundle<bazel_re::Action>;
-using CommandBundle = FullBundle<bazel_re::Command>;
 
 /// \brief Serialize protobuf message to string.
 template <class T>
@@ -194,8 +66,7 @@ template <class T>
 [[nodiscard]] auto CreateDirectory(
     std::vector<bazel_re::FileNode> const& files,
     std::vector<bazel_re::DirectoryNode> const& dirs,
-    std::vector<bazel_re::SymlinkNode> const& links,
-    std::vector<bazel_re::NodeProperty> const& props) noexcept
+    std::vector<bazel_re::SymlinkNode> const& links) noexcept
     -> bazel_re::Directory {
     bazel_re::Directory dir{};
 
@@ -212,77 +83,39 @@ template <class T>
     copy_nodes(dir.mutable_directories(), dirs);
     copy_nodes(dir.mutable_symlinks(), links);
 
-    std::copy(
-        props.cbegin(),
-        props.cend(),
-        pb::back_inserter(dir.mutable_node_properties()->mutable_properties()));
-
     return dir;
 }
 
-/// \brief Create protobuf message 'FileNode' without digest.
-[[nodiscard]] auto CreateFileNode(
-    std::string const& file_name,
-    ObjectType type,
-    std::vector<bazel_re::NodeProperty> const& props) noexcept
+/// \brief Create protobuf message 'FileNode'.
+[[nodiscard]] auto CreateFileNode(std::string const& file_name,
+                                  ObjectType type,
+                                  bazel_re::Digest const& digest) noexcept
     -> bazel_re::FileNode {
     bazel_re::FileNode node;
     node.set_name(file_name);
     node.set_is_executable(IsExecutableObject(type));
-    std::copy(props.cbegin(),
-              props.cend(),
-              pb::back_inserter(
-                  node.mutable_node_properties()->mutable_properties()));
+    (*node.mutable_digest()) = digest;
     return node;
 }
 
-/// \brief Create protobuf message 'DirectoryNode' without digest.
-[[nodiscard]] auto CreateDirectoryNode(std::string const& dir_name) noexcept
+/// \brief Create protobuf message 'DirectoryNode'.
+[[nodiscard]] auto CreateDirectoryNode(std::string const& dir_name,
+                                       bazel_re::Digest const& digest) noexcept
     -> bazel_re::DirectoryNode {
     bazel_re::DirectoryNode node;
     node.set_name(dir_name);
+    (*node.mutable_digest()) = digest;
     return node;
 }
 
 /// \brief Create protobuf message 'SymlinkNode'.
-[[nodiscard]] auto CreateSymlinkNode(
-    std::string const& link_name,
-    std::string const& target,
-    std::vector<bazel_re::NodeProperty> const& props) noexcept
+[[nodiscard]] auto CreateSymlinkNode(std::string const& link_name,
+                                     std::string const& target) noexcept
     -> bazel_re::SymlinkNode {
     bazel_re::SymlinkNode node;
     node.set_name(link_name);
     node.set_target(target);
-    std::copy(props.cbegin(),
-              props.cend(),
-              pb::back_inserter(
-                  node.mutable_node_properties()->mutable_properties()));
     return node;
-}
-
-/// \brief Create protobuf message FileNode from Artifact::ObjectInfo
-[[nodiscard]] auto CreateFileNodeFromObjectInfo(
-    std::string const& name,
-    Artifact::ObjectInfo const& object_info) noexcept -> bazel_re::FileNode {
-    auto file_node = CreateFileNode(name, object_info.type, {});
-
-    file_node.set_allocated_digest(gsl::owner<bazel_re::Digest*>{
-        new bazel_re::Digest{object_info.digest}});
-
-    return file_node;
-}
-
-/// \brief Create protobuf message DirectoryNode from Artifact::ObjectInfo
-[[nodiscard]] auto CreateDirectoryNodeFromObjectInfo(
-    std::string const& name,
-    Artifact::ObjectInfo const& object_info) noexcept
-    -> bazel_re::DirectoryNode {
-    auto dir_node = CreateDirectoryNode(name);
-
-    dir_node.set_allocated_digest(gsl::owner<bazel_re::Digest*>{
-        new bazel_re::Digest{object_info.digest}});
-
-    return dir_node;
 }
 
 /// \brief Create protobuf message SymlinkNode from Digest for multiple
@@ -299,7 +132,7 @@ template <class T>
     std::vector<bazel_re::SymlinkNode> symlink_nodes;
     // both loops have same length
     for (; it_name != symlink_names.end(); ++it_name, ++it_target) {
-        symlink_nodes.emplace_back(CreateSymlinkNode(*it_name, *it_target, {}));
+        symlink_nodes.emplace_back(CreateSymlinkNode(*it_name, *it_target));
     }
     return symlink_nodes;
 }
@@ -307,110 +140,91 @@ template <class T>
 /// \brief Create bundle for protobuf message DirectoryNode from Directory.
 [[nodiscard]] auto CreateDirectoryNodeBundle(std::string const& dir_name,
                                              bazel_re::Directory const& dir)
-    -> DirectoryNodeBundle::Ptr {
-    // setup protobuf message except digest
-    auto msg = CreateDirectoryNode(dir_name);
-    auto content_creator = [&dir] { return SerializeMessage(dir); };
-    auto digest_creator = [](std::string const& content) -> bazel_re::Digest {
-        return ArtifactDigest::Create<ObjectType::File>(content);
-    };
-    return DirectoryNodeBundle::Create(msg, content_creator, digest_creator);
+    -> std::optional<DirectoryNodeBundle> {
+    auto content = SerializeMessage(dir);
+    if (not content) {
+        return std::nullopt;
+    }
+
+    // SHA256 is used since bazel types are processed here.
+    HashFunction const hash_function{HashFunction::Type::PlainSHA256};
+    auto digest =
+        ArtifactDigest::Create<ObjectType::File>(hash_function, *content);
+
+    return DirectoryNodeBundle{
+        .message = CreateDirectoryNode(dir_name, digest),
+        .bazel_blob = BazelBlob{
+            std::move(digest), std::move(*content), /*is_exec=*/false}};
 }
 
 /// \brief Create bundle for protobuf message Command from args strings.
 [[nodiscard]] auto CreateCommandBundle(
-    std::vector<std::string> const& args,
-    std::vector<std::string> const& output_files,
-    std::vector<std::string> const& output_dirs,
-    std::vector<bazel_re::Command_EnvironmentVariable> const& env_vars,
-    std::vector<bazel_re::Platform_Property> const& platform_properties)
-    -> CommandBundle::Ptr {
+    BazelMsgFactory::ActionDigestRequest const& request)
+    -> std::optional<BazelBlob> {
     bazel_re::Command msg;
     // DEPRECATED as of v2.2: platform properties are now specified
     // directly in the action. See documentation note in the
     // [Action][build.bazel.remote.execution.v2.Action] for migration.
     // (https://github.com/bazelbuild/remote-apis/blob/e1fe21be4c9ae76269a5a63215bb3c72ed9ab3f0/build/bazel/remote/execution/v2/remote_execution.proto#L646)
-    msg.set_allocated_platform(CreatePlatform(platform_properties).release());
-    std::copy(std::cbegin(args),
-              std::cend(args),
+    msg.set_allocated_platform(CreatePlatform(*request.properties).release());
+    msg.set_working_directory(*request.cwd);
+    std::copy(request.command_line->begin(),
+              request.command_line->end(),
               pb::back_inserter(msg.mutable_arguments()));
-    std::copy(std::cbegin(output_files),
-              std::cend(output_files),
+    std::copy(request.output_files->begin(),
+              request.output_files->end(),
               pb::back_inserter(msg.mutable_output_files()));
-    std::copy(std::cbegin(output_dirs),
-              std::cend(output_dirs),
+    std::copy(request.output_dirs->begin(),
+              request.output_dirs->end(),
               pb::back_inserter(msg.mutable_output_directories()));
-    std::copy(std::cbegin(env_vars),
-              std::cend(env_vars),
+    std::copy(request.env_vars->begin(),
+              request.env_vars->end(),
               pb::back_inserter(msg.mutable_environment_variables()));
 
-    auto content_creator = [&msg] { return SerializeMessage(msg); };
-
-    auto digest_creator = [](std::string const& content) -> bazel_re::Digest {
-        return ArtifactDigest::Create<ObjectType::File>(content);
-    };
-
-    return CommandBundle::Create(msg, content_creator, digest_creator);
+    auto content = SerializeMessage(msg);
+    if (not content) {
+        return std::nullopt;
+    }
+    auto digest = ArtifactDigest::Create<ObjectType::File>(
+        request.hash_function, *content);
+    return BazelBlob{digest, std::move(*content), /*is_exec=*/false};
 }
 
 /// \brief Create bundle for protobuf message Action from Command.
 [[nodiscard]] auto CreateActionBundle(
     bazel_re::Digest const& command,
-    bazel_re::Digest const& root_dir,
-    std::vector<bazel_re::Platform_Property> const& platform_properties,
-    bool do_not_cache,
-    std::chrono::milliseconds const& timeout) -> ActionBundle::Ptr {
+    BazelMsgFactory::ActionDigestRequest const& request)
+    -> std::optional<BazelBlob> {
     using seconds = std::chrono::seconds;
     using nanoseconds = std::chrono::nanoseconds;
-    auto sec = std::chrono::duration_cast<seconds>(timeout);
-    auto nanos = std::chrono::duration_cast<nanoseconds>(timeout - sec);
+    auto sec = std::chrono::duration_cast<seconds>(request.timeout);
+    auto nanos = std::chrono::duration_cast<nanoseconds>(request.timeout - sec);
 
     auto duration = std::make_unique<google::protobuf::Duration>();
     duration->set_seconds(sec.count());
     duration->set_nanos(nanos.count());
 
     bazel_re::Action msg;
-    msg.set_do_not_cache(do_not_cache);
+    msg.set_do_not_cache(request.skip_action_cache);
     msg.set_allocated_timeout(duration.release());
     msg.set_allocated_command_digest(
         gsl::owner<bazel_re::Digest*>{new bazel_re::Digest{command}});
     msg.set_allocated_input_root_digest(
-        gsl::owner<bazel_re::Digest*>{new bazel_re::Digest{root_dir}});
+        gsl::owner<bazel_re::Digest*>{new bazel_re::Digest{*request.exec_dir}});
     // New in version 2.2: clients SHOULD set these platform properties
     // as well as those in the
     // [Command][build.bazel.remote.execution.v2.Command]. Servers
     // SHOULD prefer those set here.
     // (https://github.com/bazelbuild/remote-apis/blob/e1fe21be4c9ae76269a5a63215bb3c72ed9ab3f0/build/bazel/remote/execution/v2/remote_execution.proto#L516)
-    msg.set_allocated_platform(CreatePlatform(platform_properties).release());
+    msg.set_allocated_platform(CreatePlatform(*request.properties).release());
 
-    auto content_creator = [&msg] { return SerializeMessage(msg); };
-
-    auto digest_creator = [](std::string const& content) -> bazel_re::Digest {
-        return ArtifactDigest::Create<ObjectType::File>(content);
-    };
-
-    return ActionBundle::Create(msg, content_creator, digest_creator);
-}
-
-[[nodiscard]] auto CreateObjectInfo(bazel_re::DirectoryNode const& node)
-    -> Artifact::ObjectInfo {
-    return Artifact::ObjectInfo{.digest = ArtifactDigest{node.digest()},
-                                .type = ObjectType::Tree};
-}
-
-[[nodiscard]] auto CreateObjectInfo(bazel_re::FileNode const& node)
-    -> Artifact::ObjectInfo {
-    return Artifact::ObjectInfo{.digest = ArtifactDigest{node.digest()},
-                                .type = node.is_executable()
-                                            ? ObjectType::Executable
-                                            : ObjectType::File};
-}
-
-[[nodiscard]] auto CreateObjectInfo(bazel_re::SymlinkNode const& node)
-    -> Artifact::ObjectInfo {
-    return Artifact::ObjectInfo{
-        ArtifactDigest::Create<ObjectType::File>(node.target()),
-        ObjectType::Symlink};
+    auto content = SerializeMessage(msg);
+    if (not content) {
+        return std::nullopt;
+    }
+    auto digest = ArtifactDigest::Create<ObjectType::File>(
+        request.hash_function, *content);
+    return BazelBlob{digest, std::move(*content), /*is_exec=*/false};
 }
 
 /// \brief Convert `DirectoryTree` to `DirectoryNodeBundle`.
@@ -419,10 +233,9 @@ template <class T>
     std::string const& root_name,
     DirectoryTreePtr const& tree,
     BazelMsgFactory::LinkDigestResolveFunc const& resolve_links,
-    std::optional<BazelMsgFactory::BlobStoreFunc> const& store_blob,
-    std::optional<BazelMsgFactory::InfoStoreFunc> const& store_info,
+    BazelMsgFactory::BlobProcessFunc const& process_blob,
     std::filesystem::path const& parent = "") noexcept
-    -> DirectoryNodeBundle::Ptr {
+    -> std::optional<DirectoryNodeBundle> {
     std::vector<bazel_re::FileNode> file_nodes{};
     std::vector<bazel_re::DirectoryNode> dir_nodes{};
     std::vector<std::string> symlink_names{};
@@ -431,29 +244,25 @@ template <class T>
         for (auto const& [name, node] : *tree) {
             if (std::holds_alternative<DirectoryTreePtr>(node)) {
                 auto const& dir = std::get<DirectoryTreePtr>(node);
-                auto const dir_bundle = DirectoryTreeToBundle(name,
-                                                              dir,
-                                                              resolve_links,
-                                                              store_blob,
-                                                              store_info,
-                                                              parent / name);
+                auto const dir_bundle = DirectoryTreeToBundle(
+                    name, dir, resolve_links, process_blob, parent / name);
                 if (not dir_bundle) {
-                    return nullptr;
+                    return std::nullopt;
                 }
-                dir_nodes.emplace_back(dir_bundle->Message());
-                if (store_blob) {
-                    (*store_blob)(dir_bundle->MakeBlob(/*is_exec=*/false));
+                dir_nodes.emplace_back(dir_bundle->message);
+                if (not process_blob(BazelBlob{dir_bundle->bazel_blob})) {
+                    return std::nullopt;
                 }
             }
             else {
                 auto const& artifact = std::get<Artifact const*>(node);
                 auto const& object_info = artifact->Info();
                 if (not object_info) {
-                    return nullptr;
+                    return std::nullopt;
                 }
                 if (IsTreeObject(object_info->type)) {
                     dir_nodes.emplace_back(
-                        CreateDirectoryNodeFromObjectInfo(name, *object_info));
+                        CreateDirectoryNode(name, object_info->digest));
                 }
                 else if (IsSymlinkObject(object_info->type)) {
                     // for symlinks we need to retrieve the data from the
@@ -462,101 +271,41 @@ template <class T>
                     symlink_digests.emplace_back(object_info->digest);
                 }
                 else {
-                    file_nodes.emplace_back(
-                        CreateFileNodeFromObjectInfo(name, *object_info));
-                }
-                if (store_info and
-                    not(*store_info)(parent / name, *object_info)) {
-                    return nullptr;
+                    file_nodes.emplace_back(CreateFileNode(
+                        name, object_info->type, object_info->digest));
                 }
             }
         }
         return CreateDirectoryNodeBundle(
             root_name,
-            CreateDirectory(file_nodes,
-                            dir_nodes,
-                            CreateSymlinkNodesFromDigests(
-                                symlink_names, symlink_digests, resolve_links),
-                            {}));
+            CreateDirectory(
+                file_nodes,
+                dir_nodes,
+                CreateSymlinkNodesFromDigests(
+                    symlink_names, symlink_digests, resolve_links)));
     } catch (...) {
-        return nullptr;
+        return std::nullopt;
     }
-    return nullptr;
+    return std::nullopt;
 }
 
 }  // namespace
 
-auto BazelMsgFactory::ReadObjectInfosFromDirectory(
-    bazel_re::Directory const& dir,
-    InfoStoreFunc const& store_info) noexcept -> bool {
-    try {
-        for (auto const& f : dir.files()) {
-            if (not store_info(f.name(), CreateObjectInfo(f))) {
-                return false;
-            }
-        }
-        for (auto const& l : dir.symlinks()) {
-            if (not store_info(l.name(), CreateObjectInfo(l))) {
-                return false;
-            }
-        }
-        for (auto const& d : dir.directories()) {
-            if (not store_info(d.name(), CreateObjectInfo(d))) {
-                return false;
-            }
-        }
-    } catch (std::exception const& ex) {
-        Logger::Log(LogLevel::Error,
-                    "reading object infos from Directory failed with:\n{}",
-                    ex.what());
-        return false;
-    }
-    return true;
-}
-
-auto BazelMsgFactory::ReadObjectInfosFromGitTree(
-    GitRepo::tree_entries_t const& entries,
-    InfoStoreFunc const& store_info) noexcept -> bool {
-    try {
-        for (auto const& [raw_id, es] : entries) {
-            auto const hex_id = ToHexString(raw_id);
-            for (auto const& entry : es) {
-                if (not store_info(
-                        entry.name,
-                        Artifact::ObjectInfo{
-                            .digest = ArtifactDigest{hex_id,
-                                                     /*size is unknown*/ 0,
-                                                     IsTreeObject(entry.type)},
-                            .type = entry.type})) {
-                    return false;
-                }
-            }
-        }
-    } catch (std::exception const& ex) {
-        Logger::Log(LogLevel::Error,
-                    "reading object infos from Git tree failed with:\n{}",
-                    ex.what());
-        return false;
-    }
-    return true;
-}
-
 auto BazelMsgFactory::CreateDirectoryDigestFromTree(
     DirectoryTreePtr const& tree,
     LinkDigestResolveFunc const& resolve_links,
-    std::optional<BlobStoreFunc> const& store_blob,
-    std::optional<InfoStoreFunc> const& store_info) noexcept
+    BlobProcessFunc const& process_blob) noexcept
     -> std::optional<bazel_re::Digest> {
-    if (auto bundle = DirectoryTreeToBundle(
-            "", tree, resolve_links, store_blob, store_info)) {
-        if (store_blob) {
-            try {
-                (*store_blob)(bundle->MakeBlob(/*is_exec=*/false));
-            } catch (...) {
+    if (auto bundle =
+            DirectoryTreeToBundle("", tree, resolve_links, process_blob)) {
+        try {
+            if (not process_blob(BazelBlob{bundle->bazel_blob})) {
                 return std::nullopt;
             }
+        } catch (...) {
+            return std::nullopt;
         }
-        return bundle->Digest();
+        return bundle->bazel_blob.digest;
     }
     return std::nullopt;
 }
@@ -564,7 +313,7 @@ auto BazelMsgFactory::CreateDirectoryDigestFromTree(
 auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
     std::filesystem::path const& root,
     FileStoreFunc const& store_file,
-    DirStoreFunc const& store_dir,
+    TreeStoreFunc const& store_dir,
     SymlinkStoreFunc const& store_symlink) noexcept
     -> std::optional<bazel_re::Digest> {
     std::vector<bazel_re::FileNode> files{};
@@ -590,10 +339,7 @@ auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
                 return false;
             }
 
-            auto dir = CreateDirectoryNode(name.string());
-            dir.set_allocated_digest(
-                gsl::owner<bazel_re::Digest*>{new bazel_re::Digest{*digest}});
-            dirs.emplace_back(std::move(dir));
+            dirs.emplace_back(CreateDirectoryNode(name.string(), *digest));
             return true;
         }
 
@@ -603,7 +349,7 @@ auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
                 auto content = FileSystemManager::ReadSymlink(full_name);
                 if (content and store_symlink(*content)) {
                     symlinks.emplace_back(
-                        CreateSymlinkNode(name.string(), *content, {}));
+                        CreateSymlinkNode(name.string(), *content));
                     return true;
                 }
                 Logger::Log(LogLevel::Error,
@@ -613,9 +359,7 @@ auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
             }
             // create and store file
             if (auto digest = store_file(full_name, IsExecutableObject(type))) {
-                auto file = CreateFileNode(name.string(), type, {});
-                file.set_allocated_digest(gsl::owner<bazel_re::Digest*>{
-                    new bazel_re::Digest{std::move(*digest)}});
+                auto file = CreateFileNode(name.string(), type, *digest);
                 files.emplace_back(std::move(file));
                 return true;
             }
@@ -630,10 +374,10 @@ auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
 
     if (FileSystemManager::ReadDirectory(
             root, dir_reader, /*allow_upwards=*/true)) {
-        auto dir = CreateDirectory(files, dirs, symlinks, {});
+        auto dir = CreateDirectory(files, dirs, symlinks);
         if (auto bytes = SerializeMessage(dir)) {
             try {
-                if (auto digest = store_dir(*bytes, dir)) {
+                if (auto digest = store_dir(*bytes)) {
                     return *digest;
                 }
             } catch (std::exception const& ex) {
@@ -721,7 +465,7 @@ auto BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
             root, dir_reader, /*allow_upwards=*/true)) {
         if (auto tree = GitRepo::CreateShallowTree(entries)) {
             try {
-                if (auto digest = store_tree(tree->second, entries)) {
+                if (auto digest = store_tree(tree->second)) {
                     return *digest;
                 }
             } catch (std::exception const& ex) {
@@ -736,72 +480,23 @@ auto BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
 }
 
 auto BazelMsgFactory::CreateActionDigestFromCommandLine(
-    std::vector<std::string> const& cmdline,
-    bazel_re::Digest const& exec_dir,
-    std::vector<std::string> const& output_files,
-    std::vector<std::string> const& output_dirs,
-    std::vector<bazel_re::Command_EnvironmentVariable> const& env_vars,
-    std::vector<bazel_re::Platform_Property> const& properties,
-    bool do_not_cache,
-    std::chrono::milliseconds const& timeout,
-    std::optional<BlobStoreFunc> const& store_blob) -> bazel_re::Digest {
-    // create command
-    auto cmd = CreateCommandBundle(
-        cmdline, output_files, output_dirs, env_vars, properties);
-
-    // create action
-    auto action = CreateActionBundle(
-        cmd->Digest(), exec_dir, properties, do_not_cache, timeout);
-
-    if (store_blob) {
-        (*store_blob)(cmd->MakeBlob(/*is_exec=*/false));
-        (*store_blob)(action->MakeBlob(/*is_exec=*/false));
-    }
-
-    return action->Digest();
-}
-
-auto BazelMsgFactory::DirectoryToString(bazel_re::Directory const& dir) noexcept
-    -> std::optional<std::string> {
-    auto json = nlohmann::json::object();
-    try {
-        if (not BazelMsgFactory::ReadObjectInfosFromDirectory(
-                dir, [&json](auto path, auto info) {
-                    json[path.string()] = info.ToString();
-                    return true;
-                })) {
-            Logger::Log(LogLevel::Error,
-                        "reading object infos from Directory failed");
-            return std::nullopt;
-        }
-        return json.dump(2) + "\n";
-    } catch (std::exception const& ex) {
-        Logger::Log(LogLevel::Error,
-                    "dumping Directory to string failed with:\n{}",
-                    ex.what());
+    ActionDigestRequest const& request) -> std::optional<bazel_re::Digest> {
+    auto cmd = CreateCommandBundle(request);
+    if (not cmd) {
         return std::nullopt;
     }
-}
 
-auto BazelMsgFactory::GitTreeToString(
-    GitRepo::tree_entries_t const& entries) noexcept
-    -> std::optional<std::string> {
-    auto json = nlohmann::json::object();
-    try {
-        if (not BazelMsgFactory::ReadObjectInfosFromGitTree(
-                entries, [&json](auto path, auto info) {
-                    json[path.string()] = info.ToString(/*size_unknown=*/true);
-                    return true;
-                })) {
-            Logger::Log(LogLevel::Error,
-                        "reading object infos from Directory failed");
-            return std::nullopt;
-        }
-        return json.dump(2) + "\n";
-    } catch (std::exception const& ex) {
-        Logger::Log(LogLevel::Error,
-                    "dumping Directory to string failed with:\n{}",
-                    ex.what());
+    auto action = CreateActionBundle(cmd->digest, request);
+    if (not action) {
         return std::nullopt;
     }
+
+    if (not request.store_blob) {
+        return action->digest;
+    }
+
+    auto digest = action->digest;
+    std::invoke(*request.store_blob, std::move(*cmd));
+    std::invoke(*request.store_blob, std::move(*action));
+    return digest;
 }

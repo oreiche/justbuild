@@ -3,7 +3,7 @@
   , "name": ["equality"]
   , "test": ["action-equality.sh"]
   , "keep": ["graph.json"]
-  , "deps": [["end-to-end", "tool-under-test"]]
+  , "deps": [["", "tool-under-test"]]
   }
 , "equality-timeout":
   { "type": ["@", "rules", "shell/test", "script"]
@@ -17,7 +17,7 @@
     , "generic/graph-1.json"
     , "generic/graph-2.json"
     ]
-  , "deps": [["end-to-end", "tool-under-test"]]
+  , "deps": [["", "tool-under-test"]]
   }
 , "equality-properties":
   { "type": ["@", "rules", "shell/test", "script"]
@@ -31,44 +31,87 @@
     , "generic/graph-empty.json"
     , "generic/graph-set.json"
     ]
-  , "deps": [["end-to-end", "tool-under-test"]]
+  , "deps": [["", "tool-under-test"]]
   }
 , "trees":
   { "type": ["@", "rules", "shell/test", "script"]
   , "name": ["trees"]
   , "test": ["nested-trees.sh"]
   , "keep": ["blobs.json", "trees.json", "out/index.txt"]
-  , "deps": [["end-to-end", "tool-under-test"]]
+  , "deps": [["", "tool-under-test"]]
   }
 , "conflicts":
   { "type": ["@", "rules", "shell/test", "script"]
   , "name": ["conflicts"]
   , "test": ["conflicts.sh"]
-  , "deps": [["end-to-end", "tool-under-test"]]
+  , "deps": [["", "tool-under-test"]]
   }
 , "incomplete-retry":
   { "type": ["end-to-end", "with remote"]
   , "name": ["incompete-retry"]
   , "test": ["incomplete-retry.sh"]
-  , "deps": [["end-to-end", "tool-under-test"]]
+  , "deps": [["", "tool-under-test"]]
   }
 , "error-reporting":
   { "type": ["@", "rules", "shell/test", "script"]
   , "name": ["error-reporting"]
   , "test": ["error-reporting.sh"]
-  , "deps": [["end-to-end", "tool-under-test"]]
+  , "deps": [["", "tool-under-test"]]
+  }
+, "identical-inputs (real)":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["identical-inputs"]
+  , "test": ["identical-inputs.sh"]
+  , "deps": [["", "tool-under-test"]]
+  }
+, "identical-inputs":
+  { "type": "configure"
+  , "tainted": ["test"]
+  , "target": "identical-inputs (real)"
+  , "arguments_config": ["TIMEOUT_SCALE"]
+  , "config":
+    { "type": "singleton_map"
+    , "key": "TIMEOUT_SCALE"
+    , "value":
+      { "type": "*"
+      , "$1": [3, {"type": "var", "name": "TIMEOUT_SCALE", "default": 1.0}]
+      }
+    }
+  }
+, "cwd":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["cwd"]
+  , "test": ["cwd.sh"]
+  , "deps": [["", "tool-under-test"]]
+  }
+, "request-action-input":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["request-action-input"]
+  , "test": ["request-action-input.sh"]
+  , "deps": [["", "tool-under-test"]]
   }
 , "TESTS":
-  { "type": "install"
-  , "tainted": ["test"]
+  { "type": ["@", "rules", "test", "suite"]
+  , "arguments_config": ["DROP_IO_HEAVY_TESTS"]
+  , "stage": ["actions"]
   , "deps":
-    [ "equality"
-    , "equality-timeout"
-    , "equality-properties"
-    , "trees"
-    , "conflicts"
-    , "incomplete-retry"
-    , "error-reporting"
-    ]
+    { "type": "++"
+    , "$1":
+      [ [ "equality"
+        , "equality-timeout"
+        , "equality-properties"
+        , "trees"
+        , "conflicts"
+        , "incomplete-retry"
+        , "error-reporting"
+        , "cwd"
+        , "request-action-input"
+        ]
+      , { "type": "if"
+        , "cond": {"type": "var", "name": "DROP_IO_HEAVY_TESTS"}
+        , "else": ["identical-inputs"]
+        }
+      ]
+    }
   }
 }

@@ -13,6 +13,11 @@
     [ ["@", "gsl", "", "gsl"]
     , ["@", "src", "src/buildtool/execution_api/remote", "bazel_network"]
     , ["@", "src", "src/buildtool/common", "bazel_types"]
+    , ["@", "src", "src/buildtool/common/remote", "retry_config"]
+    , "test_env"
+    , "test_auth_config"
+    , "test_remote_config"
+    , ["@", "src", "src/buildtool/crypto", "hash_function"]
     ]
   , "stage": ["test", "utils"]
   }
@@ -37,17 +42,17 @@
     ]
   , "stage": ["test", "utils"]
   }
-, "local_hermeticity":
+, "test_storage_config":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["local_hermeticity"]
-  , "hdrs": ["hermeticity/local.hpp"]
+  , "name": ["test_storage_config"]
+  , "hdrs": ["hermeticity/test_storage_config.hpp"]
   , "deps":
-    [ ["@", "src", "src/buildtool/common", "common"]
-    , ["@", "src", "src/buildtool/execution_api/local", "config"]
-    , ["@", "src", "src/buildtool/execution_api/local", "local"]
-    , ["@", "src", "src/buildtool/file_system", "file_system_manager"]
+    [ ["@", "gsl", "", "gsl"]
     , ["@", "src", "src/buildtool/logging", "log_level"]
     , ["@", "src", "src/buildtool/logging", "logging"]
+    , ["@", "src", "src/buildtool/storage", "config"]
+    , ["@", "src", "src/utils/cpp", "tmp_dir"]
+    , ["@", "src", "src/buildtool/crypto", "hash_function"]
     ]
   , "stage": ["test", "utils"]
   }
@@ -71,10 +76,47 @@
     , ["@", "src", "src/buildtool/execution_api/remote", "config"]
     , ["@", "src", "src/buildtool/logging", "log_level"]
     , ["@", "src", "src/buildtool/logging", "logging"]
-    , ["@", "src", "src/buildtool/storage", "storage"]
+    , ["@", "src", "src/buildtool/file_system", "git_context"]
     , ["@", "src", "src/buildtool/file_system", "file_system_manager"]
-    , ["@", "src", "src/buildtool/compatibility", "compatibility"]
     , "log_config"
+    , "test_env"
+    , "test_auth_config"
+    , "test_remote_config"
+    ]
+  , "stage": ["test", "utils"]
+  }
+, "test_serve_config":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["test_serve_config"]
+  , "hdrs": ["serve_service/test_serve_config.hpp"]
+  , "deps":
+    [ ["@", "src", "src/buildtool/serve_api/remote", "config"]
+    , ["@", "src", "src/buildtool/logging", "log_level"]
+    , ["@", "src", "src/buildtool/logging", "logging"]
+    , "test_env"
+    ]
+  , "stage": ["test", "utils"]
+  }
+, "test_auth_config":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["test_auth_config"]
+  , "hdrs": ["remote_execution/test_auth_config.hpp"]
+  , "deps":
+    [ ["@", "src", "src/buildtool/auth", "auth"]
+    , ["@", "src", "src/buildtool/logging", "log_level"]
+    , ["@", "src", "src/buildtool/logging", "logging"]
+    , "test_env"
+    ]
+  , "stage": ["test", "utils"]
+  }
+, "test_remote_config":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["test_remote_config"]
+  , "hdrs": ["remote_execution/test_remote_config.hpp"]
+  , "deps":
+    [ ["@", "src", "src/buildtool/execution_api/remote", "config"]
+    , ["@", "src", "src/buildtool/logging", "log_level"]
+    , ["@", "src", "src/buildtool/logging", "logging"]
     , "test_env"
     ]
   , "stage": ["test", "utils"]
@@ -95,6 +137,7 @@
     , "shell_quoting"
     , "log_config"
     , "test_env"
+    , "test_serve_config"
     ]
   , "stage": ["test", "utils"]
   }
@@ -114,10 +157,34 @@
   , "hdrs": ["shell_quoting.hpp"]
   , "stage": ["test", "utils"]
   }
+, "blob_creator":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["blob_creator"]
+  , "hdrs": ["blob_creator.hpp"]
+  , "stage": ["test", "utils"]
+  , "deps":
+    [ ["@", "src", "src/buildtool/common", "common"]
+    , ["@", "src", "src/buildtool/file_system", "object_type"]
+    , ["@", "src", "src/buildtool/file_system", "file_system_manager"]
+    , ["@", "src", "src/buildtool/execution_api/bazel_msg", "bazel_msg"]
+    , ["@", "src", "src/buildtool/crypto", "hash_function"]
+    ]
+  }
+, "test_api_bundle":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["test_api_bundle"]
+  , "hdrs": ["executor/test_api_bundle.hpp"]
+  , "stage": ["test", "utils"]
+  , "deps":
+    [ ["@", "gsl", "", "gsl"]
+    , ["@", "src", "src/buildtool/crypto", "hash_function"]
+    , ["@", "src", "src/buildtool/execution_api/common", "api_bundle"]
+    , ["@", "src", "src/buildtool/execution_api/common", "common"]
+    ]
+  }
 , "TESTS":
-  { "type": "install"
-  , "tainted": ["test"]
-  , "dirs":
-    [[["./", "cpp", "TESTS"], "cpp"], [["./", "archive", "TESTS"], "archive"]]
+  { "type": ["@", "rules", "test", "suite"]
+  , "stage": ["utils"]
+  , "deps": [["./", "cpp", "TESTS"], ["./", "archive", "TESTS"]]
   }
 }

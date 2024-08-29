@@ -51,7 +51,7 @@ class Tree {
     }
 
     [[nodiscard]] auto Output() const -> ArtifactDescription {
-        return ArtifactDescription{id_};
+        return ArtifactDescription::CreateTree(id_);
     }
 
     [[nodiscard]] static auto FromJson(std::string const& id,
@@ -85,7 +85,10 @@ class Tree {
     }
 
     static auto ComputeId(inputs_t const& inputs) -> std::string {
-        return HashFunction::ComputeHash(ComputeDescription(inputs).dump())
+        // The type of HashFunction is irrelevant here. It is used for
+        // identification of trees. SHA256 is used.
+        HashFunction const hash_function{HashFunction::Type::PlainSHA256};
+        return hash_function.PlainHashData(ComputeDescription(inputs).dump())
             .HexString();
     }
 };

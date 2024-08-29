@@ -15,91 +15,81 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_CONFIG_HPP
 #define INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_CONFIG_HPP
 
-#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "src/buildtool/common/remote/remote_common.hpp"
+#include "src/utils/cpp/expected.hpp"
 
-class RemoteExecutionConfig {
-  public:
-    // Obtain global instance
-    [[nodiscard]] static auto Instance() noexcept -> RemoteExecutionConfig& {
-        static RemoteExecutionConfig config;
-        return config;
-    }
+struct RemoteExecutionConfig final {
+    class Builder;
 
-    // Set remote execution and cache address, unsets if parsing `address` fails
-    [[nodiscard]] static auto SetRemoteAddress(
-        std::string const& address) noexcept -> bool {
-        auto& inst = Instance();
-        return static_cast<bool>(inst.remote_address_ = inst.cache_address_ =
-                                     ParseAddress(address));
-    }
-
-    // Set remote-execution dispatch property list
-    [[nodiscard]] static auto SetRemoteExecutionDispatch(
-        const std::filesystem::path& filename) noexcept -> bool;
-
-    // Set specific cache address, unsets if parsing `address` fails
-    [[nodiscard]] static auto SetCacheAddress(
-        std::string const& address) noexcept -> bool {
-        return static_cast<bool>(Instance().cache_address_ =
-                                     ParseAddress(address));
-    }
-
-    // Add platform property from string of form "key:val"
-    [[nodiscard]] static auto AddPlatformProperty(
-        std::string const& property) noexcept -> bool {
-        if (auto pair = ParseProperty(property)) {
-            Instance().platform_properties_[std::move(pair->first)] =
-                std::move(pair->second);
-            return true;
-        }
-        return false;
-    }
-
-    // Remote execution address, if set
-    [[nodiscard]] static auto RemoteAddress() noexcept
-        -> std::optional<ServerAddress> {
-        return Instance().remote_address_;
-    }
-
-    // Cache address, if set
-    [[nodiscard]] static auto CacheAddress() noexcept
-        -> std::optional<ServerAddress> {
-        return Instance().cache_address_;
-    }
-
-    // Instance dispatch list
-    [[nodiscard]] static auto DispatchList() noexcept -> std::vector<
-        std::pair<std::map<std::string, std::string>, ServerAddress>> {
-        return Instance().dispatch_;
-    }
-
-    [[nodiscard]] static auto PlatformProperties() noexcept
-        -> std::map<std::string, std::string> {
-        return Instance().platform_properties_;
-    }
-
-  private:
     // Server address of remote execution.
-    std::optional<ServerAddress> remote_address_{};
+    std::optional<ServerAddress> const remote_address = {};
 
     // Server dispatch data
-    std::vector<std::pair<std::map<std::string, std::string>, ServerAddress>>
-        dispatch_{};
+    std::vector<DispatchEndpoint> const dispatch = {};
 
     // Server address of cache endpoint for rebuild.
-    std::optional<ServerAddress> cache_address_{};
+    std::optional<ServerAddress> const cache_address = {};
 
     // Platform properties for execution.
-    std::map<std::string, std::string> platform_properties_{};
+    ExecutionProperties const platform_properties = {};
+};
+
+class RemoteExecutionConfig::Builder final {
+  public:
+    // Set remote execution and cache address. If it fails to parse during
+    // config build, will reset the fields.
+    auto SetRemoteAddress(std::optional<std::string> address) noexcept
+        -> Builder& {
+        remote_address_raw_ = std::move(address);
+        return *this;
+    }
+
+    // Set remote-execution dispatch property list filename.
+    auto SetRemoteExecutionDispatch(
+        std::optional<std::filesystem::path> filename) noexcept -> Builder& {
+        dispatch_file_ = std::move(filename);
+        return *this;
+    }
+
+    // Set specific cache address. If it fails to parse during config build,
+    // will reset the field.
+    auto SetCacheAddress(std::optional<std::string> address) noexcept
+        -> Builder& {
+        cache_address_raw_ = std::move(address);
+        return *this;
+    }
+
+    // Set platform properties given as "key:val" strings.
+    auto SetPlatformProperties(std::vector<std::string> properties) noexcept
+        -> Builder& {
+        platform_properties_raw_ = std::move(properties);
+        return *this;
+    }
+
+    /// \brief Parse the set data to finalize creation of RemoteExecutionConfig.
+    /// \return RemoteExecutionConfig on success, an error string on failure.
+    [[nodiscard]] auto Build() const noexcept
+        -> expected<RemoteExecutionConfig, std::string>;
+
+  private:
+    // Server address of remote execution; needs parsing.
+    std::optional<std::string> remote_address_raw_{};
+
+    // Server dispatch data file; needs parsing.
+    std::optional<std::filesystem::path> dispatch_file_{};
+
+    // Server address of cache endpoint for rebuild; needs parsing.
+    std::optional<std::string> cache_address_raw_{};
+
+    // Platform properties for execution; needs parsing.
+    std::vector<std::string> platform_properties_raw_{};
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_CONFIG_HPP

@@ -35,14 +35,13 @@
 #include "src/buildtool/build_engine/expression/target_node.hpp"
 #include "src/buildtool/build_engine/expression/target_result.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
-#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/multithreading/atomic_value.hpp"
 #include "src/utils/cpp/hex_string.hpp"
 #include "src/utils/cpp/json.hpp"
 
 class Expression {
-    friend auto operator+(Expression const& /*lhs*/, Expression const& /*rhs*/)
-        -> Expression;
+    friend auto operator+(Expression const& /*lhs*/,
+                          Expression const& /*rhs*/) -> Expression;
 
   public:
     using none_t = std::monostate;
@@ -85,10 +84,9 @@ class Expression {
     auto operator=(Expression&& other) noexcept = delete;
 
     template <class T>
-    requires(IsValidType<std::remove_cvref_t<T>>())
-        // NOLINTNEXTLINE(bugprone-forwarding-reference-overload)
-        explicit Expression(T&& data) noexcept
-        : data_{std::forward<T>(data)} {}
+        requires(IsValidType<std::remove_cvref_t<T>>())
+    // NOLINTNEXTLINE(bugprone-forwarding-reference-overload)
+    explicit Expression(T&& data) noexcept : data_{std::forward<T>(data)} {}
 
     [[nodiscard]] auto IsNone() const noexcept -> bool { return IsA<none_t>(); }
     [[nodiscard]] auto IsBool() const noexcept -> bool { return IsA<bool>(); }
@@ -162,10 +160,10 @@ class Expression {
     }
 
     template <class T>
-    requires(IsValidType<std::remove_cvref_t<T>>() or
-             std::is_same_v<std::remove_cvref_t<T>, ExpressionPtr>)
-        [[nodiscard]] auto Get(std::string const& key, T&& default_value) const
-        -> ExpressionPtr {
+        requires(IsValidType<std::remove_cvref_t<T>>() or
+                 std::is_same_v<std::remove_cvref_t<T>, ExpressionPtr>)
+    [[nodiscard]] auto Get(std::string const& key,
+                           T&& default_value) const -> ExpressionPtr {
         auto value = At(key);
         if (value) {
             return value->get();
@@ -179,7 +177,8 @@ class Expression {
     }
 
     template <class T>
-    requires(IsValidType<T>()) [[nodiscard]] auto Value() const& noexcept
+        requires(IsValidType<T>())
+    [[nodiscard]] auto Value() const& noexcept
         -> std::optional<std::reference_wrapper<T const>> {
         if (GetIndexOf<T>() == data_.index()) {
             return std::make_optional(std::ref(std::get<T>(data_)));
@@ -188,8 +187,8 @@ class Expression {
     }
 
     template <class T>
-    requires(IsValidType<T>()) [[nodiscard]] auto Value() && noexcept
-        -> std::optional<T> {
+        requires(IsValidType<T>())
+    [[nodiscard]] auto Value() && noexcept -> std::optional<T> {
         if (GetIndexOf<T>() == data_.index()) {
             return std::make_optional(std::move(std::get<T>(data_)));
         }
@@ -211,7 +210,7 @@ class Expression {
 
     template <class T>
     [[nodiscard]] auto operator!=(T const& other) const noexcept -> bool {
-        return !(*this == other);
+        return not(*this == other);
     }
     [[nodiscard]] auto operator[](
         std::string const& key) const& -> ExpressionPtr const&;
@@ -245,6 +244,8 @@ class Expression {
         Expression::FromJson("[]"_json);
     inline static ExpressionPtr const kEmptyMapExpr =
         Expression::FromJson(R"({"type": "empty_map"})"_json);
+    inline static ExpressionPtr const kEmptyString =
+        Expression::FromJson(R"("")"_json);
     inline static ExpressionPtr const kOne = Expression::FromJson("1.0"_json);
     inline static ExpressionPtr const kTrue = Expression::FromJson("true"_json);
     inline static ExpressionPtr const kFalse =
@@ -267,8 +268,8 @@ class Expression {
     AtomicValue<bool> is_cachable_{};
 
     template <class T, std::size_t kIndex = 0>
-    requires(IsValidType<T>()) [[nodiscard]] static consteval auto GetIndexOf()
-        -> std::size_t {
+        requires(IsValidType<T>())
+    [[nodiscard]] static consteval auto GetIndexOf() -> std::size_t {
         static_assert(kIndex < std::variant_size_v<decltype(data_)>,
                       "kIndex out of range");
         if constexpr (std::is_same_v<
@@ -312,8 +313,8 @@ class Expression {
     }
 
     template <class T>
-    requires(Expression::IsValidType<T>())
-        [[nodiscard]] static auto TypeToString() noexcept -> std::string {
+        requires(Expression::IsValidType<T>())
+    [[nodiscard]] static auto TypeToString() noexcept -> std::string {
         if constexpr (std::is_same_v<T, bool>) {
             return "bool";
         }
