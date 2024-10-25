@@ -15,6 +15,7 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_BAZEL_BAZEL_EXECUTION_CLIENT_HPP
 #define INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_BAZEL_BAZEL_EXECUTION_CLIENT_HPP
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -36,17 +37,23 @@
 class BazelExecutionClient {
   public:
     struct ExecutionOutput {
-        bazel_re::ActionResult action_result{};
+        bazel_re::ActionResult action_result;
         bool cached_result{};
-        grpc::Status status{};
-        std::unordered_map<std::string, bazel_re::Digest> server_logs{};
-        std::string message{};
+        grpc::Status status;
+        std::unordered_map<std::string, bazel_re::Digest> server_logs;
+        std::string message;
     };
 
     struct ExecutionResponse {
-        enum class State { Failed, Ongoing, Finished, Unknown, Retry };
+        enum class State : std::uint8_t {
+            Failed,
+            Ongoing,
+            Finished,
+            Unknown,
+            Retry
+        };
 
-        std::string execution_handle{};
+        std::string execution_handle;
         State state{State::Unknown};
         std::optional<ExecutionOutput> output{std::nullopt};
 

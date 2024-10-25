@@ -22,6 +22,7 @@
 
 #include "gsl/gsl"
 #include "src/buildtool/common/user_structs.hpp"
+#include "src/buildtool/crypto/hash_info.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
@@ -34,25 +35,25 @@
 #include "src/utils/cpp/hash_combine.hpp"
 
 struct ArchiveContent {
-    std::string content{}; /* key */
+    HashInfo content_hash; /* key */
     std::optional<std::string> distfile{std::nullopt};
-    std::string fetch_url{};
-    std::vector<std::string> mirrors{};
+    std::string fetch_url;
+    std::vector<std::string> mirrors;
     std::optional<std::string> sha256{std::nullopt};
     std::optional<std::string> sha512{std::nullopt};
     // name of repository for which work is done; used in progress reporting
-    std::string origin{};
+    std::string origin;
 
     [[nodiscard]] auto operator==(const ArchiveContent& other) const -> bool {
-        return content == other.content;
+        return content_hash.Hash() == other.content_hash.Hash();
     }
 };
 
 // Used in callers of ContentCASMap which need extra fields
 struct ArchiveRepoInfo {
-    ArchiveContent archive{}; /* key */
-    std::string repo_type{};  /* key */
-    std::string subdir{};     /* key */
+    ArchiveContent archive; /* key */
+    std::string repo_type;  /* key */
+    std::string subdir;     /* key */
     // create root based on "special" pragma value
     std::optional<PragmaSpecial> pragma_special{std::nullopt}; /* key */
     // create an absent root
@@ -67,10 +68,10 @@ struct ArchiveRepoInfo {
 };
 
 struct ForeignFileInfo {
-    ArchiveContent archive{}; /* key */
-    std::string name{};       /* key */
-    bool executable{};        /* key */
-    bool absent{};            /* key */
+    ArchiveContent archive; /* key */
+    std::string name;       /* key */
+    bool executable{};      /* key */
+    bool absent{};          /* key */
 
     [[nodiscard]] auto operator==(const ForeignFileInfo& other) const -> bool {
         return archive == other.archive and name == other.name and
@@ -100,7 +101,7 @@ template <>
 struct hash<ArchiveContent> {
     [[nodiscard]] auto operator()(const ArchiveContent& ct) const noexcept
         -> std::size_t {
-        return std::hash<std::string>{}(ct.content);
+        return std::hash<std::string>{}(ct.content_hash.Hash());
     }
 };
 

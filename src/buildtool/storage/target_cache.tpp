@@ -19,6 +19,7 @@
 #include <tuple>  //std::ignore
 
 #include "nlohmann/json.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/storage/target_cache.hpp"
 
@@ -31,9 +32,7 @@ auto TargetCache<kDoGlobalUplink>::Store(
         return false;
     }
     if (auto digest = cas_.StoreBlob(value.ToJson().dump(2))) {
-        auto data =
-            Artifact::ObjectInfo{ArtifactDigest{*digest}, ObjectType::File}
-                .ToString();
+        auto data = Artifact::ObjectInfo{*digest, ObjectType::File}.ToString();
         logger_->Emit(LogLevel::Debug,
                       "Adding entry for key {} as {}",
                       key.Id().ToString(),
@@ -45,21 +44,20 @@ auto TargetCache<kDoGlobalUplink>::Store(
 
 template <bool kDoGlobalUplink>
 auto TargetCache<kDoGlobalUplink>::ComputeKey(
-    std::string const& repo_key,
+    ArtifactDigest const& repo_key,
     BuildMaps::Base::NamedTarget const& target_name,
     Configuration const& effective_config) const noexcept
     -> std::optional<TargetCacheKey> {
     try {
         // target's repository is content-fixed, we can compute a cache key
         auto target_desc = nlohmann::json{
-            {"repo_key", repo_key},
+            {"repo_key", repo_key.hash()},
             {"target_name",
              nlohmann::json{target_name.module, target_name.name}.dump()},
             {"effective_config", effective_config.ToString()}};
         if (auto target_key =
                 cas_.StoreBlob(target_desc.dump(2), /*is_executable=*/false)) {
-            return TargetCacheKey{
-                {ArtifactDigest{*target_key}, ObjectType::File}};
+            return TargetCacheKey{{*target_key, ObjectType::File}};
         }
     } catch (std::exception const& ex) {
         logger_->Emit(LogLevel::Error,
@@ -89,12 +87,14 @@ auto TargetCache<kDoGlobalUplink>::Read(
                       entry_path.string());
         return std::nullopt;
     }
-    if (auto info = Artifact::ObjectInfo::FromString(*entry)) {
+    auto const hash_type = cas_.GetHashFunction().GetType();
+    if (auto info = Artifact::ObjectInfo::FromString(hash_type, *entry)) {
         if (auto path = cas_.BlobPath(info->digest, /*is_executable=*/false)) {
             if (auto value = FileSystemManager::ReadFile(*path)) {
                 try {
                     return std::make_pair(
-                        TargetCacheEntry{nlohmann::json::parse(*value)},
+                        TargetCacheEntry{hash_type,
+                                         nlohmann::json::parse(*value)},
                         std::move(*info));
                 } catch (std::exception const& ex) {
                     logger_->Emit(LogLevel::Warning,
@@ -139,7 +139,8 @@ auto TargetCache<kDoGlobalUplink>::LocalUplinkEntry(
     }
 
     // Determine target cache entry location.
-    auto entry_info = Artifact::ObjectInfo::FromString(*raw_key);
+    auto entry_info = Artifact::ObjectInfo::FromString(
+        cas_.GetHashFunction().GetType(), *raw_key);
     if (not entry_info) {
         return false;
     }
@@ -162,7 +163,8 @@ auto TargetCache<kDoGlobalUplink>::LocalUplinkEntry(
     } catch (std::exception const& ex) {
         return false;
     }
-    auto entry = TargetCacheEntry::FromJson(json_desc);
+    auto entry =
+        TargetCacheEntry::FromJson(cas_.GetHashFunction().GetType(), json_desc);
 
     // Uplink the implied export targets first
     for (auto const& implied_digest : entry.ToImplied()) {

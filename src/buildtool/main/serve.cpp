@@ -31,6 +31,7 @@
 #include "src/buildtool/build_engine/expression/configuration.hpp"
 #include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/common/location.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -390,7 +391,7 @@ void ReadJustServeConfig(gsl::not_null<CommandLineArguments*> const& clargs) {
             }
             // compatibility is set immediately if flag is true
             if (compatible->Bool()) {
-                Compatibility::SetCompatible();
+                clargs->protocol.hash_type = HashFunction::Type::PlainSHA256;
             }
         }
         // read the address
@@ -422,7 +423,7 @@ void ReadJustServeConfig(gsl::not_null<CommandLineArguments*> const& clargs) {
                         jobs->ToString());
             std::exit(kExitFailure);
         }
-        clargs->common.jobs = jobs->Number();
+        clargs->common.jobs = static_cast<std::size_t>(jobs->Number());
     }
     // read build options
     auto build_args = serve_config["build"];
@@ -447,7 +448,8 @@ void ReadJustServeConfig(gsl::not_null<CommandLineArguments*> const& clargs) {
                     build_jobs->ToString());
                 std::exit(kExitFailure);
             }
-            clargs->build.build_jobs = build_jobs->Number();
+            clargs->build.build_jobs =
+                static_cast<std::size_t>(build_jobs->Number());
         }
         else {
             clargs->build.build_jobs = clargs->common.jobs;
@@ -465,7 +467,8 @@ void ReadJustServeConfig(gsl::not_null<CommandLineArguments*> const& clargs) {
                 std::exit(kExitFailure);
             }
             clargs->build.timeout =
-                std::size_t(timeout->Number()) * std::chrono::seconds{1};
+                static_cast<std::size_t>(timeout->Number()) *
+                std::chrono::seconds{1};
         }
         // read target-cache writing strategy
         auto strategy = build_args->Get("target-cache write strategy",

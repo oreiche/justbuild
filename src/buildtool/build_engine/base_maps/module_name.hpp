@@ -24,8 +24,8 @@
 namespace BuildMaps::Base {
 
 struct ModuleName {
-    std::string repository{};
-    std::string module{};
+    std::string repository;
+    std::string module;
 
     ModuleName(std::string repository, std::string module)
         : repository{std::move(repository)}, module{std::move(module)} {}
@@ -51,4 +51,4 @@ struct hash<BuildMaps::Base::ModuleName> {
 
 }  // namespace std
 
-#endif
+#endif  // INCLUDED_SRC_BUILDTOOL_BUILD_ENGINE_BASE_MAPS_MODULE_NAME_HPP

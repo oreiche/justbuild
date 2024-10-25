@@ -17,6 +17,7 @@
 #include "catch2/catch_test_macros.hpp"
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
@@ -27,7 +28,7 @@
 [[nodiscard]] static auto RunDummyExecution(
     gsl::not_null<LocalAC<true> const*> const& ac,
     gsl::not_null<LocalCAS<true> const*> const& cas_,
-    bazel_re::Digest const& action_id,
+    ArtifactDigest const& action_id,
     std::string const& seed) -> bool;
 
 TEST_CASE("LocalAC: Single action, single result", "[storage]") {
@@ -36,7 +37,7 @@ TEST_CASE("LocalAC: Single action, single result", "[storage]") {
     auto const& ac = storage.ActionCache();
     auto const& cas = storage.CAS();
 
-    auto action_id = ArtifactDigest::Create<ObjectType::File>(
+    auto action_id = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
         storage_config.Get().hash_function, "action");
     CHECK(not ac.CachedResult(action_id));
     CHECK(RunDummyExecution(&ac, &cas, action_id, "result"));
@@ -51,9 +52,9 @@ TEST_CASE("LocalAC: Two different actions, two different results",
     auto const& ac = storage.ActionCache();
     auto const& cas = storage.CAS();
 
-    auto action_id1 = ArtifactDigest::Create<ObjectType::File>(
+    auto action_id1 = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
         storage_config.Get().hash_function, "action1");
-    auto action_id2 = ArtifactDigest::Create<ObjectType::File>(
+    auto action_id2 = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
         storage_config.Get().hash_function, "action2");
     CHECK(not ac.CachedResult(action_id1));
     CHECK(not ac.CachedResult(action_id2));
@@ -82,9 +83,9 @@ TEST_CASE("LocalAC: Two different actions, same two results", "[storage]") {
     auto const& ac = storage.ActionCache();
     auto const& cas = storage.CAS();
 
-    auto action_id1 = ArtifactDigest::Create<ObjectType::File>(
+    auto action_id1 = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
         storage_config.Get().hash_function, "action1");
-    auto action_id2 = ArtifactDigest::Create<ObjectType::File>(
+    auto action_id2 = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
         storage_config.Get().hash_function, "action2");
     CHECK(not ac.CachedResult(action_id1));
     CHECK(not ac.CachedResult(action_id2));
@@ -113,7 +114,7 @@ TEST_CASE("LocalAC: Same two actions, two different results", "[storage]") {
     auto const& ac = storage.ActionCache();
     auto const& cas = storage.CAS();
 
-    auto action_id = ArtifactDigest::Create<ObjectType::File>(
+    auto action_id = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
         storage_config.Get().hash_function, "same action");
     CHECK(not ac.CachedResult(action_id));
 
@@ -136,15 +137,14 @@ TEST_CASE("LocalAC: Same two actions, two different results", "[storage]") {
 
 auto RunDummyExecution(gsl::not_null<LocalAC<true> const*> const& ac,
                        gsl::not_null<LocalCAS<true> const*> const& cas_,
-                       bazel_re::Digest const& action_id,
+                       ArtifactDigest const& action_id,
                        std::string const& seed) -> bool {
     bazel_re::ActionResult result{};
     *result.add_output_files() = [&]() {
         bazel_re::OutputFile out{};
         out.set_path(seed);
         auto digest = cas_->StoreBlob("");
-        out.set_allocated_digest(
-            gsl::owner<bazel_re::Digest*>{new bazel_re::Digest{*digest}});
+        *out.mutable_digest() = ArtifactDigestFactory::ToBazel(*digest);
         out.set_is_executable(false);
         return out;
     }();

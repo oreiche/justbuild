@@ -96,10 +96,10 @@ template <typename T>
                               GetString(list[0]),
                               GetString(list[1])};
         }
-
+        return std::nullopt;
     } catch (...) {
+        return std::nullopt;
     }
-    return std::nullopt;
 }
 
 template <typename T>
@@ -112,14 +112,19 @@ template <typename T>
     std::optional<std::function<void(std::string const&)>> logger =
         std::nullopt) noexcept -> std::optional<EntityName> {
     try {
-        bool const is_file = s0 == EntityName::kFileLocationMarker;
-        bool const is_glob = s0 == EntityName::kGlobMarker;
-        bool const is_symlink = s0 == EntityName::kSymlinkLocationMarker;
-        auto const ref_type =
-            is_file ? ReferenceType::kFile
-                    : (is_glob ? ReferenceType::kGlob
-                               : (is_symlink ? ReferenceType::kSymlink
-                                             : ReferenceType::kTree));
+        auto get_ref_type = [](std::string const& s) -> ReferenceType {
+            if (s == EntityName::kFileLocationMarker) {
+                return ReferenceType::kFile;
+            }
+            if (s == EntityName::kGlobMarker) {
+                return ReferenceType::kGlob;
+            }
+            if (s == EntityName::kSymlinkLocationMarker) {
+                return ReferenceType::kSymlink;
+            }
+            return ReferenceType::kTree;
+        };
+        auto const ref_type = get_ref_type(s0);
         if (list_size == 3) {
             if (IsString(list[2])) {
                 auto const& name = GetString(list[2]);
@@ -141,9 +146,10 @@ template <typename T>
                 }
             }
         }
+        return std::nullopt;
     } catch (...) {
+        return std::nullopt;
     }
-    return std::nullopt;
 }
 template <typename T>
 // IsList(list) == true
@@ -171,9 +177,10 @@ template <typename T>
                     relmodule));
             }
         }
+        return std::nullopt;
     } catch (...) {
+        return std::nullopt;
     }
-    return std::nullopt;
 }
 
 template <typename T>
@@ -202,10 +209,10 @@ template <typename T>
                                       local_repo_name));
             }
         }
-
+        return std::nullopt;
     } catch (...) {
+        return std::nullopt;
     }
-    return std::nullopt;
 }
 
 template <typename T>
@@ -243,9 +250,10 @@ template <typename T>
                     s0, list, list_size, current, logger);
             }
         }
+        return std::nullopt;
     } catch (...) {
+        return std::nullopt;
     }
-    return std::nullopt;
 }
 
 template <typename T>
@@ -278,8 +286,8 @@ template <typename T>
         }
         return res;
     } catch (...) {
+        return std::nullopt;
     }
-    return std::nullopt;
 }
 
 [[nodiscard]] inline auto ParseEntityNameFromJson(
@@ -302,4 +310,4 @@ template <typename T>
 
 }  // namespace BuildMaps::Base
 
-#endif
+#endif  // INCLUDED_SRC_BUILDTOOL_BUILD_ENGINE_BASE_MAPS_ENTITY_NAME_HPP

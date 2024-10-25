@@ -44,7 +44,7 @@ class TargetGraphInformation {
 
     [[nodiscard]] auto NodeString() const noexcept
         -> std::optional<std::string>;
-    [[nodiscard]] auto DepsToJson() const noexcept -> nlohmann::json;
+    [[nodiscard]] auto DepsToJson() const -> nlohmann::json;
 
   private:
     BuildMaps::Target::ConfiguredTargetPtr node_;
@@ -55,4 +55,4 @@ class TargetGraphInformation {
 
 inline const TargetGraphInformation TargetGraphInformation::kSource =
     TargetGraphInformation{nullptr, {}, {}, {}};
-#endif
+#endif  // INCLUDED_SRC_BUILDTOOL_BUILDENGINE_ANALYSED_TARGET_TARGET_GRAPH_INFORMATION_HPP

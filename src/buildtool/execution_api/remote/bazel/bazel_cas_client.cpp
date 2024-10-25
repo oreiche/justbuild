@@ -22,25 +22,19 @@
 
 #include "grpcpp/grpcpp.h"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/bazel_digest_factory.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/common/remote/retry.hpp"
 #include "src/buildtool/common/remote/retry_config.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
-#include "src/buildtool/compatibility/native_support.hpp"
-#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/common/bytestream_utils.hpp"
 #include "src/buildtool/execution_api/common/execution_common.hpp"
 #include "src/buildtool/execution_api/common/message_limits.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 
 namespace {
-
-[[nodiscard]] auto ToResourceName(std::string const& instance_name,
-                                  bazel_re::Digest const& digest) noexcept
-    -> std::string {
-    return fmt::format(
-        "{}/blobs/{}/{}", instance_name, digest.hash(), digest.size_bytes());
-}
 
 // In order to determine whether blob splitting is supported at the remote, a
 // trial request to the remote CAS service is issued. This is just a workaround
@@ -48,18 +42,14 @@ namespace {
 // execution protocol. Then, the ordinary way to determine server capabilities
 // can be employed by using the capabilities service.
 [[nodiscard]] auto BlobSplitSupport(
+    HashFunction hash_function,
     std::string const& instance_name,
     std::unique_ptr<bazel_re::ContentAddressableStorage::Stub> const&
         stub) noexcept -> bool {
     // Create empty blob.
     std::string empty_str{};
-    HashFunction const hash_function{Compatibility::IsCompatible()
-                                         ? HashFunction::Type::PlainSHA256
-                                         : HashFunction::Type::GitSHA1};
-    std::string hash = hash_function.HashBlobData(empty_str).HexString();
-    bazel_re::Digest digest{};
-    digest.set_hash(NativeSupport::Prefix(hash, false));
-    digest.set_size_bytes(empty_str.size());
+    auto const digest = BazelDigestFactory::HashDataAs<ObjectType::File>(
+        hash_function, empty_str);
 
     // Upload empty blob.
     grpc::ClientContext update_context{};
@@ -88,6 +78,7 @@ namespace {
 
 // Cached version of blob-split support request.
 [[nodiscard]] auto BlobSplitSupportCached(
+    HashFunction hash_function,
     std::string const& instance_name,
     std::unique_ptr<bazel_re::ContentAddressableStorage::Stub> const& stub,
     Logger const* logger) noexcept -> bool {
@@ -100,7 +91,7 @@ namespace {
             return blob_split_support_map[instance_name];
         }
     }
-    auto supported = ::BlobSplitSupport(instance_name, stub);
+    auto supported = ::BlobSplitSupport(hash_function, instance_name, stub);
     logger->Emit(LogLevel::Debug,
                  "Blob split support for \"{}\": {}",
                  instance_name,
@@ -116,18 +107,14 @@ namespace {
 // remote execution protocol. Then, the ordinary way to determine server
 // capabilities can be employed by using the capabilities service.
 [[nodiscard]] auto BlobSpliceSupport(
+    HashFunction hash_function,
     std::string const& instance_name,
     std::unique_ptr<bazel_re::ContentAddressableStorage::Stub> const&
         stub) noexcept -> bool {
     // Create empty blob.
     std::string empty_str{};
-    HashFunction const hash_function{Compatibility::IsCompatible()
-                                         ? HashFunction::Type::PlainSHA256
-                                         : HashFunction::Type::GitSHA1};
-    std::string hash = hash_function.HashBlobData(empty_str).HexString();
-    bazel_re::Digest digest{};
-    digest.set_hash(NativeSupport::Prefix(hash, false));
-    digest.set_size_bytes(empty_str.size());
+    auto const digest = BazelDigestFactory::HashDataAs<ObjectType::File>(
+        hash_function, empty_str);
 
     // Upload empty blob.
     grpc::ClientContext update_context{};
@@ -157,6 +144,7 @@ namespace {
 
 // Cached version of blob-splice support request.
 [[nodiscard]] auto BlobSpliceSupportCached(
+    HashFunction hash_function,
     std::string const& instance_name,
     std::unique_ptr<bazel_re::ContentAddressableStorage::Stub> const& stub,
     Logger const* logger) noexcept -> bool {
@@ -169,7 +157,7 @@ namespace {
             return blob_splice_support_map[instance_name];
         }
     }
-    auto supported = ::BlobSpliceSupport(instance_name, stub);
+    auto supported = ::BlobSpliceSupport(hash_function, instance_name, stub);
     logger->Emit(LogLevel::Debug,
                  "Blob splice support for \"{}\": {}",
                  instance_name,
@@ -275,7 +263,6 @@ auto BazelCasClient::BatchReadBlobs(
     return result;
 }
 
-// NOLINTNEXTLINE(misc-no-recursion)
 auto BazelCasClient::GetTree(std::string const& instance_name,
                              bazel_re::Digest const& root_digest,
                              std::int32_t page_size,
@@ -329,12 +316,9 @@ auto BazelCasClient::UpdateSingleBlob(std::string const& instance_name,
         }
         uuid = CreateUUIDVersion4(*id);
     }
-    auto ok = stream_->Write(fmt::format("{}/uploads/{}/blobs/{}/{}",
-                                         instance_name,
-                                         uuid,
-                                         blob.digest.hash(),
-                                         blob.digest.size_bytes()),
-                             *blob.data);
+    auto ok = stream_->Write(
+        ByteStreamUtils::WriteRequest{instance_name, uuid, blob.digest},
+        *blob.data);
     if (not ok) {
         logger_.Emit(LogLevel::Error,
                      "Failed to write {}:{}",
@@ -347,22 +331,26 @@ auto BazelCasClient::UpdateSingleBlob(std::string const& instance_name,
 auto BazelCasClient::IncrementalReadSingleBlob(std::string const& instance_name,
                                                bazel_re::Digest const& digest)
     const noexcept -> ByteStreamClient::IncrementalReader {
-    return stream_->IncrementalRead(ToResourceName(instance_name, digest));
+    return stream_->IncrementalRead(
+        ByteStreamUtils::ReadRequest{instance_name, digest});
 }
 
 auto BazelCasClient::ReadSingleBlob(
     std::string const& instance_name,
     bazel_re::Digest const& digest) const noexcept -> std::optional<BazelBlob> {
-    if (auto data = stream_->Read(ToResourceName(instance_name, digest))) {
+    if (auto data = stream_->Read(
+            ByteStreamUtils::ReadRequest{instance_name, digest})) {
         return BazelBlob{digest, std::move(*data), /*is_exec=*/false};
     }
     return std::nullopt;
 }
 
-auto BazelCasClient::SplitBlob(std::string const& instance_name,
+auto BazelCasClient::SplitBlob(HashFunction hash_function,
+                               std::string const& instance_name,
                                bazel_re::Digest const& blob_digest)
     const noexcept -> std::optional<std::vector<bazel_re::Digest>> {
-    if (not BlobSplitSupportCached(instance_name, stub_, &logger_)) {
+    if (not BlobSplitSupportCached(
+            hash_function, instance_name, stub_, &logger_)) {
         return std::nullopt;
     }
     bazel_re::SplitBlobRequest request{};
@@ -386,11 +374,13 @@ auto BazelCasClient::SplitBlob(std::string const& instance_name,
 }
 
 auto BazelCasClient::SpliceBlob(
+    HashFunction hash_function,
     std::string const& instance_name,
     bazel_re::Digest const& blob_digest,
     std::vector<bazel_re::Digest> const& chunk_digests) const noexcept
     -> std::optional<bazel_re::Digest> {
-    if (not BlobSpliceSupportCached(instance_name, stub_, &logger_)) {
+    if (not BlobSpliceSupportCached(
+            hash_function, instance_name, stub_, &logger_)) {
         return std::nullopt;
     }
     bazel_re::SpliceBlobRequest request{};
@@ -418,19 +408,23 @@ auto BazelCasClient::SpliceBlob(
 }
 
 auto BazelCasClient::BlobSplitSupport(
+    HashFunction hash_function,
     std::string const& instance_name) const noexcept -> bool {
-    return ::BlobSplitSupportCached(instance_name, stub_, &logger_);
+    return ::BlobSplitSupportCached(
+        hash_function, instance_name, stub_, &logger_);
 }
 
 auto BazelCasClient::BlobSpliceSupport(
+    HashFunction hash_function,
     std::string const& instance_name) const noexcept -> bool {
-    return ::BlobSpliceSupportCached(instance_name, stub_, &logger_);
+    return ::BlobSpliceSupportCached(
+        hash_function, instance_name, stub_, &logger_);
 }
 
-template <class T_ForwardIter>
+template <class TForwardIter>
 auto BazelCasClient::FindMissingBlobs(std::string const& instance_name,
-                                      T_ForwardIter const& start,
-                                      T_ForwardIter const& end) const noexcept
+                                      TForwardIter const& start,
+                                      TForwardIter const& end) const noexcept
     -> std::vector<bazel_re::Digest> {
     std::vector<bazel_re::Digest> result;
     if (start == end) {
@@ -489,7 +483,6 @@ auto BazelCasClient::FindMissingBlobs(std::string const& instance_name,
     return result;
 }
 
-// NOLINTNEXTLINE(misc-no-recursion)
 auto BazelCasClient::BatchUpdateBlobs(
     std::string const& instance_name,
     std::vector<gsl::not_null<BazelBlob const*>>::const_iterator const& begin,
@@ -613,9 +606,9 @@ auto BazelCasClient::BatchUpdateBlobs(
 namespace detail {
 
 // Getter for response contents (needs specialization, never implemented)
-template <class T_Content, class T_Response>
-static auto GetResponseContents(T_Response const&) noexcept
-    -> pb::RepeatedPtrField<T_Content> const&;
+template <class TContent, class TResponse>
+static auto GetResponseContents(TResponse const&) noexcept
+    -> pb::RepeatedPtrField<TContent> const&;
 
 // Specialization of GetResponseContents for 'FindMissingBlobsResponse'
 template <>
@@ -643,26 +636,26 @@ auto GetResponseContents<bazel_re::Digest, bazel_re::SplitBlobResponse>(
 
 }  // namespace detail
 
-template <typename T_Request, typename T_ForwardIter>
+template <typename TRequest, typename TForwardIter>
 auto BazelCasClient::CreateBatchRequestsMaxSize(
     std::string const& instance_name,
-    T_ForwardIter const& first,
-    T_ForwardIter const& last,
+    TForwardIter const& first,
+    TForwardIter const& last,
     std::string const& heading,
-    std::function<void(T_Request*,
-                       typename T_ForwardIter::value_type const&)> const&
-        request_builder) const noexcept -> std::vector<T_Request> {
+    std::function<void(TRequest*,
+                       typename TForwardIter::value_type const&)> const&
+        request_builder) const noexcept -> std::vector<TRequest> {
     if (first == last) {
         return {};
     }
-    std::vector<T_Request> result;
-    T_Request accumulating_request;
+    std::vector<TRequest> result;
+    TRequest accumulating_request;
     std::for_each(
         first,
         last,
         [&instance_name, &accumulating_request, &result, &request_builder](
             auto const& blob) {
-            T_Request request;
+            TRequest request;
             request.set_instance_name(instance_name);
             request_builder(&request, blob);
             if (accumulating_request.ByteSizeLong() + request.ByteSizeLong() >
@@ -693,8 +686,7 @@ auto BazelCasClient::CreateBatchRequestsMaxSize(
 auto BazelCasClient::CreateUpdateBlobsSingleRequest(BazelBlob const& b) noexcept
     -> bazel_re::BatchUpdateBlobsRequest_Request {
     bazel_re::BatchUpdateBlobsRequest_Request r{};
-    r.set_allocated_digest(
-        gsl::owner<bazel_re::Digest*>{new bazel_re::Digest{b.digest}});
+    (*r.mutable_digest()) = b.digest;
     r.set_data(*b.data);
     return r;
 }
@@ -706,18 +698,17 @@ auto BazelCasClient::CreateGetTreeRequest(
     std::string const& page_token) noexcept -> bazel_re::GetTreeRequest {
     bazel_re::GetTreeRequest request;
     request.set_instance_name(instance_name);
-    request.set_allocated_root_digest(
-        gsl::owner<bazel_re::Digest*>{new bazel_re::Digest{root_digest}});
+    (*request.mutable_root_digest()) = root_digest;
     request.set_page_size(page_size);
     request.set_page_token(page_token);
     return request;
 }
 
-template <class T_Content, class T_Response>
+template <class TContent, class TResponse>
 auto BazelCasClient::ProcessResponseContents(
-    T_Response const& response) const noexcept -> std::vector<T_Content> {
-    std::vector<T_Content> output;
-    auto const& contents = detail::GetResponseContents<T_Content>(response);
+    TResponse const& response) const noexcept -> std::vector<TContent> {
+    std::vector<TContent> output;
+    auto const& contents = detail::GetResponseContents<TContent>(response);
     std::copy(contents.begin(), contents.end(), std::back_inserter(output));
     return output;
 }

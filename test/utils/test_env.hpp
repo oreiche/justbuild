@@ -23,7 +23,7 @@
 #include <string>
 
 #include "src/buildtool/auth/authentication.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "test/utils/logging/log_config.hpp"
 
 [[nodiscard]] static inline auto ReadPlatformPropertiesFromEnv()
@@ -40,10 +40,12 @@
     return properties;
 }
 
-static inline void ReadCompatibilityFromEnv() {
-    auto* compatible = std::getenv("COMPATIBLE");
-    if (compatible != nullptr) {
-        Compatibility::SetCompatible();
+[[nodiscard]] static inline auto ReadCompatibilityFromEnv() noexcept
+    -> std::optional<bool> {
+    try {
+        return std::getenv("COMPATIBLE") != nullptr;
+    } catch (...) {
+        return std::nullopt;
     }
 }
 

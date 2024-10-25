@@ -142,10 +142,10 @@ class AsyncMapConsumer {
   private:
     using NodeRequests = std::unordered_map<Key, std::unordered_set<NodePtr>>;
 
-    std::shared_ptr<ValueCreator> value_creator_{};
-    Map map_{};
-    mutable std::shared_mutex requests_m_{};
-    std::unordered_map<std::thread::id, NodeRequests> requests_by_thread_{};
+    std::shared_ptr<ValueCreator> value_creator_;
+    Map map_;
+    mutable std::shared_mutex requests_m_;
+    std::unordered_map<std::thread::id, NodeRequests> requests_by_thread_;
 
     // Similar to previous methods, but in this case the logger and failure
     // function are already std::shared_ptr type.
@@ -223,7 +223,7 @@ class AsyncMapConsumer {
                                       std::move(logger),
                                       FailureFunctionPtr{failptr});
             });
-        auto wrappedLogger =
+        auto wrapped_logger =
             std::make_shared<Logger>([logger, node, ts](auto msg, auto fatal) {
                 if (fatal) {
                     node->Fail(ts);
@@ -236,9 +236,9 @@ class AsyncMapConsumer {
              ts,
              key,
              setterptr = std::move(setterptr),
-             wrappedLogger = std::move(wrappedLogger),
+             wrapped_logger = std::move(wrapped_logger),
              subcallerptr = std::move(subcallerptr)]() {
-                (*vc)(ts, setterptr, wrappedLogger, subcallerptr, key);
+                (*vc)(ts, setterptr, wrapped_logger, subcallerptr, key);
             });
         return node;
     }

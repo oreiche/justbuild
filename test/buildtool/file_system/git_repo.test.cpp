@@ -78,7 +78,7 @@ class TestUtils {
                                               : (*repo_path / ".git").string()),
                         QuoteForShell(repo_path->string()));
         if (std::system(cmd.c_str()) == 0) {
-            return *repo_path;
+            return repo_path;
         }
         return std::nullopt;
     }
@@ -214,12 +214,12 @@ TEST_CASE("Single-threaded real repository local operations", "[git_repo]") {
     }
 
     SECTION("Get head commit") {
-        auto repo_wHead_path = TestUtils::CreateTestRepoWithCheckout();
-        REQUIRE(repo_wHead_path);
-        auto repo_wHead = GitRepo::Open(*repo_wHead_path);
-        REQUIRE(repo_wHead);
+        auto repo_head_path = TestUtils::CreateTestRepoWithCheckout();
+        REQUIRE(repo_head_path);
+        auto repo_head = GitRepo::Open(*repo_head_path);
+        REQUIRE(repo_head);
 
-        auto head_commit = repo_wHead->GetHeadCommit(logger);
+        auto head_commit = repo_head->GetHeadCommit(logger);
         REQUIRE(head_commit);
         CHECK(*head_commit == kRootCommit);
     }
@@ -263,9 +263,9 @@ TEST_CASE("Single-threaded real repository local operations", "[git_repo]") {
         // tag uncommitted tree
         auto foo_bar = GitRepo::tree_entries_t{
             {FromHexString(kFooId).value_or<std::string>({}),
-             {GitRepo::tree_entry_t{"foo", ObjectType::File}}},
+             {GitRepo::TreeEntry{"foo", ObjectType::File}}},
             {FromHexString(kBarId).value_or<std::string>({}),
-             {GitRepo::tree_entry_t{"bar", ObjectType::Executable}}}};
+             {GitRepo::TreeEntry{"bar", ObjectType::Executable}}}};
         auto foo_bar_id = repo_tag->CreateTree(foo_bar);
         REQUIRE(foo_bar_id);
         auto tree_id = ToHexString(*foo_bar_id);
@@ -611,7 +611,7 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
     threads.reserve(kNumThreads);
 
     SECTION("Lookups in the same ODB") {
-        constexpr int NUM_CASES = 10;
+        constexpr int kNumCases = 10;
         for (int id{}; id < kNumThreads; ++id) {
             threads.emplace_back(
                 [&storage_config,
@@ -621,7 +621,7 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
                  &starting_signal](int tid) {
                     starting_signal.wait(false);
                     // cases based on thread number
-                    switch (tid % NUM_CASES) {
+                    switch (tid % kNumCases) {
                         case 0: {
                             auto remote_repo = GitRepo::Open(remote_cas);
                             REQUIRE(remote_repo);
@@ -743,6 +743,8 @@ TEST_CASE("Multi-threaded fake repository operations", "[git_repo]") {
                                 std::nullopt,
                                 logger));
                         } break;
+                        default:
+                            REQUIRE(false);
                     }
                 },
                 id);

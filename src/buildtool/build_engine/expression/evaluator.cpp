@@ -319,7 +319,7 @@ auto Range(ExpressionPtr const& expr) -> ExpressionPtr {
     auto result = Expression::list_t{};
     result.reserve(len);
     for (std::size_t i = 0; i < len; i++) {
-        result.emplace_back(ExpressionPtr{fmt::format("{}", i)});
+        result.emplace_back(fmt::format("{}", i));
     }
     return ExpressionPtr{result};
 }
@@ -347,14 +347,16 @@ auto ShellQuote(std::string arg) -> std::string {
     return fmt::format("'{}'", arg);
 }
 
-template <bool kDoQuote = false>
+template <bool kDoQuote = false, bool kAllowString = false>
 auto Join(ExpressionPtr const& expr, std::string const& sep) -> ExpressionPtr {
-    if (expr->IsString()) {
-        auto string = expr->String();
-        if constexpr (kDoQuote) {
-            string = ShellQuote(std::move(string));
+    if constexpr (kAllowString) {
+        if (expr->IsString()) {
+            auto string = expr->String();
+            if constexpr (kDoQuote) {
+                string = ShellQuote(std::move(string));
+            }
+            return ExpressionPtr{std::move(string)};
         }
-        return ExpressionPtr{std::move(string)};
     }
     if (expr->IsList()) {
         auto const& list = expr->List();
@@ -370,12 +372,13 @@ auto Join(ExpressionPtr const& expr, std::string const& sep) -> ExpressionPtr {
         });
         return ExpressionPtr{ss.str()};
     }
-    throw Evaluator::EvaluationError{fmt::format(
-        "Join expects string or list but got: {}.", expr->ToString())};
+    throw Evaluator::EvaluationError{
+        fmt::format("Join expects a list of strings{}, but got: {}.",
+                    kAllowString ? " or a single string" : "",
+                    expr->ToString())};
 }
 
 template <bool kDisjoint = false>
-// NOLINTNEXTLINE(misc-no-recursion)
 auto Union(Expression::list_t const& dicts,
            std::size_t from,
            std::size_t to) -> ExpressionPtr {
@@ -540,7 +543,6 @@ auto ExpandQuasiQuote(const SubExprEvaluator& eval,
                       ExpressionPtr const& expr,
                       Configuration const& env) -> ExpressionPtr;
 
-// NOLINTNEXTLINE(misc-no-recursion)
 auto ExpandQuasiQuoteListEntry(const SubExprEvaluator& eval,
                                ExpressionPtr const& expr,
                                Configuration const& env) -> ExpressionPtr {
@@ -595,7 +597,6 @@ auto ExpandQuasiQuoteListEntry(const SubExprEvaluator& eval,
     return ExpressionPtr{Expression::list_t{expr}};
 }
 
-// NOLINTNEXTLINE(misc-no-recursion)
 auto ExpandQuasiQuote(const SubExprEvaluator& eval,
                       ExpressionPtr const& expr,
                       Configuration const& env) -> ExpressionPtr {
@@ -790,7 +791,7 @@ auto JoinCmdExpr(SubExprEvaluator&& eval,
                  ExpressionPtr const& expr,
                  Configuration const& env) -> ExpressionPtr {
     auto const& list = eval(expr->Get("$1", list_t{}), env);
-    return Join</*kDoQuote=*/true>(list, " ");
+    return Join</*kDoQuote=*/true, /*kAllowString=*/false>(list, " ");
 }
 
 auto JsonEncodeExpr(SubExprEvaluator&& eval,
@@ -1123,7 +1124,8 @@ auto ConcatTargetNameExpr(SubExprEvaluator&& eval,
                           Configuration const& env) -> ExpressionPtr {
     auto p1 = eval(expr->Get("$1", ""s), env);
     auto p2 = eval(expr->Get("$2", ""s), env);
-    return ConcatTargetName(p1, Join(p2, ""));
+    return ConcatTargetName(
+        p1, Join</*kDoQuote=*/false, /*kAllowString=*/true>(p2, ""));
 }
 
 auto ContextExpr(SubExprEvaluator&& eval,
@@ -1399,17 +1401,11 @@ auto Evaluator::EvaluateExpression(
             FunctionMap::MakePtr(kBuiltInFunctions, provider_functions));
     } catch (EvaluationError const& ex) {
         if (ex.UserContext()) {
-            try {
-                note_user_context();
-            } catch (...) {
-                // should not throw
-            }
+            note_user_context();
         }
-        else {
-            if (ex.WhileEvaluation()) {
-                ss << "Expression evaluation traceback (most recent call last):"
-                   << std::endl;
-            }
+        else if (ex.WhileEvaluation()) {
+            ss << "Expression evaluation traceback (most recent call last):"
+               << std::endl;
         }
         ss << ex.what();
         for (auto const& object : ex.InvolvedObjects()) {
@@ -1418,15 +1414,10 @@ auto Evaluator::EvaluateExpression(
     } catch (std::exception const& ex) {
         ss << ex.what();
     }
-    try {
-        logger(ss.str());
-    } catch (...) {
-        // should not throw
-    }
+    logger(ss.str());
     return ExpressionPtr{nullptr};
 }
 
-// NOLINTNEXTLINE(misc-no-recursion)
 auto Evaluator::Evaluate(ExpressionPtr const& expr,
                          Configuration const& env,
                          FunctionMapPtr const& functions) -> ExpressionPtr {
@@ -1440,7 +1431,6 @@ auto Evaluator::Evaluate(ExpressionPtr const& expr,
                 expr->List().cbegin(),
                 expr->List().cend(),
                 std::back_inserter(list),
-                // NOLINTNEXTLINE(misc-no-recursion)
                 [&](auto const& e) { return Evaluate(e, env, functions); });
             return ExpressionPtr{list};
         }

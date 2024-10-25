@@ -16,7 +16,7 @@
 
 #include <cstddef>
 
-#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
@@ -25,7 +25,7 @@ auto CapabilitiesServiceImpl::GetCapabilities(
     const ::bazel_re::GetCapabilitiesRequest*
     /*request*/,
     ::bazel_re::ServerCapabilities* response) -> ::grpc::Status {
-    if (not Compatibility::IsCompatible()) {
+    if (ProtocolTraits::IsNative(hash_type_)) {
         auto const* str = "GetCapabilities not implemented";
         Logger::Log(LogLevel::Error, str);
         return ::grpc::Status{grpc::StatusCode::UNIMPLEMENTED, str};
@@ -36,7 +36,7 @@ auto CapabilitiesServiceImpl::GetCapabilities(
     cache.add_digest_functions(
         ::bazel_re::DigestFunction_Value::DigestFunction_Value_SHA256);
     cache.mutable_action_cache_update_capabilities()->set_update_enabled(false);
-    static constexpr std::size_t kMaxBatchTransferSize = 1024 * 1024;
+    static constexpr std::size_t kMaxBatchTransferSize = 1024UL * 1024;
     cache.set_max_batch_total_size_bytes(kMaxBatchTransferSize);
     static_assert(kMaxBatchTransferSize < GRPC_DEFAULT_MAX_RECV_MESSAGE_LENGTH,
                   "Max batch transfer size too large.");

@@ -22,7 +22,8 @@
 #include <thread>
 #include <unordered_set>
 
-#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -204,8 +205,8 @@ std::unordered_set<git_filemode_t> const kNonSpecialGitFileModes{
 
 struct InMemoryODBBackend {
     git_odb_backend parent;
-    GitRepo::tree_entries_t const* entries{nullptr};       // object headers
-    std::unordered_map<std::string, std::string> trees{};  // solid tree objects
+    GitRepo::tree_entries_t const* entries{nullptr};     // object headers
+    std::unordered_map<std::string, std::string> trees;  // solid tree objects
 };
 
 [[nodiscard]] auto backend_read_header(size_t* len_p,
@@ -357,12 +358,10 @@ void fetch_backend_free(git_odb_backend* /*_backend*/) {}
 auto const kFetchIntoODBParent = CreateFetchIntoODBParent();
 
 // callback to remote fetch without an SSL certificate check
-const auto certificate_passthrough_cb = [](git_cert* /*cert*/,
-                                           int /*valid*/,
-                                           const char* /*host*/,
-                                           void* /*payload*/) -> int {
-    return 0;
-};
+const auto kCertificatePassthrough = [](git_cert* /*cert*/,
+                                        int /*valid*/,
+                                        const char* /*host*/,
+                                        void* /*payload*/) -> int { return 0; };
 
 }  // namespace
 #endif  // BOOTSTRAP_BUILD_TOOL
@@ -503,13 +502,10 @@ GitRepo::GitRepo(GitRepo&& other) noexcept
 }
 
 auto GitRepo::operator=(GitRepo&& other) noexcept -> GitRepo& {
-    try {
-        git_cas_ = std::move(other.git_cas_);
-        repo_ = std::move(other.repo_);
-        is_repo_fake_ = other.is_repo_fake_;
-        other.git_cas_ = nullptr;
-    } catch (...) {
-    }
+    git_cas_ = std::move(other.git_cas_);
+    repo_ = std::move(other.repo_);
+    is_repo_fake_ = other.is_repo_fake_;
+    other.git_cas_ = nullptr;
     return *this;
 }
 
@@ -876,8 +872,6 @@ auto GitRepo::FetchFromPath(std::shared_ptr<git_config> cfg,
         // wrap remote object
         auto remote = std::unique_ptr<git_remote, decltype(&remote_closer)>(
             remote_ptr, remote_closer);
-        // get the canonical url
-        auto canonical_url = std::string(git_remote_url(remote.get()));
 
         // get a well-defined config file
         if (not cfg) {
@@ -901,25 +895,21 @@ auto GitRepo::FetchFromPath(std::shared_ptr<git_config> cfg,
         // no proxy
         fetch_opts.proxy_opts.type = GIT_PROXY_NONE;
         // no SSL verification
-        fetch_opts.callbacks.certificate_check = certificate_passthrough_cb;
+        fetch_opts.callbacks.certificate_check = kCertificatePassthrough;
         // disable update of the FETCH_HEAD pointer
         fetch_opts.update_fetchhead = 0;
 
         // setup fetch refspecs array
-        git_strarray refspecs_array_obj{};
+        GitStrArray refspecs_array_obj;
         if (branch) {
             // make sure we check for tags as well
-            std::string tag = fmt::format("+refs/tags/{}", *branch);
-            std::string head = fmt::format("+refs/heads/{}", *branch);
-            PopulateStrarray(&refspecs_array_obj, {tag, head});
+            refspecs_array_obj.AddEntry(fmt::format("+refs/tags/{}", *branch));
+            refspecs_array_obj.AddEntry(fmt::format("+refs/heads/{}", *branch));
         }
-        auto refspecs_array =
-            std::unique_ptr<git_strarray, decltype(&strarray_deleter)>(
-                &refspecs_array_obj, strarray_deleter);
 
+        auto const refspecs_array = refspecs_array_obj.Get();
         if (git_remote_fetch(
-                remote.get(), refspecs_array.get(), &fetch_opts, nullptr) !=
-            0) {
+                remote.get(), &refspecs_array, &fetch_opts, nullptr) != 0) {
             (*logger)(fmt::format(
                           "Fetching {} in local repository {} failed with:\n{}",
                           branch ? fmt::format("branch {}", *branch) : "all",
@@ -1687,7 +1677,7 @@ auto GitRepo::GetObjectByPathFromTree(std::string const& tree_id,
                     GetGitCAS()->ReadObject(entry_id, /*is_hex_id=*/true)) {
                 return TreeEntryInfo{.id = entry_id,
                                      .type = entry_type,
-                                     .symlink_content = *target};
+                                     .symlink_content = std::move(target)};
             }
             Logger::Log(
                 LogLevel::Trace,
@@ -1843,20 +1833,30 @@ auto GitRepo::ReadTree(std::string const& id,
         // ignore_special==false.
         if (not ignore_special) {
             // we first gather all symlink candidates
-            std::vector<bazel_re::Digest> symlinks{};
+            // to check symlinks in bulk, optimized for network-backed repos
+            std::vector<ArtifactDigest> symlinks{};
             symlinks.reserve(entries.size());  // at most one symlink per entry
             for (auto const& entry : entries) {
-                for (auto const& item : entry.second) {
-                    if (IsSymlinkObject(item.type)) {
-                        symlinks.emplace_back(bazel_re::Digest(
-                            ArtifactDigest(ToHexString(entry.first),
-                                           /*size=*/0,
-                                           /*is_tree=*/false)));
-                        break;  // no need to check other items with same hash
+                if (std::any_of(entry.second.begin(),
+                                entry.second.end(),
+                                [](TreeEntry const& item) {
+                                    return IsSymlinkObject(item.type);
+                                })) {
+                    auto digest = ArtifactDigestFactory::Create(
+                        HashFunction::Type::GitSHA1,
+                        ToHexString(entry.first),
+                        /*size=*/0,
+                        /*is_tree=*/false);
+                    if (not digest) {
+                        Logger::Log(LogLevel::Debug,
+                                    "Conversion error in GitRepo:\n {}",
+                                    std::move(digest).error());
+                        return std::nullopt;
                     }
+                    symlinks.emplace_back(*std::move(digest));
                 }
             }
-            // we check symlinks in bulk, optimized for network-backed repos
+
             if (not symlinks.empty() and
                 not std::invoke(check_symlinks.get(), symlinks)) {
                 Logger::Log(LogLevel::Error,
@@ -1939,11 +1939,7 @@ auto GitRepo::CreateTree(tree_entries_t const& entries) const noexcept
                         GitLastError());
             return std::nullopt;
         }
-        auto raw_id = ToRawString(oid);
-        if (not raw_id) {
-            return std::nullopt;
-        }
-        return std::move(*raw_id);
+        return ToRawString(oid);
     } catch (std::exception const& ex) {
         Logger::Log(
             LogLevel::Error, "creating tree failed with:\n{}", ex.what());
@@ -2095,25 +2091,13 @@ auto GitRepo::CreateTreeFromDirectory(std::filesystem::path const& dir,
     };
 
     if (ReadDirectory(dir, dir_read_and_store, logger)) {
-        if (auto raw_id = CreateTree(entries)) {
-            return *raw_id;
-        }
+        return CreateTree(entries);
     }
     return std::nullopt;
 #endif  // BOOTSTRAP_BUILD_TOOL
 }
 
-void GitRepo::PopulateStrarray(
-    git_strarray* array,
-    std::vector<std::string> const& string_list) noexcept {
-    array->count = string_list.size();
-    array->strings = gsl::owner<char**>(new char*[string_list.size()]);
-    for (auto const& elem : string_list) {
-        auto i =
-            static_cast<std::size_t>(&elem - &string_list[0]);  // get index
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        array->strings[i] = gsl::owner<char*>(new char[elem.size() + 1]);
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        strncpy(array->strings[i], elem.c_str(), elem.size() + 1);
-    }
+auto GitRepo::GitStrArray::Get() & noexcept -> git_strarray {
+    return git_strarray{.strings = entry_pointers_.data(),
+                        .count = entry_pointers_.size()};
 }

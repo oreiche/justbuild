@@ -28,11 +28,13 @@
 
 #include "fmt/core.h"
 #include "src/buildtool/build_engine/base_maps/field_reader.hpp"
+#include "src/buildtool/build_engine/expression/evaluator.hpp"
 #include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/build_engine/expression/expression_ptr.hpp"
 #include "src/buildtool/build_engine/target_map/export.hpp"
 #include "src/buildtool/build_engine/target_map/utils.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/utils/cpp/path.hpp"
 #include "src/utils/cpp/vector.hpp"
@@ -107,18 +109,18 @@ void ReportArtifactWithDependencyOrigin(
 
 void ReportStagingConflict(
     const std::string& location,
-    const ExpressionPtr& stage_A,
-    const ExpressionPtr& stage_B,
+    const ExpressionPtr& stage_a,
+    const ExpressionPtr& stage_b,
     const std::unordered_map<BuildMaps::Base::EntityName, AnalysedTargetPtr>&
         deps_by_target,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger) {
     std::stringstream msg{};
-    auto artifact_A = stage_A->Get(location, Expression::kNone);
-    auto artifact_B = stage_B->Get(location, Expression::kNone);
+    auto artifact_a = stage_a->Get(location, Expression::kNone);
+    auto artifact_b = stage_b->Get(location, Expression::kNone);
     msg << "Staging conflict on path " << nlohmann::json(location).dump()
         << " between\n";
-    ReportArtifactWithDependencyOrigin(artifact_A, deps_by_target, &msg);
-    ReportArtifactWithDependencyOrigin(artifact_B, deps_by_target, &msg);
+    ReportArtifactWithDependencyOrigin(artifact_a, deps_by_target, &msg);
+    ReportArtifactWithDependencyOrigin(artifact_b, deps_by_target, &msg);
     (*logger)(msg.str(), true);
 }
 
@@ -271,7 +273,7 @@ void BlobGenRuleWithDeps(
     auto stage = ExpressionPtr{Expression::map_t{
         name_val->String(),
         ExpressionPtr{ArtifactDescription::CreateKnown(
-            ArtifactDigest::Create<ObjectType::File>(
+            ArtifactDigestFactory::HashDataAs<ObjectType::File>(
                 context->storage->GetHashFunction(), data_val->String()),
             blob_type)}}};
 
@@ -867,12 +869,11 @@ void InstallRule(
     auto files = std::unordered_map<std::string, BuildMaps::Base::EntityName>{};
     files.reserve(files_exp->Map().size());
     for (auto const& [path, dep_exp] : files_exp->Map()) {
-        std::string path_ = path;  // Have a variable to capture
         auto dep_name = dep_exp.Evaluate(
-            param_config, {}, [&logger, &path_](auto const& msg) {
+            param_config, {}, [&logger, &path = path](auto const& msg) {
                 (*logger)(
                     fmt::format(
-                        "While evaluating files entry for {}:\n{}", path_, msg),
+                        "While evaluating files entry for {}:\n{}", path, msg),
                     true);
             });
         if (not dep_name) {
@@ -921,8 +922,8 @@ void InstallRule(
         std::vector<std::pair<BuildMaps::Base::EntityName, std::string>>{};
     dirs.reserve(dirs_value->List().size());
     for (auto const& entry : dirs_value->List()) {
-        if (not(entry->IsList() and entry->List().size() == 2 and
-                entry->List()[1]->IsString())) {
+        if (not entry->IsList() or entry->List().size() != 2 or
+            not entry->List()[1]->IsString()) {
             (*logger)(fmt::format("Expected dirs to evaluate to a list of "
                                   "target-path pairs, but found entry {}",
                                   entry->ToString()),
@@ -946,8 +947,7 @@ void InstallRule(
         }
         dependency_keys.emplace_back(
             BuildMaps::Target::ConfiguredTarget{*dep_target, key.config});
-        dirs.emplace_back(std::pair<BuildMaps::Base::EntityName, std::string>{
-            *dep_target, entry->List()[1]->String()});
+        dirs.emplace_back(*dep_target, entry->List()[1]->String());
     }
 
     (*subcaller)(
@@ -1680,10 +1680,11 @@ auto HandleBuiltin(const gsl::not_null<AnalyseContext*>& context,
     }
     auto target_logger = std::make_shared<BuildMaps::Target::TargetMap::Logger>(
         [logger, rule_name, key](auto msg, auto fatal) {
-            (*logger)(fmt::format("While evaluating {} target {}:\n{}",
-                                  rule_name,
-                                  key.ToShortString(),
-                                  msg),
+            (*logger)(fmt::format(
+                          "While evaluating {} target {}:\n{}",
+                          rule_name,
+                          key.ToShortString(Evaluator::GetExpressionLogLimit()),
+                          msg),
                       fatal);
         });
     (it->second)(

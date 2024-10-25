@@ -26,7 +26,11 @@
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/common/git_hashes_converter.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/git_tree.hpp"
 #include "src/buildtool/logging/log_level.hpp"
@@ -57,19 +61,19 @@ class FilteredIterator {
     FilteredIterator(I first, I last, predicate_t p) noexcept
         : iterator_{std::find_if(first, last, p)},
           end_{std::move(last)},
-          p{std::move(p)} {}
+          p_{std::move(p)} {}
 
     auto operator*() const noexcept -> reference { return iterator_->first; }
 
     auto operator++() noexcept -> FilteredIterator& {
         ++iterator_;
-        iterator_ = std::find_if(iterator_, end_, p);
+        iterator_ = std::find_if(iterator_, end_, p_);
         return *this;
     }
 
     [[nodiscard]] auto begin() noexcept -> FilteredIterator& { return *this; }
     [[nodiscard]] auto end() const noexcept -> FilteredIterator {
-        return FilteredIterator{end_, end_, p};
+        return FilteredIterator{end_, end_, p_};
     }
 
     [[nodiscard]] friend auto operator==(FilteredIterator const& x,
@@ -87,18 +91,18 @@ class FilteredIterator {
   private:
     I iterator_{};
     const I end_{};
-    predicate_t p{};
+    predicate_t p_{};
 };
 
 class FileRoot {
     using fs_root_t = std::filesystem::path;
-    struct git_root_t {
+    struct RootGit {
         gsl::not_null<GitCASPtr> cas;
         gsl::not_null<GitTreePtr> tree;
     };
     // absent roots are defined by a tree hash with no witnessing repository
     using absent_root_t = std::string;
-    using root_t = std::variant<fs_root_t, git_root_t, absent_root_t>;
+    using root_t = std::variant<fs_root_t, RootGit, absent_root_t>;
 
   public:
     static constexpr auto kGitTreeMarker = "git tree";
@@ -181,23 +185,14 @@ class FileRoot {
 
         [[nodiscard]] auto ContainsBlob(std::string const& name) const noexcept
             -> bool {
-            try {
-                if (std::holds_alternative<tree_t>(data_)) {
-                    auto const& data = std::get<tree_t>(data_);
-                    auto ptr = data->LookupEntryByName(name);
-                    if (static_cast<bool>(ptr)) {
-                        return IsBlobObject(ptr->Type());
-                    }
-                    return false;
-                }
-                if (std::holds_alternative<pairs_t>(data_)) {
-                    auto const& data = std::get<pairs_t>(data_);
-                    auto it = data.find(name);
-                    return (it != data.end() and IsBlobObject(it->second));
-                }
-            } catch (...) {
+            if (auto const* const data = std::get_if<tree_t>(&data_)) {
+                auto const ptr = (*data)->LookupEntryByName(name);
+                return ptr != nullptr and IsBlobObject(ptr->Type());
             }
-
+            if (auto const* const data = std::get_if<pairs_t>(&data_)) {
+                auto const it = data->find(name);
+                return it != data->end() and IsBlobObject(it->second);
+            }
             return false;
         }
 
@@ -218,9 +213,10 @@ class FileRoot {
 
         /// \brief Retrieve a root tree as a KNOWN artifact.
         /// Only succeeds if no entries have to be ignored.
-        [[nodiscard]] auto AsKnownTree(std::string const& repository)
+        [[nodiscard]] auto AsKnownTree(HashFunction::Type hash_type,
+                                       std::string const& repository)
             const noexcept -> std::optional<ArtifactDescription> {
-            if (Compatibility::IsCompatible()) {
+            if (not ProtocolTraits::IsNative(hash_type)) {
                 return std::nullopt;
             }
             if (std::holds_alternative<tree_t>(data_)) {
@@ -230,8 +226,16 @@ class FileRoot {
                     if (auto id = data->Hash()) {
                         auto const& size = data->Size();
                         if (size) {
+                            auto digest = ArtifactDigestFactory::Create(
+                                HashFunction::Type::GitSHA1,
+                                *id,
+                                *size,
+                                /*is_tree=*/true);
+                            if (not digest) {
+                                return std::nullopt;
+                            }
                             return ArtifactDescription::CreateKnown(
-                                ArtifactDigest{*id, *size, /*is_tree=*/true},
+                                *std::move(digest),
                                 ObjectType::Tree,
                                 repository);
                         }
@@ -320,24 +324,27 @@ class FileRoot {
     FileRoot(gsl::not_null<GitCASPtr> const& cas,
              gsl::not_null<GitTreePtr> const& tree,
              bool ignore_special = false) noexcept
-        : root_{git_root_t{cas, tree}}, ignore_special_{ignore_special} {}
+        : root_{RootGit{cas, tree}}, ignore_special_{ignore_special} {}
 
     [[nodiscard]] static auto FromGit(std::filesystem::path const& repo_path,
                                       std::string const& git_tree_id,
                                       bool ignore_special = false) noexcept
         -> std::optional<FileRoot> {
-        if (auto cas = GitCAS::Open(repo_path)) {
-            if (auto tree = GitTree::Read(cas, git_tree_id, ignore_special)) {
-                try {
-                    return FileRoot{
-                        cas,
-                        std::make_shared<GitTree const>(std::move(*tree)),
-                        ignore_special};
-                } catch (...) {
-                }
-            }
+        auto cas = GitCAS::Open(repo_path);
+        if (not cas) {
+            return std::nullopt;
         }
-        return std::nullopt;
+        auto tree = GitTree::Read(cas, git_tree_id, ignore_special);
+        if (not tree) {
+            return std::nullopt;
+        }
+        try {
+            return FileRoot{cas,
+                            std::make_shared<GitTree const>(std::move(*tree)),
+                            ignore_special};
+        } catch (...) {
+            return std::nullopt;
+        }
     }
 
     /// \brief Return a complete description of the content of this root, if
@@ -346,12 +353,12 @@ class FileRoot {
     [[nodiscard]] auto ContentDescription() const noexcept
         -> std::optional<nlohmann::json> {
         try {
-            if (std::holds_alternative<git_root_t>(root_)) {
+            if (std::holds_alternative<RootGit>(root_)) {
                 nlohmann::json j;
                 j.push_back(ignore_special_ ? kGitTreeIgnoreSpecialMarker
                                             : kGitTreeMarker);
                 // we need the root tree id, irrespective of ignore_special flag
-                j.push_back(std::get<git_root_t>(root_).tree->FileRootHash());
+                j.push_back(std::get<RootGit>(root_).tree->FileRootHash());
                 return j;
             }
             if (std::holds_alternative<absent_root_t>(root_)) {
@@ -374,17 +381,17 @@ class FileRoot {
     // `IsDirectory()`, and `BlobType()` on contents of the same directory will
     // be served without any additional file system lookups.
     [[nodiscard]] auto HasFastDirectoryLookup() const noexcept -> bool {
-        return std::holds_alternative<git_root_t>(root_);
+        return std::holds_alternative<RootGit>(root_);
     }
 
     [[nodiscard]] auto Exists(std::filesystem::path const& path) const noexcept
         -> bool {
-        if (std::holds_alternative<git_root_t>(root_)) {
+        if (std::holds_alternative<RootGit>(root_)) {
             if (path == ".") {
                 return true;
             }
             return static_cast<bool>(
-                std::get<git_root_t>(root_).tree->LookupEntryByPath(path));
+                std::get<RootGit>(root_).tree->LookupEntryByPath(path));
         }
         if (std::holds_alternative<fs_root_t>(root_)) {
             auto root_path = std::get<fs_root_t>(root_) / path;
@@ -400,10 +407,9 @@ class FileRoot {
 
     [[nodiscard]] auto IsFile(
         std::filesystem::path const& file_path) const noexcept -> bool {
-        if (std::holds_alternative<git_root_t>(root_)) {
-            if (auto entry =
-                    std::get<git_root_t>(root_).tree->LookupEntryByPath(
-                        file_path)) {
+        if (std::holds_alternative<RootGit>(root_)) {
+            if (auto entry = std::get<RootGit>(root_).tree->LookupEntryByPath(
+                    file_path)) {
                 return IsFileObject(entry->Type());
             }
         }
@@ -416,10 +422,9 @@ class FileRoot {
 
     [[nodiscard]] auto IsSymlink(
         std::filesystem::path const& file_path) const noexcept -> bool {
-        if (std::holds_alternative<git_root_t>(root_)) {
-            if (auto entry =
-                    std::get<git_root_t>(root_).tree->LookupEntryByPath(
-                        file_path)) {
+        if (std::holds_alternative<RootGit>(root_)) {
+            if (auto entry = std::get<RootGit>(root_).tree->LookupEntryByPath(
+                    file_path)) {
                 return IsSymlinkObject(entry->Type());
             }
         }
@@ -437,13 +442,12 @@ class FileRoot {
 
     [[nodiscard]] auto IsDirectory(
         std::filesystem::path const& dir_path) const noexcept -> bool {
-        if (std::holds_alternative<git_root_t>(root_)) {
+        if (std::holds_alternative<RootGit>(root_)) {
             if (dir_path == ".") {
                 return true;
             }
-            if (auto entry =
-                    std::get<git_root_t>(root_).tree->LookupEntryByPath(
-                        dir_path)) {
+            if (auto entry = std::get<RootGit>(root_).tree->LookupEntryByPath(
+                    dir_path)) {
                 return entry->IsTree();
             }
         }
@@ -457,10 +461,9 @@ class FileRoot {
     /// \brief Read content of file or symlink.
     [[nodiscard]] auto ReadContent(std::filesystem::path const& file_path)
         const noexcept -> std::optional<std::string> {
-        if (std::holds_alternative<git_root_t>(root_)) {
-            if (auto entry =
-                    std::get<git_root_t>(root_).tree->LookupEntryByPath(
-                        file_path)) {
+        if (std::holds_alternative<RootGit>(root_)) {
+            if (auto entry = std::get<RootGit>(root_).tree->LookupEntryByPath(
+                    file_path)) {
                 if (IsBlobObject(entry->Type())) {
                     return entry->Blob();
                 }
@@ -481,8 +484,8 @@ class FileRoot {
     [[nodiscard]] auto ReadDirectory(std::filesystem::path const& dir_path)
         const noexcept -> DirectoryEntries {
         try {
-            if (std::holds_alternative<git_root_t>(root_)) {
-                auto const& tree = std::get<git_root_t>(root_).tree;
+            if (std::holds_alternative<RootGit>(root_)) {
+                auto const& tree = std::get<RootGit>(root_).tree;
                 if (dir_path == ".") {
                     return DirectoryEntries{&(*tree)};
                 }
@@ -516,10 +519,9 @@ class FileRoot {
 
     [[nodiscard]] auto BlobType(std::filesystem::path const& file_path)
         const noexcept -> std::optional<ObjectType> {
-        if (std::holds_alternative<git_root_t>(root_)) {
-            if (auto entry =
-                    std::get<git_root_t>(root_).tree->LookupEntryByPath(
-                        file_path)) {
+        if (std::holds_alternative<RootGit>(root_)) {
+            if (auto entry = std::get<RootGit>(root_).tree->LookupEntryByPath(
+                    file_path)) {
                 if (IsBlobObject(entry->Type())) {
                     return entry->Type();
                 }
@@ -539,9 +541,9 @@ class FileRoot {
     /// \brief Read a blob from the root based on its ID.
     [[nodiscard]] auto ReadBlob(std::string const& blob_id) const noexcept
         -> std::optional<std::string> {
-        if (std::holds_alternative<git_root_t>(root_)) {
-            return std::get<git_root_t>(root_).cas->ReadObject(
-                blob_id, /*is_hex_id=*/true);
+        if (std::holds_alternative<RootGit>(root_)) {
+            return std::get<RootGit>(root_).cas->ReadObject(blob_id,
+                                                            /*is_hex_id=*/true);
         }
         return std::nullopt;
     }
@@ -550,9 +552,9 @@ class FileRoot {
     /// This should include all valid entry types.
     [[nodiscard]] auto ReadTree(std::string const& tree_id) const noexcept
         -> std::optional<GitTree> {
-        if (std::holds_alternative<git_root_t>(root_)) {
+        if (std::holds_alternative<RootGit>(root_)) {
             try {
-                auto const& cas = std::get<git_root_t>(root_).cas;
+                auto const& cas = std::get<RootGit>(root_).cas;
                 return GitTree::Read(cas, tree_id);
             } catch (...) {
                 return std::nullopt;
@@ -564,28 +566,39 @@ class FileRoot {
     // Create LOCAL or KNOWN artifact. Does not check existence for LOCAL.
     // `file_path` must reference a blob.
     [[nodiscard]] auto ToArtifactDescription(
+        HashFunction::Type hash_type,
         std::filesystem::path const& file_path,
         std::string const& repository) const noexcept
         -> std::optional<ArtifactDescription> {
-        if (std::holds_alternative<git_root_t>(root_)) {
-            if (auto entry =
-                    std::get<git_root_t>(root_).tree->LookupEntryByPath(
-                        file_path)) {
+        if (std::holds_alternative<RootGit>(root_)) {
+            if (auto entry = std::get<RootGit>(root_).tree->LookupEntryByPath(
+                    file_path)) {
                 if (entry->IsBlob()) {
-                    if (Compatibility::IsCompatible()) {
-                        auto compatible_hash = Compatibility::RegisterGitEntry(
-                            entry->Hash(), *entry->Blob(), repository);
+                    if (not ProtocolTraits::IsNative(hash_type)) {
+                        auto compatible_hash =
+                            GitHashesConverter::Instance().RegisterGitEntry(
+                                entry->Hash(), *entry->Blob(), repository);
+                        auto digest =
+                            ArtifactDigestFactory::Create(hash_type,
+                                                          compatible_hash,
+                                                          *entry->Size(),
+                                                          /*is_tree=*/false);
+                        if (not digest) {
+                            return std::nullopt;
+                        }
                         return ArtifactDescription::CreateKnown(
-                            ArtifactDigest{compatible_hash,
-                                           *entry->Size(),
-                                           /*is_tree=*/false},
-                            entry->Type());
+                            *std::move(digest), entry->Type());
+                    }
+                    auto digest =
+                        ArtifactDigestFactory::Create(hash_type,
+                                                      entry->Hash(),
+                                                      *entry->Size(),
+                                                      /*is_tree=*/false);
+                    if (not digest) {
+                        return std::nullopt;
                     }
                     return ArtifactDescription::CreateKnown(
-                        ArtifactDigest{
-                            entry->Hash(), *entry->Size(), /*is_tree=*/false},
-                        entry->Type(),
-                        repository);
+                        *std::move(digest), entry->Type(), repository);
                 }
             }
             return std::nullopt;
@@ -648,9 +661,11 @@ class FileRoot {
             return std::pair(FileRoot{path}, std::move(path));
         }
         if (root[0] == FileRoot::kGitTreeMarker) {
-            if (not(root.size() == 3 and root[1].is_string() and
-                    root[2].is_string()) and
-                not(root.size() == 2 and root[1].is_string())) {
+            bool const has_one_arg = root.size() == 2 and root[1].is_string();
+            bool const has_two_args = root.size() == 3 and
+                                      root[1].is_string() and
+                                      root[2].is_string();
+            if (not has_one_arg and not has_two_args) {
                 *error_msg = fmt::format(
                     "\"git tree\" scheme expects one or two string "
                     "arguments, but found {} for {} of repository {}",
@@ -690,9 +705,11 @@ class FileRoot {
                              std::move(path));
         }
         if (root[0] == FileRoot::kGitTreeIgnoreSpecialMarker) {
-            if (not(root.size() == 3 and root[1].is_string() and
-                    root[2].is_string()) and
-                not(root.size() == 2 and root[1].is_string())) {
+            bool const has_one_arg = root.size() == 2 and root[1].is_string();
+            bool const has_two_args = root.size() == 3 and
+                                      root[1].is_string() and
+                                      root[2].is_string();
+            if (not has_one_arg and not has_two_args) {
                 *error_msg = fmt::format(
                     "\"git tree ignore-special\" scheme expects one or two "
                     "string arguments, but found {} for {} of repository {}",

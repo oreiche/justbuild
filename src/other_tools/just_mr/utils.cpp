@@ -19,7 +19,6 @@
 
 namespace JustMR::Utils {
 
-// NOLINTNEXTLINE(misc-no-recursion)
 auto ResolveRepo(ExpressionPtr const& repo_desc,
                  ExpressionPtr const& repos,
                  gsl::not_null<std::unordered_set<std::string>*> const& seen)
@@ -33,7 +32,7 @@ auto ResolveRepo(ExpressionPtr const& repo_desc,
         return std::nullopt;
     }
     [[maybe_unused]] auto insert_res = seen->insert(desc_str);
-    auto new_repo_desc = repos[desc_str];
+    auto const& new_repo_desc = repos[desc_str];
     if (not new_repo_desc->IsMap()) {
         Logger::Log(LogLevel::Error,
                     "Config: While resolving dependencies:\nDescription of "

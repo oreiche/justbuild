@@ -28,7 +28,7 @@ BazelNetwork::BazelNetwork(
     gsl::not_null<Auth const*> const& auth,
     gsl::not_null<RetryConfig const*> const& retry_config,
     ExecutionConfiguration const& exec_config,
-    HashFunction hash_function) noexcept
+    gsl::not_null<HashFunction const*> const& hash_function) noexcept
     : instance_name_{std::move(instance_name)},
       cas_{std::make_unique<BazelCasClient>(host, port, auth, retry_config)},
       ac_{std::make_unique<BazelAcClient>(host, port, auth, retry_config)},
@@ -37,7 +37,7 @@ BazelNetwork::BazelNetwork(
                                                    auth,
                                                    retry_config)},
       exec_config_{exec_config},
-      hash_function_{hash_function} {}
+      hash_function_{*hash_function} {}
 
 auto BazelNetwork::IsAvailable(bazel_re::Digest const& digest) const noexcept
     -> bool {
@@ -54,27 +54,28 @@ auto BazelNetwork::IsAvailable(std::vector<bazel_re::Digest> const& digests)
 
 auto BazelNetwork::SplitBlob(bazel_re::Digest const& blob_digest) const noexcept
     -> std::optional<std::vector<bazel_re::Digest>> {
-    return cas_->SplitBlob(instance_name_, blob_digest);
+    return cas_->SplitBlob(hash_function_, instance_name_, blob_digest);
 }
 
 auto BazelNetwork::SpliceBlob(
     bazel_re::Digest const& blob_digest,
     std::vector<bazel_re::Digest> const& chunk_digests) const noexcept
     -> std::optional<bazel_re::Digest> {
-    return cas_->SpliceBlob(instance_name_, blob_digest, chunk_digests);
+    return cas_->SpliceBlob(
+        hash_function_, instance_name_, blob_digest, chunk_digests);
 }
 
 auto BazelNetwork::BlobSplitSupport() const noexcept -> bool {
-    return cas_->BlobSplitSupport(instance_name_);
+    return cas_->BlobSplitSupport(hash_function_, instance_name_);
 }
 
 auto BazelNetwork::BlobSpliceSupport() const noexcept -> bool {
-    return cas_->BlobSpliceSupport(instance_name_);
+    return cas_->BlobSpliceSupport(hash_function_, instance_name_);
 }
 
-template <class T_Iter>
-auto BazelNetwork::DoUploadBlobs(T_Iter const& first,
-                                 T_Iter const& last) noexcept -> bool {
+template <class TIter>
+auto BazelNetwork::DoUploadBlobs(TIter const& first,
+                                 TIter const& last) noexcept -> bool {
     try {
         // Partition the blobs according to their size. The first group collects
         // all the blobs that can be uploaded in batch, the second group gathers
@@ -130,6 +131,12 @@ auto BazelNetwork::ExecuteBazelActionSync(
     auto response =
         exec_->Execute(instance_name_, action, exec_config_, true /*wait*/);
 
+    if (response.state ==
+        BazelExecutionClient::ExecutionResponse::State::Ongoing) {
+        Logger::Log(
+            LogLevel::Trace, "Waiting for {}", response.execution_handle);
+        response = exec_->WaitExecution(response.execution_handle);
+    }
     if (response.state !=
             BazelExecutionClient::ExecutionResponse::State::Finished or
         not response.output) {
@@ -143,7 +150,7 @@ auto BazelNetwork::ExecuteBazelActionSync(
 }
 
 auto BazelNetwork::CreateReader() const noexcept -> BazelNetworkReader {
-    return BazelNetworkReader{instance_name_, cas_.get(), hash_function_};
+    return BazelNetworkReader{instance_name_, cas_.get(), &hash_function_};
 }
 
 auto BazelNetwork::GetCachedActionResult(

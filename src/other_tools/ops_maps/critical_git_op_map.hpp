@@ -40,7 +40,7 @@ struct GitOpKey {
     [[nodiscard]] auto operation(GitOpParams const& params,
                                  AsyncMapConsumerLoggerPtr const& logger) const
         -> GitOpValue {
-        return map_.at(op_type)(params, logger);
+        return kMap.at(op_type)(params, logger);
     }
 
     [[nodiscard]] auto operator==(GitOpKey const& other) const -> bool {
@@ -48,7 +48,7 @@ struct GitOpKey {
     }
 
   private:
-    static GitOpKeyMap const map_;
+    static GitOpKeyMap const kMap;
 };
 
 class CriticalGitOpGuard;
@@ -84,7 +84,7 @@ class CriticalGitOpGuard {
     }
 
   private:
-    std::unordered_map<size_t, GitOpKey> curr_critical_key_{};
+    std::unordered_map<size_t, GitOpKey> curr_critical_key_;
     std::mutex critical_key_mutex_;
 };
 

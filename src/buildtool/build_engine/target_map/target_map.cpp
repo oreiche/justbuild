@@ -15,6 +15,7 @@
 #include "src/buildtool/build_engine/target_map/target_map.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -38,10 +39,13 @@
 #include "src/buildtool/build_engine/target_map/built_in_rules.hpp"
 #include "src/buildtool/build_engine/target_map/utils.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/storage.hpp"
 #include "src/utils/cpp/gsl.hpp"
 #include "src/utils/cpp/path.hpp"
 #include "src/utils/cpp/vector.hpp"
@@ -206,9 +210,9 @@ struct TargetData {
             Expression::list_t targets{};
             targets.reserve(nodes.size());
             for (auto const& node_expr : nodes) {
-                targets.emplace_back(ExpressionPtr{BuildMaps::Base::EntityName{
+                targets.emplace_back(BuildMaps::Base::EntityName{
                     BuildMaps::Base::AnonymousTarget{
-                        .rule_map = rule_map, .target_node = node_expr}}});
+                        .rule_map = rule_map, .target_node = node_expr}});
             }
             target_exprs.emplace(field_name, targets);
         }
@@ -229,12 +233,11 @@ auto NameTransitionedDeps(
     auto conf = effective_conf.Update(transitioned_target.config.Expr())
                     .Prune(analysis->Vars());
     return BuildMaps::Target::ConfiguredTarget{transitioned_target.target, conf}
-        .ToShortString();
+        .ToShortString(Evaluator::GetExpressionLogLimit());
 }
 
 // Check if an object is contained an expression; to avoid tree-unfolding
 // the expression, we need to cache the values already computed.
-// NOLINTNEXTLINE(misc-no-recursion)
 auto ExpressionContainsObject(std::unordered_map<ExpressionPtr, bool>* map,
                               const ExpressionPtr& object,
                               const ExpressionPtr& exp) {
@@ -313,7 +316,7 @@ void withDependencies(
     const BuildMaps::Base::UserRulePtr& rule,
     const TargetData::Ptr& data,
     const BuildMaps::Target::ConfiguredTarget& key,
-    std::unordered_map<std::string, ExpressionPtr> params,
+    std::unordered_map<std::string, ExpressionPtr> params,  // NOLINT
     const BuildMaps::Target::TargetMap::SetterPtr& setter,
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
     const gsl::not_null<BuildMaps::Target::ResultTargetMap*>& result_map) {
@@ -349,8 +352,8 @@ void withDependencies(
                                                   std::size_t const b,
                                                   auto* deps) {
         std::transform(
-            dependency_values.begin() + a,
-            dependency_values.begin() + b,
+            dependency_values.begin() + static_cast<std::int64_t>(a),
+            dependency_values.begin() + static_cast<std::int64_t>(b),
             std::back_inserter(*deps),
             [](auto dep) { return (*(dep))->GraphInformation().Node(); });
     };
@@ -760,7 +763,7 @@ void withDependencies(
               }
               blobs.emplace_back(data->String());
               return ExpressionPtr{ArtifactDescription::CreateKnown(
-                  ArtifactDigest::Create<ObjectType::File>(
+                  ArtifactDigestFactory::HashDataAs<ObjectType::File>(
                       context->storage->GetHashFunction(), data->String()),
                   ObjectType::File)};
           }},
@@ -781,7 +784,7 @@ void withDependencies(
               blobs.emplace_back(data->String());
 
               return ExpressionPtr{ArtifactDescription::CreateKnown(
-                  ArtifactDigest::Create<ObjectType::Symlink>(
+                  ArtifactDigestFactory::HashDataAs<ObjectType::Symlink>(
                       context->storage->GetHashFunction(), data->String()),
                   ObjectType::Symlink)};
           }},
@@ -1063,7 +1066,7 @@ void withRuleDefinition(
     std::unordered_map<std::string, ExpressionPtr> params;
     params.reserve(rule->ConfigFields().size() + rule->TargetFields().size() +
                    rule->ImplicitTargetExps().size());
-    for (auto field_name : rule->ConfigFields()) {
+    for (auto const& field_name : rule->ConfigFields()) {
         auto const& field_expression = data->config_exprs[field_name];
         auto field_value = field_expression.Evaluate(
             param_config, {}, [&logger, &field_name](auto const& msg) {
@@ -1194,10 +1197,10 @@ void withRuleDefinition(
 
     std::vector<BuildMaps::Target::ConfiguredTarget> dependency_keys;
     std::vector<BuildMaps::Target::ConfiguredTarget> transition_keys;
-    for (auto target_field_name : rule->TargetFields()) {
+    for (auto const& target_field_name : rule->TargetFields()) {
         auto const& deps_expression = data->target_exprs[target_field_name];
         auto deps_names = deps_expression.Evaluate(
-            param_config, {}, [logger, target_field_name](auto const& msg) {
+            param_config, {}, [&logger, &target_field_name](auto const& msg) {
                 (*logger)(
                     fmt::format("While evaluating target parameter {}:\n{}",
                                 target_field_name,
@@ -1235,7 +1238,7 @@ void withRuleDefinition(
                 if (not target) {
                     return;
                 }
-                dep_target_exps.emplace_back(ExpressionPtr{*target});
+                dep_target_exps.emplace_back(*target);
             }
         }
         else {
@@ -1508,10 +1511,12 @@ void withTargetsFile(
                     std::make_shared<AsyncMapConsumerLogger>(
                         [logger, key, rn](auto const& msg, auto fatal) {
                             (*logger)(
-                                fmt::format("While analysing {} target {}:\n{}",
-                                            rn.ToString(),
-                                            key.ToShortString(),
-                                            msg),
+                                fmt::format(
+                                    "While analysing {} target {}:\n{}",
+                                    rn.ToString(),
+                                    key.ToShortString(
+                                        Evaluator::GetExpressionLogLimit()),
+                                    msg),
                                 fatal);
                         }),
                     result_map);
@@ -1618,6 +1623,7 @@ void withTargetNode(
 }
 
 void TreeTarget(
+    const gsl::not_null<AnalyseContext*>& context,
     const BuildMaps::Target::ConfiguredTarget& key,
     const gsl::not_null<TaskSystem*>& ts,
     const BuildMaps::Target::TargetMap::SubCallerPtr& subcaller,
@@ -1625,20 +1631,22 @@ void TreeTarget(
     const BuildMaps::Target::TargetMap::LoggerPtr& logger,
     const gsl::not_null<BuildMaps::Target::ResultTargetMap*>& result_map,
     const gsl::not_null<BuildMaps::Base::DirectoryEntriesMap*>&
-        directory_entries,
-    const gsl::not_null<Statistics*>& stats) {
+        directory_entries) {
     const auto& target = key.target.GetNamedTarget();
     const auto dir_name = std::filesystem::path{target.module} / target.name;
-    auto module_ = BuildMaps::Base::ModuleName{target.repository, dir_name};
+    auto target_module =
+        BuildMaps::Base::ModuleName{target.repository, dir_name};
 
     directory_entries->ConsumeAfterKeysReady(
         ts,
-        {module_},
-        [setter, subcaller, target, key, result_map, logger, dir_name, stats](
+        {target_module},
+        [context, setter, subcaller, target, key, result_map, logger, dir_name](
             auto values) {
             // expected values.size() == 1
             const auto& dir_entries = *values[0];
-            auto known_tree = dir_entries.AsKnownTree(target.repository);
+            auto known_tree = dir_entries.AsKnownTree(
+                context->storage->GetHashFunction().GetType(),
+                target.repository);
             if (known_tree) {
                 auto tree = ExpressionPtr{
                     Expression::map_t{target.name, ExpressionPtr{*known_tree}}};
@@ -1664,7 +1672,7 @@ void TreeTarget(
                     "Source tree reference for non-known tree {}",
                     key.target.ToString());
             });
-            stats->IncrementTreesAnalysedCounter();
+            context->statistics->IncrementTreesAnalysedCounter();
 
             using BuildMaps::Target::ConfiguredTarget;
 
@@ -1791,20 +1799,18 @@ void GlobTargetWithDirEntry(
     std::vector<BuildMaps::Base::EntityName> matches;
     for (auto const& x : dir.FilesIterator()) {
         if (fnmatch(pattern.c_str(), x.c_str(), 0) == 0) {
-            matches.emplace_back(BuildMaps::Base::EntityName{
-                target.repository,
-                target.module,
-                x,
-                BuildMaps::Base::ReferenceType::kFile});
+            matches.emplace_back(target.repository,
+                                 target.module,
+                                 x,
+                                 BuildMaps::Base::ReferenceType::kFile);
         }
     }
     for (auto const& x : dir.SymlinksIterator()) {
         if (fnmatch(pattern.c_str(), x.c_str(), 0) == 0) {
-            matches.emplace_back(BuildMaps::Base::EntityName{
-                target.repository,
-                target.module,
-                x,
-                BuildMaps::Base::ReferenceType::kSymlink});
+            matches.emplace_back(target.repository,
+                                 target.module,
+                                 x,
+                                 BuildMaps::Base::ReferenceType::kSymlink);
         }
     }
     source_target_map->ConsumeAfterKeysReady(
@@ -1863,14 +1869,14 @@ auto CreateTargetMap(
                                           msg),
                               fatal);
                 });
-            TreeTarget(key,
+            TreeTarget(context,
+                       key,
                        ts,
                        subcaller,
                        setter,
                        wrapped_logger,
                        result_map,
-                       directory_entries_map,
-                       context->statistics);
+                       directory_entries_map);
         }
         else if (key.target.GetNamedTarget().reference_t ==
                  BuildMaps::Base::ReferenceType::kFile) {
@@ -1966,7 +1972,8 @@ auto CreateTargetMap(
                 [logger, key](auto msg, auto fatal) {
                     (*logger)(
                         fmt::format("While processing absent target {}:\n{}",
-                                    key.ToShortString(),
+                                    key.ToShortString(
+                                        Evaluator::GetExpressionLogLimit()),
                                     msg),
                         fatal);
                 });

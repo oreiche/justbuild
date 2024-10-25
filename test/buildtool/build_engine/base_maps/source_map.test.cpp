@@ -25,11 +25,14 @@
 #include "src/buildtool/build_engine/base_maps/directory_map.hpp"
 #include "src/buildtool/build_engine/base_maps/entity_name.hpp"
 #include "src/buildtool/build_engine/base_maps/entity_name_data.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/common/repository_config.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
 #include "test/buildtool/build_engine/base_maps/test_repo.hpp"
+#include "test/utils/hermeticity/test_hash_function_type.hpp"
 
 namespace {
 
@@ -59,13 +62,14 @@ auto SetupConfig(bool use_git) -> RepositoryConfig {
 
 auto ReadSourceTarget(EntityName const& id,
                       SourceTargetMap::Consumer consumer,
+                      HashFunction::Type hash_type,
                       bool use_git = false,
                       std::optional<SourceTargetMap::FailureFunction>
                           fail_func = std::nullopt) -> bool {
     auto repo_config = SetupConfig(use_git);
     auto directory_entries = CreateDirectoryEntriesMap(&repo_config);
     auto source_artifacts =
-        CreateSourceTargetMap(&directory_entries, &repo_config);
+        CreateSourceTargetMap(&directory_entries, &repo_config, hash_type);
     std::string error_msg;
     bool success{true};
     {
@@ -86,6 +90,8 @@ auto ReadSourceTarget(EntityName const& id,
 }  // namespace
 
 TEST_CASE("from file") {
+    auto const hash_type = TestHashType::ReadFromEnvironment();
+
     nlohmann::json artifacts;
     auto name = EntityName{"", ".", "file"};
     auto consumer = [&artifacts](auto values) {
@@ -93,21 +99,24 @@ TEST_CASE("from file") {
     };
 
     SECTION("via file") {
-        CHECK(ReadSourceTarget(name, consumer, /*use_git=*/false));
+        CHECK(ReadSourceTarget(name, consumer, hash_type, /*use_git=*/false));
         CHECK(artifacts["file"]["type"] == "LOCAL");
         CHECK(artifacts["file"]["data"]["path"] == "file");
     }
 
     SECTION("via git tree") {
-        CHECK(ReadSourceTarget(name, consumer, /*use_git=*/true));
+        CHECK(ReadSourceTarget(name, consumer, hash_type, /*use_git=*/true));
         CHECK(artifacts["file"]["type"] == "KNOWN");
-        CHECK(artifacts["file"]["data"]["id"] ==
-              (Compatibility::IsCompatible() ? kEmptySha256 : kEmptySha1));
+        CHECK(
+            artifacts["file"]["data"]["id"] ==
+            (ProtocolTraits::IsNative(hash_type) ? kEmptySha1 : kEmptySha256));
         CHECK(artifacts["file"]["data"]["size"] == 0);
     }
 }
 
 TEST_CASE("not present at all") {
+    auto const hash_type = TestHashType::ReadFromEnvironment();
+
     bool consumed{false};
     bool failure_called{false};
     auto name = EntityName{"", ".", "does_not_exist"};
@@ -115,21 +124,23 @@ TEST_CASE("not present at all") {
     auto fail_func = [&failure_called]() { failure_called = true; };
 
     SECTION("via file") {
-        CHECK_FALSE(
-            ReadSourceTarget(name, consumer, /*use_git=*/false, fail_func));
+        CHECK_FALSE(ReadSourceTarget(
+            name, consumer, hash_type, /*use_git=*/false, fail_func));
         CHECK_FALSE(consumed);
         CHECK(failure_called);
     }
 
     SECTION("via git tree") {
-        CHECK_FALSE(
-            ReadSourceTarget(name, consumer, /*use_git=*/true, fail_func));
+        CHECK_FALSE(ReadSourceTarget(
+            name, consumer, hash_type, /*use_git=*/true, fail_func));
         CHECK_FALSE(consumed);
         CHECK(failure_called);
     }
 }
 
 TEST_CASE("malformed entry") {
+    auto const hash_type = TestHashType::ReadFromEnvironment();
+
     bool consumed{false};
     bool failure_called{false};
     auto name = EntityName{"", ".", "bad_entry"};
@@ -137,21 +148,23 @@ TEST_CASE("malformed entry") {
     auto fail_func = [&failure_called]() { failure_called = true; };
 
     SECTION("via git tree") {
-        CHECK_FALSE(
-            ReadSourceTarget(name, consumer, /*use_git=*/false, fail_func));
+        CHECK_FALSE(ReadSourceTarget(
+            name, consumer, hash_type, /*use_git=*/false, fail_func));
         CHECK_FALSE(consumed);
         CHECK(failure_called);
     }
 
     SECTION("via git tree") {
-        CHECK_FALSE(
-            ReadSourceTarget(name, consumer, /*use_git=*/true, fail_func));
+        CHECK_FALSE(ReadSourceTarget(
+            name, consumer, hash_type, /*use_git=*/true, fail_func));
         CHECK_FALSE(consumed);
         CHECK(failure_called);
     }
 }
 
 TEST_CASE("subdir file") {
+    auto const hash_type = TestHashType::ReadFromEnvironment();
+
     nlohmann::json artifacts;
     auto name = EntityName{"", "foo", "bar/file"};
     auto consumer = [&artifacts](auto values) {
@@ -159,21 +172,24 @@ TEST_CASE("subdir file") {
     };
 
     SECTION("via file") {
-        CHECK(ReadSourceTarget(name, consumer, /*use_git=*/false));
+        CHECK(ReadSourceTarget(name, consumer, hash_type, /*use_git=*/false));
         CHECK(artifacts["bar/file"]["type"] == "LOCAL");
         CHECK(artifacts["bar/file"]["data"]["path"] == "foo/bar/file");
     }
 
     SECTION("via git tree") {
-        CHECK(ReadSourceTarget(name, consumer, /*use_git=*/true));
+        CHECK(ReadSourceTarget(name, consumer, hash_type, /*use_git=*/true));
         CHECK(artifacts["bar/file"]["type"] == "KNOWN");
-        CHECK(artifacts["bar/file"]["data"]["id"] ==
-              (Compatibility::IsCompatible() ? kEmptySha256 : kEmptySha1));
+        CHECK(
+            artifacts["bar/file"]["data"]["id"] ==
+            (ProtocolTraits::IsNative(hash_type) ? kEmptySha1 : kEmptySha256));
         CHECK(artifacts["bar/file"]["data"]["size"] == 0);
     }
 }
 
 TEST_CASE("subdir symlink") {
+    auto const hash_type = TestHashType::ReadFromEnvironment();
+
     nlohmann::json artifacts;
     auto name = EntityName{"", "foo", "link"};
     auto consumer = [&artifacts](auto values) {
@@ -181,17 +197,17 @@ TEST_CASE("subdir symlink") {
     };
 
     SECTION("via file") {
-        CHECK(ReadSourceTarget(name, consumer, /*use_git=*/false));
+        CHECK(ReadSourceTarget(name, consumer, hash_type, /*use_git=*/false));
         CHECK(artifacts["link"]["type"] == "LOCAL");
         CHECK(artifacts["link"]["data"]["path"] == "foo/link");
     }
 
     SECTION("via git tree") {
-        CHECK(ReadSourceTarget(name, consumer, /*use_git=*/true));
+        CHECK(ReadSourceTarget(name, consumer, hash_type, /*use_git=*/true));
         CHECK(artifacts["link"]["type"] == "KNOWN");
-        CHECK(artifacts["link"]["data"]["id"] == (Compatibility::IsCompatible()
-                                                      ? kSrcLinkIdSha256
-                                                      : kSrcLinkIdSha1));
+        CHECK(artifacts["link"]["data"]["id"] ==
+              (ProtocolTraits::IsNative(hash_type) ? kSrcLinkIdSha1
+                                                   : kSrcLinkIdSha256));
         CHECK(artifacts["link"]["data"]["size"] == 5);  // content: dummy
     }
 }

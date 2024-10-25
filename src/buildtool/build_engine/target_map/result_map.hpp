@@ -55,9 +55,9 @@ class ResultTargetMap {
 
     template <bool kIncludeOrigins = false>
     struct ResultType {
-        std::vector<ActionDescription::Ptr> actions{};
-        std::vector<std::string> blobs{};
-        std::vector<Tree::Ptr> trees{};
+        std::vector<ActionDescription::Ptr> actions;
+        std::vector<std::string> blobs;
+        std::vector<Tree::Ptr> trees;
     };
 
     explicit ResultTargetMap(std::size_t jobs) : width_{ComputeWidth(jobs)} {}
@@ -131,8 +131,7 @@ class ResultTargetMap {
         return all_exports;
     }
 
-    [[nodiscard]] auto ConfiguredTargetsGraph() const noexcept
-        -> nlohmann::json {
+    [[nodiscard]] auto ConfiguredTargetsGraph() const -> nlohmann::json {
         auto result = nlohmann::json::object();
         for (auto const& i : targets_) {
             for (auto const& it : i) {
@@ -385,7 +384,6 @@ class ResultTargetMap {
     std::vector<std::size_t> num_blobs_{std::vector<std::size_t>(width_)};
     std::vector<std::size_t> num_trees_{std::vector<std::size_t>(width_)};
 
-    // NOLINTNEXTLINE(misc-no-recursion)
     constexpr static auto ComputeWidth(std::size_t jobs) -> std::size_t {
         if (jobs <= 0) {
             // Non-positive indicates to use the default value
@@ -399,9 +397,9 @@ class ResultTargetMap {
 
 template <>
 struct ResultTargetMap::ResultType</*kIncludeOrigins=*/true> {
-    std::vector<ActionWithOrigin> actions{};
-    std::vector<std::string> blobs{};
-    std::vector<Tree::Ptr> trees{};
+    std::vector<ActionWithOrigin> actions;
+    std::vector<std::string> blobs;
+    std::vector<Tree::Ptr> trees;
 };
 
 }  // namespace BuildMaps::Target

@@ -27,12 +27,13 @@ auto RemoteExecutionConfig::Builder::Build() const noexcept
     -> expected<RemoteExecutionConfig, std::string> {
     // To not duplicate default arguments in builder, create a default config
     // and copy arguments from there.
-    RemoteExecutionConfig const default_config;
+    RemoteExecutionConfig const default_config{};
 
     // Set remote endpoint.
     auto remote_address = default_config.remote_address;
     if (remote_address_raw_.has_value()) {
-        if (not(remote_address = ParseAddress(*remote_address_raw_))) {
+        remote_address = ParseAddress(*remote_address_raw_);
+        if (not remote_address) {
             return unexpected{
                 fmt::format("Failed to set remote endpoint address {}",
                             nlohmann::json(*remote_address_raw_).dump())};

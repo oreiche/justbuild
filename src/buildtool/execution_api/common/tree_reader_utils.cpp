@@ -16,9 +16,11 @@
 
 #include <exception>
 #include <type_traits>
+#include <utility>
 
 #include "nlohmann/json.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
@@ -26,53 +28,57 @@
 #include "src/utils/cpp/hex_string.hpp"
 
 namespace {
-[[nodiscard]] auto CreateObjectInfo(bazel_re::DirectoryNode const& node)
-    -> Artifact::ObjectInfo {
-    return Artifact::ObjectInfo{.digest = ArtifactDigest{node.digest()},
+[[nodiscard]] auto CreateObjectInfo(HashFunction hash_function,
+                                    bazel_re::DirectoryNode const& node)
+    -> std::optional<Artifact::ObjectInfo> {
+    auto digest = ArtifactDigestFactory::FromBazel(hash_function.GetType(),
+                                                   node.digest());
+    if (not digest) {
+        return std::nullopt;
+    }
+    return Artifact::ObjectInfo{.digest = *std::move(digest),
                                 .type = ObjectType::Tree};
 }
 
-[[nodiscard]] auto CreateObjectInfo(bazel_re::FileNode const& node)
-    -> Artifact::ObjectInfo {
-    return Artifact::ObjectInfo{.digest = ArtifactDigest{node.digest()},
+[[nodiscard]] auto CreateObjectInfo(HashFunction hash_function,
+                                    bazel_re::FileNode const& node)
+    -> std::optional<Artifact::ObjectInfo> {
+    auto digest = ArtifactDigestFactory::FromBazel(hash_function.GetType(),
+                                                   node.digest());
+    if (not digest) {
+        return std::nullopt;
+    }
+    return Artifact::ObjectInfo{.digest = *std::move(digest),
                                 .type = node.is_executable()
                                             ? ObjectType::Executable
                                             : ObjectType::File};
 }
 
-[[nodiscard]] auto CreateObjectInfo(bazel_re::SymlinkNode const& node,
-                                    HashFunction hash_function)
+[[nodiscard]] auto CreateObjectInfo(HashFunction hash_function,
+                                    bazel_re::SymlinkNode const& node)
     -> Artifact::ObjectInfo {
-
     return Artifact::ObjectInfo{
-        .digest = ArtifactDigest::Create<ObjectType::File>(hash_function,
-                                                           node.target()),
+        .digest = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
+            hash_function, node.target()),
         .type = ObjectType::Symlink};
 }
 
 template <typename TTree>
-[[nodiscard]] auto TreeToString(TTree const& entries) noexcept
+[[nodiscard]] auto TreeToString(TTree const& entries)
     -> std::optional<std::string> {
     auto json = nlohmann::json::object();
     TreeReaderUtils::InfoStoreFunc store_infos =
         [&json](std::filesystem::path const& path,
-                Artifact::ObjectInfo const& info) -> bool {
+                Artifact::ObjectInfo&& info) -> bool {
         static constexpr bool kSizeUnknown =
             std::is_same_v<TTree, GitRepo::tree_entries_t>;
 
-        json[path.string()] = info.ToString(kSizeUnknown);
+        json[path.string()] = std::move(info).ToString(kSizeUnknown);
         return true;
     };
 
     if (TreeReaderUtils::ReadObjectInfos(entries, store_infos)) {
-        try {
-            return json.dump(2) + "\n";
-        } catch (std::exception const& ex) {
-            Logger::Log(LogLevel::Error,
-                        "dumping Directory to string failed with:\n{}",
-                        ex.what());
-            return std::nullopt;
-        }
+        return json.dump(2) + "\n";
     }
     Logger::Log(LogLevel::Error, "reading object infos from Directory failed");
     return std::nullopt;
@@ -83,22 +89,30 @@ template <typename TTree>
 auto TreeReaderUtils::ReadObjectInfos(bazel_re::Directory const& dir,
                                       InfoStoreFunc const& store_info) noexcept
     -> bool {
+    // SHA256 is used since bazel types are processed here.
+    HashFunction const hash_function{HashFunction::Type::PlainSHA256};
     try {
         for (auto const& f : dir.files()) {
-            if (not store_info(f.name(), CreateObjectInfo(f))) {
+            auto info = CreateObjectInfo(hash_function, f);
+            if (not info or not store_info(f.name(), *std::move(info))) {
                 return false;
             }
         }
 
-        // SHA256 is used since bazel types are processed here.
-        HashFunction const hash_function{HashFunction::Type::PlainSHA256};
         for (auto const& l : dir.symlinks()) {
-            if (not store_info(l.name(), CreateObjectInfo(l, hash_function))) {
+            // check validity of symlinks
+            if (not PathIsNonUpwards(l.target())) {
+                Logger::Log(
+                    LogLevel::Error, "found invalid symlink at {}", l.name());
+                return false;
+            }
+            if (not store_info(l.name(), CreateObjectInfo(hash_function, l))) {
                 return false;
             }
         }
         for (auto const& d : dir.directories()) {
-            if (not store_info(d.name(), CreateObjectInfo(d))) {
+            auto info = CreateObjectInfo(hash_function, d);
+            if (not info or not store_info(d.name(), *std::move(info))) {
                 return false;
             }
         }
@@ -118,13 +132,16 @@ auto TreeReaderUtils::ReadObjectInfos(GitRepo::tree_entries_t const& entries,
         for (auto const& [raw_id, es] : entries) {
             auto const hex_id = ToHexString(raw_id);
             for (auto const& entry : es) {
-                if (not store_info(
+                auto digest =
+                    ArtifactDigestFactory::Create(HashFunction::Type::GitSHA1,
+                                                  hex_id,
+                                                  /*size is unknown*/ 0,
+                                                  IsTreeObject(entry.type));
+                if (not digest or
+                    not store_info(
                         entry.name,
-                        Artifact::ObjectInfo{
-                            .digest = ArtifactDigest{hex_id,
-                                                     /*size is unknown*/ 0,
-                                                     IsTreeObject(entry.type)},
-                            .type = entry.type})) {
+                        Artifact::ObjectInfo{.digest = *std::move(digest),
+                                             .type = entry.type})) {
                     return false;
                 }
             }
@@ -140,11 +157,25 @@ auto TreeReaderUtils::ReadObjectInfos(GitRepo::tree_entries_t const& entries,
 
 auto TreeReaderUtils::DirectoryToString(bazel_re::Directory const& dir) noexcept
     -> std::optional<std::string> {
-    return TreeToString(dir);
+    try {
+        return TreeToString(dir);
+    } catch (const std::exception& e) {
+        Logger::Log(LogLevel::Error,
+                    "An error occurred while reading bazel:re::Directory:\n",
+                    e.what());
+        return std::nullopt;
+    }
 }
 
 auto TreeReaderUtils::GitTreeToString(
     GitRepo::tree_entries_t const& entries) noexcept
     -> std::optional<std::string> {
-    return TreeToString(entries);
+    try {
+        return TreeToString(entries);
+    } catch (const std::exception& e) {
+        Logger::Log(LogLevel::Error,
+                    "An error occurred while reading git tree:\n{}",
+                    e.what());
+        return std::nullopt;
+    }
 }

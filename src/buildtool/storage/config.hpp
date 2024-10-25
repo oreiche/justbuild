@@ -25,8 +25,9 @@
 
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/common/remote/remote_common.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
@@ -131,19 +132,17 @@ struct StorageConfig final {
 
     [[nodiscard]] auto CreateGenerationConfig(
         std::size_t generation) const noexcept -> GenerationConfig {
-        bool const compatible = Compatibility::IsCompatible();
+        bool const native = ProtocolTraits::IsNative(hash_function.GetType());
         auto const cache_root = GenerationCacheRoot(generation);
-        auto const cache_dir =
-            UpdatePathForCompatibility(cache_root, compatible);
+        auto const cache_dir = UpdatePathForCompatibility(cache_root, native);
 
         return GenerationConfig{
             .storage_config = this,
             .cas_f = cache_dir / "casf",
             .cas_x = cache_dir / "casx",
-            .cas_t = cache_dir / (compatible ? "casf" : "cast"),
+            .cas_t = cache_dir / (native ? "cast" : "casf"),
             .cas_large_f = cache_dir / "cas-large-f",
-            .cas_large_t =
-                cache_dir / (compatible ? "cas-large-f" : "cas-large-t"),
+            .cas_large_t = cache_dir / (native ? "cas-large-t" : "cas-large-f"),
             .action_cache = cache_dir / "ac",
             .target_cache = cache_dir / "tc"};
     };
@@ -152,13 +151,13 @@ struct StorageConfig final {
     // different folder for different caching protocol
     [[nodiscard]] static auto UpdatePathForCompatibility(
         std::filesystem::path const& dir,
-        bool is_compatible) -> std::filesystem::path {
-        return dir / (is_compatible ? "compatible-sha256" : "git-sha1");
+        bool is_native) -> std::filesystem::path {
+        return dir / (is_native ? "git-sha1" : "compatible-sha256");
     };
 
     [[nodiscard]] auto DefaultBackendDescriptionId() noexcept -> std::string {
         try {
-            return ArtifactDigest::Create<ObjectType::File>(
+            return ArtifactDigestFactory::HashDataAs<ObjectType::File>(
                        hash_function,
                        DescribeBackend(std::nullopt, {}, {}).value())
                 .hash();
@@ -232,7 +231,8 @@ class StorageConfig::Builder final {
             remote_address_, remote_platform_properties_, remote_dispatch_);
         if (desc) {
             backend_description_id =
-                ArtifactDigest::Create<ObjectType::File>(hash_function, *desc)
+                ArtifactDigestFactory::HashDataAs<ObjectType::File>(
+                    hash_function, *desc)
                     .hash();
         }
         else {

@@ -20,6 +20,7 @@
 
 #include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
 #include "src/buildtool/execution_api/local/context.hpp"
@@ -189,7 +190,7 @@ TEST_CASE("LocalExecution: No input, create output", "[execution_api]") {
     auto api = LocalApi(&local_context, &repo_config);
 
     std::string test_content("test");
-    auto test_digest = ArtifactDigest::Create<ObjectType::File>(
+    auto test_digest = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
         storage_config.Get().hash_function, test_content);
 
     std::string output_path{"output_file"};
@@ -210,9 +211,10 @@ TEST_CASE("LocalExecution: No input, create output", "[execution_api]") {
 
         // verify result
         CHECK_FALSE(output->IsCached());
-        auto artifacts = output->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(artifacts.at(output_path).digest == test_digest);
+        auto const artifacts = output->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(artifacts.value()->at(output_path).digest == test_digest);
 
         // ensure result IS in cache
         output = action->Execute(nullptr);
@@ -228,9 +230,10 @@ TEST_CASE("LocalExecution: No input, create output", "[execution_api]") {
 
         // verify result
         CHECK_FALSE(output->IsCached());
-        auto artifacts = output->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(artifacts.at(output_path).digest == test_digest);
+        auto const artifacts = output->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(artifacts.value()->at(output_path).digest == test_digest);
 
         // ensure result IS STILL NOT in cache
         output = action->Execute(nullptr);
@@ -254,7 +257,7 @@ TEST_CASE("LocalExecution: One input copied to output", "[execution_api]") {
     auto api = LocalApi(&local_context, &repo_config);
 
     std::string test_content("test");
-    auto test_digest = ArtifactDigest::Create<ObjectType::File>(
+    auto test_digest = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
         storage_config.Get().hash_function, test_content);
     REQUIRE(api.Upload(ArtifactBlobContainer{{ArtifactBlob{
                            test_digest, test_content, /*is_exec=*/false}}},
@@ -289,9 +292,10 @@ TEST_CASE("LocalExecution: One input copied to output", "[execution_api]") {
 
         // verify result
         CHECK_FALSE(output->IsCached());
-        auto artifacts = output->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(artifacts.at(output_path).digest == test_digest);
+        auto const artifacts = output->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(artifacts.value()->at(output_path).digest == test_digest);
 
         // ensure result IS in cache
         output = action->Execute(nullptr);
@@ -307,9 +311,10 @@ TEST_CASE("LocalExecution: One input copied to output", "[execution_api]") {
 
         // verify result
         CHECK_FALSE(output->IsCached());
-        auto artifacts = output->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(artifacts.at(output_path).digest == test_digest);
+        auto const artifacts = output->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(artifacts.value()->at(output_path).digest == test_digest);
 
         // ensure result IS STILL NOT in cache
         output = action->Execute(nullptr);

@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -32,8 +33,10 @@
 #include "fmt/core.h"
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/cli.hpp"
 #include "src/buildtool/common/tree.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
 #include "src/buildtool/execution_api/common/common_api.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
@@ -178,10 +181,13 @@ class GraphTraverser {
         }
         auto const [blobs, tree_descs, actions] = *desc;
 
+        HashFunction::Type const hash_type =
+            context_.apis->hash_function.GetType();
         std::vector<ActionDescription::Ptr> action_descriptions{};
         action_descriptions.reserve(actions.size());
         for (auto const& [id, description] : actions.items()) {
-            auto action = ActionDescription::FromJson(id, description);
+            auto action =
+                ActionDescription::FromJson(hash_type, id, description);
             if (not action) {
                 return std::nullopt;  // Error already logged
             }
@@ -190,7 +196,7 @@ class GraphTraverser {
 
         std::vector<Tree::Ptr> trees{};
         for (auto const& [id, description] : tree_descs.items()) {
-            auto tree = Tree::FromJson(id, description);
+            auto tree = Tree::FromJson(hash_type, id, description);
             if (not tree) {
                 return std::nullopt;
             }
@@ -199,7 +205,8 @@ class GraphTraverser {
 
         std::map<std::string, ArtifactDescription> artifact_descriptions{};
         for (auto const& [rel_path, description] : artifacts.items()) {
-            auto artifact = ArtifactDescription::FromJson(description);
+            auto artifact =
+                ArtifactDescription::FromJson(hash_type, description);
             if (not artifact) {
                 return std::nullopt;  // Error already logged
             }
@@ -274,7 +281,7 @@ class GraphTraverser {
         std::vector<std::string> const& blobs) const noexcept -> bool {
         ArtifactBlobContainer container;
         for (auto const& blob : blobs) {
-            auto digest = ArtifactDigest::Create<ObjectType::File>(
+            auto digest = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
                 context_.apis->hash_function, blob);
             Logger::Log(logger_, LogLevel::Trace, [&]() {
                 return fmt::format(
@@ -500,12 +507,13 @@ class GraphTraverser {
         }
 
         // split extra artifacts' nodes from artifact nodes
+        auto const it_extra =
+            std::next(artifact_nodes->begin(),
+                      static_cast<std::int64_t>(output_paths.size()));
         auto extra_nodes = std::vector<DependencyGraph::ArtifactNode const*>{
-            std::make_move_iterator(artifact_nodes->begin() +
-                                    output_paths.size()),
+            std::make_move_iterator(it_extra),
             std::make_move_iterator(artifact_nodes->end())};
-        artifact_nodes->erase(artifact_nodes->begin() + output_paths.size(),
-                              artifact_nodes->end());
+        artifact_nodes->erase(it_extra, artifact_nodes->end());
 
         return std::make_tuple(std::move(output_paths),
                                std::move(*artifact_nodes),
@@ -568,7 +576,7 @@ class GraphTraverser {
             return std::nullopt;
         }
 
-        return std::move(*output_paths);
+        return output_paths;
     }
 
     void PrintOutputs(
@@ -681,7 +689,7 @@ class GraphTraverser {
                     auto info = artifacts[i]->Content().Info();
                     if (info) {
                         auto new_info =
-                            RetrieveSubPathId(*info, remote, relpath);
+                            RetrieveSubPathId(*info, *context_.apis, relpath);
                         if (new_info) {
                             if (not remote.RetrieveToFds({*new_info},
                                                          {dup(fileno(stdout))},

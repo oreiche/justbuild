@@ -37,6 +37,7 @@
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/hex_string.hpp"
+#include "src/utils/cpp/transformed_range.hpp"
 #include "src/utils/cpp/type_safe_arithmetic.hpp"
 
 /// \brief Plain DirectedAcyclicGraph.
@@ -46,23 +47,23 @@
 class DirectedAcyclicGraph {
   public:
     /// \brief Abstract class for DAG nodes.
-    /// \tparam T_Content  Type of content.
-    /// \tparam T_Other    Type of neighboring nodes.
+    /// \tparam TContent  Type of content.
+    /// \tparam TOther    Type of neighboring nodes.
     /// TODO: once we have hashes, require sub classes to implement generating
     /// IDs depending on its unique content.
-    template <typename T_Content, typename T_Other>
+    template <typename TContent, typename TOther>
     class Node {
       public:
-        using OtherNode = T_Other;
+        using OtherNode = TOther;
         using OtherNodePtr = gsl::not_null<OtherNode*>;
 
-        explicit Node(T_Content&& content) noexcept
+        explicit Node(TContent&& content) noexcept
             : content_{std::move(content)} {}
 
         // NOLINTNEXTLINE(modernize-pass-by-value)
-        explicit Node(T_Content const& content) noexcept : content_{content} {}
+        explicit Node(TContent const& content) noexcept : content_{content} {}
 
-        Node(T_Content const& content,
+        Node(TContent const& content,
              std::vector<OtherNodePtr> const& parents,
              std::vector<OtherNodePtr> const& children) noexcept
             : content_{content}, parents_{parents}, children_{children} {}
@@ -75,11 +76,11 @@ class DirectedAcyclicGraph {
         auto operator=(Node&&) -> Node& = delete;
         ~Node() = default;
 
-        [[nodiscard]] auto Content() const& noexcept -> T_Content const& {
+        [[nodiscard]] auto Content() const& noexcept -> TContent const& {
             return content_;
         }
 
-        [[nodiscard]] auto Content() && noexcept -> T_Content {
+        [[nodiscard]] auto Content() && noexcept -> TContent {
             return std::move(content_);
         }
 
@@ -114,7 +115,7 @@ class DirectedAcyclicGraph {
         }
 
       private:
-        T_Content content_{};
+        TContent content_{};
         std::vector<OtherNodePtr> parents_{};
         std::vector<OtherNodePtr> children_{};
     };
@@ -177,13 +178,13 @@ class DependencyGraph : DirectedAcyclicGraph {
     class ArtifactNode;
 
     // Node identifier for actions
-    struct ActionNodeIdentifierTag : type_safe_arithmetic_tag<std::size_t> {};
-    using ActionNodeIdentifier = type_safe_arithmetic<ActionNodeIdentifierTag>;
+    struct ActionNodeIdentifierTag : TypeSafeArithmeticTag<std::size_t> {};
+    using ActionNodeIdentifier = TypeSafeArithmetic<ActionNodeIdentifierTag>;
 
     // Node identifier for artifacts
-    struct ArtifactNodeIdentifierTag : type_safe_arithmetic_tag<std::size_t> {};
+    struct ArtifactNodeIdentifierTag : TypeSafeArithmeticTag<std::size_t> {};
     using ArtifactNodeIdentifier =
-        type_safe_arithmetic<ArtifactNodeIdentifierTag>;
+        TypeSafeArithmetic<ArtifactNodeIdentifierTag>;
 
     /// \brief Class for traversal state data specific for ActionNode's
     /// Provides the following atomic operations (listed on the public methods):
@@ -262,6 +263,9 @@ class DependencyGraph : DirectedAcyclicGraph {
             Action::LocalPath path;
             base::OtherNodePtr node;
         };
+        using LocalPaths =
+            TransformedRange<std::vector<NamedOtherNodePtr>::const_iterator,
+                             Action::LocalPath>;
 
         [[nodiscard]] static auto Create(Action const& content) noexcept
             -> Ptr {
@@ -314,59 +318,59 @@ class DependencyGraph : DirectedAcyclicGraph {
             return true;
         }
 
-        [[nodiscard]] auto OutputFiles()
-            const& -> std::vector<NamedOtherNodePtr> const& {
+        [[nodiscard]] auto OutputFiles() const& noexcept
+            -> std::vector<NamedOtherNodePtr> const& {
             return output_files_;
         }
 
-        [[nodiscard]] auto OutputDirs()
-            const& -> std::vector<NamedOtherNodePtr> const& {
+        [[nodiscard]] auto OutputDirs() const& noexcept
+            -> std::vector<NamedOtherNodePtr> const& {
             return output_dirs_;
         }
 
-        [[nodiscard]] auto Dependencies()
-            const& -> std::vector<NamedOtherNodePtr> const& {
+        [[nodiscard]] auto Dependencies() const& noexcept
+            -> std::vector<NamedOtherNodePtr> const& {
             return dependencies_;
         }
 
-        [[nodiscard]] auto Command() const -> std::vector<std::string> {
+        [[nodiscard]] auto Command() const noexcept
+            -> std::vector<std::string> const& {
             return Content().Command();
         }
 
-        [[nodiscard]] auto Env() const -> std::map<std::string, std::string> {
+        [[nodiscard]] auto Env() const noexcept
+            -> std::map<std::string, std::string> const& {
             return Content().Env();
         }
 
-        [[nodiscard]] auto MayFail() const -> std::optional<std::string> {
+        [[nodiscard]] auto MayFail() const noexcept
+            -> std::optional<std::string> const& {
             return Content().MayFail();
         }
 
-        [[nodiscard]] auto TimeoutScale() const -> double {
+        [[nodiscard]] auto TimeoutScale() const noexcept -> double {
             return Content().TimeoutScale();
         }
 
-        [[nodiscard]] auto ExecutionProperties() const
-            -> std::map<std::string, std::string> {
+        [[nodiscard]] auto ExecutionProperties() const noexcept
+            -> std::map<std::string, std::string> const& {
             return Content().ExecutionProperties();
         }
 
-        [[nodiscard]] auto NoCache() const -> bool {
+        [[nodiscard]] auto NoCache() const noexcept -> bool {
             return Content().NoCache();
         }
 
-        [[nodiscard]] auto OutputFilePaths() const
-            -> std::vector<Action::LocalPath> {
-            return NodePaths(output_files_);
+        [[nodiscard]] auto OutputFilePaths() const& noexcept -> LocalPaths {
+            return NodePaths(&output_files_);
         }
 
-        [[nodiscard]] auto OutputDirPaths() const
-            -> std::vector<Action::LocalPath> {
-            return NodePaths(output_dirs_);
+        [[nodiscard]] auto OutputDirPaths() const& noexcept -> LocalPaths {
+            return NodePaths(&output_dirs_);
         }
 
-        [[nodiscard]] auto DependencyPaths() const
-            -> std::vector<Action::LocalPath> {
-            return NodePaths(dependencies_);
+        [[nodiscard]] auto DependencyPaths() const& noexcept -> LocalPaths {
+            return NodePaths(&dependencies_);
         }
 
         // To initialise the action traversal specific data before traversing
@@ -387,19 +391,13 @@ class DependencyGraph : DirectedAcyclicGraph {
         std::unique_ptr<ActionNodeTraversalState> traversal_state_{
             std::make_unique<ActionNodeTraversalState>()};
 
-        // Collect paths from named nodes.
-        // TODO(oreiche): This could be potentially speed up by using a wrapper
-        // iterator to provide a read-only view (similar to BazelBlobContainer)
         [[nodiscard]] static auto NodePaths(
-            std::vector<NamedOtherNodePtr> const& nodes)
-            -> std::vector<Action::LocalPath> {
-            std::vector<Action::LocalPath> paths{nodes.size()};
-            std::transform(
-                nodes.cbegin(),
-                nodes.cend(),
-                paths.begin(),
-                [](auto const& named_node) { return named_node.path; });
-            return paths;
+            gsl::not_null<std::vector<NamedOtherNodePtr> const*> const& nodes)
+            -> LocalPaths {
+            return TransformedRange{
+                nodes->begin(),
+                nodes->end(),
+                [](NamedOtherNodePtr const& node) { return node.path; }};
         }
     };
 
@@ -492,17 +490,17 @@ class DependencyGraph : DirectedAcyclicGraph {
 
   private:
     // List of action nodes we already created
-    std::vector<ActionNode::Ptr> action_nodes_{};
+    std::vector<ActionNode::Ptr> action_nodes_;
 
     // List of artifact nodes we already created
-    std::vector<ArtifactNode::Ptr> artifact_nodes_{};
+    std::vector<ArtifactNode::Ptr> artifact_nodes_;
 
     // Associates global action identifier to local node id
-    std::unordered_map<ActionIdentifier, ActionNodeIdentifier> action_ids_{};
+    std::unordered_map<ActionIdentifier, ActionNodeIdentifier> action_ids_;
 
     // Associates global artifact identifier to local node id
     std::unordered_map<ArtifactIdentifier, ArtifactNodeIdentifier>
-        artifact_ids_{};
+        artifact_ids_;
 
     [[nodiscard]] auto CreateOutputArtifactNodes(
         std::string const& action_id,

@@ -29,6 +29,7 @@
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/common/remote/retry_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/execution_api/common/api_bundle.hpp"
@@ -46,6 +47,7 @@
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
 #include "src/utils/cpp/json.hpp"
+#include "test/utils/hermeticity/test_hash_function_type.hpp"
 
 // NOLINTNEXTLINE(google-build-namespaces)
 namespace {
@@ -54,8 +56,8 @@ class TestProject {
   public:
     struct CommandLineArguments {
         GraphTraverser::CommandLineArguments gtargs;
-        nlohmann::json artifacts{};
-        std::filesystem::path graph_description{};
+        nlohmann::json artifacts;
+        std::filesystem::path graph_description;
 
         explicit CommandLineArguments(
             GraphTraverser::CommandLineArguments gtargs)
@@ -109,8 +111,8 @@ class TestProject {
         "test/buildtool/graph_traverser/data/";
     static inline std::string const kDefaultEntryPointsFileName =
         "_entry_points";
-    std::string example_name_{};
-    std::filesystem::path root_dir_{};
+    std::string example_name_;
+    std::filesystem::path root_dir_;
     RepositoryConfig repo_config_{};
 
     void SetupConfig() {
@@ -127,7 +129,8 @@ class TestProject {
         CommandLineArguments clargs{gtargs};
         clargs.artifacts = entry_points;
         auto const comp_graph = root_dir_ / "graph_description_compatible";
-        if (Compatibility::IsCompatible() and
+        if (not ProtocolTraits::IsNative(
+                TestHashType::ReadFromEnvironment()) and
             FileSystemManager::Exists(comp_graph)) {
             clargs.graph_description = comp_graph;
         }

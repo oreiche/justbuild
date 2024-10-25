@@ -366,11 +366,11 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                     nlohmann::json mr_repos{};
                     for (auto const& repo : setup_repos->to_setup) {
                         auto i = static_cast<std::size_t>(
-                            &repo - &setup_repos->to_setup[0]);  // get index
+                            &repo - setup_repos->to_setup.data());  // get index
                         mr_repos[repo] = *values[i];
                     }
                     // populate ALT_DIRS
-                    constexpr auto err_msg_format =
+                    constexpr auto kErrMsgFormat =
                         "While performing {} {}:\nWhile populating fields for "
                         "repository {}:\nExpected value for key \"{}\" to be a "
                         "string, but found {}";
@@ -386,7 +386,7 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                                         // we expect a string
                                         if (not val->IsString()) {
                                             Logger::Log(LogLevel::Error,
-                                                        err_msg_format,
+                                                        kErrMsgFormat,
                                                         multi_repo_tool_name,
                                                         interactive
                                                             ? "setup-env"

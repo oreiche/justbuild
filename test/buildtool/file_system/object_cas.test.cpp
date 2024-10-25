@@ -14,12 +14,12 @@
 
 #include "src/buildtool/file_system/object_cas.hpp"
 
-#include <functional>  // std::equal_to
+#include <optional>  // has_value()
 #include <string>
 
 #include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
-#include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/storage/config.hpp"
@@ -30,11 +30,11 @@ TEST_CASE("ObjectCAS", "[file_system]") {
     auto gen_config = storage_config.Get().CreateGenerationConfig(0);
 
     std::string test_content{"test"};
-    auto test_digest = ArtifactDigest::Create<ObjectType::File>(
+    auto test_digest = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
         storage_config.Get().hash_function, test_content);
 
     SECTION("CAS for files") {
-        ObjectCAS<ObjectType::File> cas{storage_config.Get().hash_function,
+        ObjectCAS<ObjectType::File> cas{&storage_config.Get().hash_function,
                                         gen_config.cas_f};
         CHECK(not cas.BlobPath(test_digest));
 
@@ -42,7 +42,7 @@ TEST_CASE("ObjectCAS", "[file_system]") {
             // add blob
             auto cas_digest = cas.StoreBlobFromBytes(test_content);
             CHECK(cas_digest);
-            CHECK(std::equal_to<bazel_re::Digest>{}(*cas_digest, test_digest));
+            CHECK(*cas_digest == test_digest);
 
             // verify blob
             auto blob_path = cas.BlobPath(*cas_digest);
@@ -60,7 +60,7 @@ TEST_CASE("ObjectCAS", "[file_system]") {
             // add blob
             auto cas_digest = cas.StoreBlobFromFile("tmp/test");
             CHECK(cas_digest);
-            CHECK(std::equal_to<bazel_re::Digest>{}(*cas_digest, test_digest));
+            CHECK(*cas_digest == test_digest);
 
             // verify blob
             auto blob_path = cas.BlobPath(*cas_digest);
@@ -74,14 +74,14 @@ TEST_CASE("ObjectCAS", "[file_system]") {
 
     SECTION("CAS for executables") {
         ObjectCAS<ObjectType::Executable> cas{
-            storage_config.Get().hash_function, gen_config.cas_x};
+            &storage_config.Get().hash_function, gen_config.cas_x};
         CHECK(not cas.BlobPath(test_digest));
 
         SECTION("Add blob from bytes and verify") {
             // add blob
             auto cas_digest = cas.StoreBlobFromBytes(test_content);
             CHECK(cas_digest);
-            CHECK(std::equal_to<bazel_re::Digest>{}(*cas_digest, test_digest));
+            CHECK(*cas_digest == test_digest);
 
             // verify blob
             auto blob_path = cas.BlobPath(*cas_digest);
@@ -99,7 +99,7 @@ TEST_CASE("ObjectCAS", "[file_system]") {
             // add blob
             auto cas_digest = cas.StoreBlobFromFile("tmp/test");
             CHECK(cas_digest);
-            CHECK(std::equal_to<bazel_re::Digest>{}(*cas_digest, test_digest));
+            CHECK(*cas_digest == test_digest);
 
             // verify blob
             auto blob_path = cas.BlobPath(*cas_digest);

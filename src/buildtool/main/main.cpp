@@ -34,10 +34,10 @@
 #include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/build_engine/target_map/target_map.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/common/remote/remote_common.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/logging/log_config.hpp"
@@ -61,7 +61,6 @@
 #include "src/buildtool/serve_api/remote/serve_api.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/file_chunker.hpp"
-#include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/buildtool/storage/storage.hpp"
 #include "src/buildtool/storage/target_cache.hpp"
 #include "src/utils/cpp/concepts.hpp"
@@ -113,7 +112,7 @@ void SetupLogging(LogArguments const& clargs) {
 
 [[nodiscard]] auto CreateStorageConfig(
     EndpointArguments const& eargs,
-    bool is_compatible,
+    HashFunction::Type hash_type,
     std::optional<ServerAddress> const& remote_address = std::nullopt,
     ExecutionProperties const& remote_platform_properties = {},
     std::vector<DispatchEndpoint> const& remote_dispatch = {}) noexcept
@@ -124,9 +123,7 @@ void SetupLogging(LogArguments const& clargs) {
     }
 
     auto config =
-        builder
-            .SetHashType(is_compatible ? HashFunction::Type::PlainSHA256
-                                       : HashFunction::Type::GitSHA1)
+        builder.SetHashType(hash_type)
             .SetRemoteExecutionArgs(
                 remote_address, remote_platform_properties, remote_dispatch)
             .Build();
@@ -236,7 +233,7 @@ void SetupFileChunker() {
 /// \brief Write backend description (which determines the target cache shard)
 /// to CAS.
 void StoreTargetCacheShard(
-    StorageConfig const& storage_config,
+    StorageConfig const& storage_config,  // NOLINT(misc-unused-parameters)
     Storage const& storage,
     RemoteExecutionConfig const& remote_exec_config) noexcept {
     auto backend_description =
@@ -248,8 +245,7 @@ void StoreTargetCacheShard(
         std::exit(kExitFailure);
     }
     [[maybe_unused]] auto id = storage.CAS().StoreBlob(*backend_description);
-    EnsuresAudit(id and ArtifactDigest{*id}.hash() ==
-                            storage_config.backend_description_id);
+    EnsuresAudit(id and id->hash() == storage_config.backend_description_id);
 }
 
 #endif  // BOOTSTRAP_BUILD_TOOL
@@ -766,7 +762,7 @@ auto main(int argc, char* argv[]) -> int {
         if (arguments.cmd == SubCommand::kGc) {
             // Set up storage for GC, as we have all the config args we need.
             auto const storage_config = CreateStorageConfig(
-                arguments.endpoint, Compatibility::IsCompatible());
+                arguments.endpoint, arguments.protocol.hash_type);
             if (not storage_config) {
                 return kExitFailure;
             }
@@ -804,7 +800,7 @@ auto main(int argc, char* argv[]) -> int {
 
                 // Set up storage for local execution.
                 auto const storage_config = CreateStorageConfig(
-                    arguments.endpoint, Compatibility::IsCompatible());
+                    arguments.endpoint, arguments.protocol.hash_type);
                 if (not storage_config) {
                     return kExitFailure;
                 }
@@ -868,7 +864,7 @@ auto main(int argc, char* argv[]) -> int {
                 // Set up storage for serve operation.
                 auto const storage_config =
                     CreateStorageConfig(arguments.endpoint,
-                                        Compatibility::IsCompatible(),
+                                        arguments.protocol.hash_type,
                                         remote_exec_config->remote_address,
                                         remote_exec_config->platform_properties,
                                         remote_exec_config->dispatch);
@@ -943,7 +939,7 @@ auto main(int argc, char* argv[]) -> int {
         // correctly-sharded target cache.
         auto const storage_config =
             CreateStorageConfig(arguments.endpoint,
-                                Compatibility::IsCompatible(),
+                                arguments.protocol.hash_type,
                                 remote_exec_config->remote_address,
                                 remote_exec_config->platform_properties,
                                 remote_exec_config->dispatch);
@@ -951,7 +947,7 @@ auto main(int argc, char* argv[]) -> int {
         // For bootstrapping the TargetCache sharding is not needed, so we can
         // default all execution arguments.
         auto const storage_config = CreateStorageConfig(
-            arguments.endpoint, Compatibility::IsCompatible());
+            arguments.endpoint, arguments.protocol.hash_type);
 #endif  // BOOTSTRAP_BUILD_TOOL
         if (not storage_config) {
             return kExitFailure;
@@ -1042,7 +1038,8 @@ auto main(int argc, char* argv[]) -> int {
 
         if (arguments.cmd == SubCommand::kTraverse) {
             if (arguments.graph.git_cas) {
-                if (Compatibility::IsCompatible()) {
+                if (not ProtocolTraits::IsNative(
+                        arguments.protocol.hash_type)) {
                     Logger::Log(LogLevel::Error,
                                 "Command line options {} and {} cannot be used "
                                 "together.",
@@ -1128,7 +1125,8 @@ auto main(int argc, char* argv[]) -> int {
             if (result) {
                 Logger::Log(LogLevel::Info,
                             "Analysed target {}",
-                            result->id.ToShortString());
+                            result->id.ToShortString(
+                                Evaluator::GetExpressionLogLimit()));
 
                 {
                     auto cached = stats.ExportsCachedCounter();
@@ -1150,6 +1148,12 @@ auto main(int argc, char* argv[]) -> int {
                 if (arguments.analysis.graph_file) {
                     result_map.ToFile(
                         *arguments.analysis.graph_file, &stats, &progress);
+                }
+                if (arguments.analysis.graph_file_plain) {
+                    result_map.ToFile</*kIncludeOrigins=*/false>(
+                        *arguments.analysis.graph_file_plain,
+                        &stats,
+                        &progress);
                 }
                 auto const [artifacts, runfiles] =
                     ReadOutputArtifacts(result->target);
@@ -1191,7 +1195,8 @@ auto main(int argc, char* argv[]) -> int {
                     result->modified ? fmt::format(" input of action {} of",
                                                    *(result->modified))
                                      : "",
-                    result->id.ToShortString());
+                    result->id.ToShortString(
+                        Evaluator::GetExpressionLogLimit()));
 
                 auto build_result =
                     traverser.BuildAndStage(artifacts,

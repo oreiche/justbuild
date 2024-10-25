@@ -33,7 +33,7 @@
 #include "src/buildtool/build_engine/expression/evaluator.hpp"
 #include "src/buildtool/common/clidefaults.hpp"
 #include "src/buildtool/common/retry_cli.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/main/build_utils.hpp"
 #include "src/utils/cpp/path.hpp"
@@ -43,36 +43,37 @@ inline constexpr auto kMaxOpCacheExponent = std::uint8_t{63};
 
 /// \brief Arguments common to all commands.
 struct CommonArguments {
-    std::optional<std::filesystem::path> workspace_root{};
-    std::optional<std::filesystem::path> repository_config{};
-    std::optional<std::string> main{};
+    std::optional<std::filesystem::path> workspace_root;
+    std::optional<std::filesystem::path> repository_config;
+    std::optional<std::string> main;
     std::size_t jobs{std::max(1U, std::thread::hardware_concurrency())};
 };
 
 struct LogArguments {
-    std::vector<std::filesystem::path> log_files{};
+    std::vector<std::filesystem::path> log_files;
     LogLevel log_limit{kDefaultLogLevel};
-    std::optional<LogLevel> restrict_stderr_log_limit{};
+    std::optional<LogLevel> restrict_stderr_log_limit;
     bool plain_log{false};
     bool log_append{false};
 };
 
 /// \brief Arguments required for analysing targets.
 struct AnalysisArguments {
-    std::optional<std::size_t> expression_log_limit{};
-    std::vector<std::string> defines{};
-    std::filesystem::path config_file{};
-    std::optional<nlohmann::json> target{};
-    std::optional<std::string> request_action_input{};
-    std::optional<std::string> target_file_name{};
-    std::optional<std::string> rule_file_name{};
-    std::optional<std::string> expression_file_name{};
-    std::optional<std::filesystem::path> target_root{};
-    std::optional<std::filesystem::path> rule_root{};
-    std::optional<std::filesystem::path> expression_root{};
-    std::optional<std::filesystem::path> graph_file{};
-    std::optional<std::filesystem::path> artifacts_to_build_file{};
-    std::optional<std::filesystem::path> serve_errors_file{};
+    std::optional<std::size_t> expression_log_limit;
+    std::vector<std::string> defines;
+    std::filesystem::path config_file;
+    std::optional<nlohmann::json> target;
+    std::optional<std::string> request_action_input;
+    std::optional<std::string> target_file_name;
+    std::optional<std::string> rule_file_name;
+    std::optional<std::string> expression_file_name;
+    std::optional<std::filesystem::path> target_root;
+    std::optional<std::filesystem::path> rule_root;
+    std::optional<std::filesystem::path> expression_root;
+    std::optional<std::filesystem::path> graph_file;
+    std::optional<std::filesystem::path> graph_file_plain;
+    std::optional<std::filesystem::path> artifacts_to_build_file;
+    std::optional<std::filesystem::path> serve_errors_file;
 };
 
 /// \brief Arguments required for describing targets/rules.
@@ -98,10 +99,10 @@ struct DiagnosticArguments {
 
 /// \brief Arguments required for specifying build endpoint.
 struct EndpointArguments {
-    std::optional<std::filesystem::path> local_root{};
+    std::optional<std::filesystem::path> local_root;
     std::optional<std::string> remote_execution_address;
     std::vector<std::string> platform_properties;
-    std::optional<std::filesystem::path> remote_execution_dispatch_file{};
+    std::optional<std::filesystem::path> remote_execution_dispatch_file;
 };
 
 /// \brief Arguments required for building.
@@ -122,21 +123,21 @@ struct TCArguments {
 
 /// \brief Arguments required for staging.
 struct StageArguments {
-    std::filesystem::path output_dir{};
+    std::filesystem::path output_dir;
     bool remember{false};
 };
 
 /// \brief Arguments required for rebuilding.
 struct RebuildArguments {
-    std::optional<std::string> cache_endpoint{};
-    std::optional<std::filesystem::path> dump_flaky{};
+    std::optional<std::string> cache_endpoint;
+    std::optional<std::filesystem::path> dump_flaky;
 };
 
 /// \brief Arguments for fetching artifacts from CAS.
 struct FetchArguments {
-    std::string object_id{};
-    std::optional<std::filesystem::path> output_path{};
-    std::optional<std::filesystem::path> sub_path{};
+    std::string object_id;
+    std::optional<std::filesystem::path> output_path;
+    std::optional<std::filesystem::path> sub_path;
     bool remember{false};
     bool raw_tree{};
     bool archive{};
@@ -144,9 +145,9 @@ struct FetchArguments {
 
 /// \brief Arguments required for running from graph file.
 struct GraphArguments {
-    nlohmann::json artifacts{};
-    std::filesystem::path graph_file{};
-    std::optional<std::filesystem::path> git_cas{};
+    nlohmann::json artifacts;
+    std::filesystem::path graph_file;
+    std::optional<std::filesystem::path> git_cas;
 };
 
 // Arguments for authentication methods.
@@ -177,10 +178,10 @@ struct ServiceArguments {
 };
 
 struct ServeArguments {
-    std::filesystem::path config{};
-    std::optional<std::string> remote_serve_address{};
+    std::filesystem::path config;
+    std::optional<std::string> remote_serve_address;
     // repositories populated from just-serve config file
-    std::vector<std::filesystem::path> repositories{};
+    std::vector<std::filesystem::path> repositories;
 };
 
 struct GcArguments {
@@ -188,8 +189,12 @@ struct GcArguments {
 };
 
 struct ToAddArguments {
-    std::filesystem::path location{};
+    std::filesystem::path location;
     bool follow_symlinks{};
+};
+
+struct ProtocolArguments final {
+    HashFunction::Type hash_type = HashFunction::Type::GitSHA1;
 };
 
 static inline auto SetupCommonArguments(
@@ -338,6 +343,11 @@ static inline auto SetupAnalysisArguments(
                "--dump-graph",
                clargs->graph_file,
                "File path for writing the action graph description to.")
+            ->type_name("PATH");
+        app->add_option("--dump-plain-graph",
+                        clargs->graph_file_plain,
+                        "File path for writing the action graph description "
+                        "(without origins) to.")
             ->type_name("PATH");
         app->add_option("--dump-artifacts-to-build",
                         clargs->artifacts_to_build_file,
@@ -682,11 +692,14 @@ static inline auto SetupGraphArguments(
                     "missing KNOWN artifacts.");
 }
 
-static inline auto SetupCompatibilityArguments(
-    gsl::not_null<CLI::App*> const& app) {
+static inline auto SetupProtocolArguments(
+    gsl::not_null<CLI::App*> const& app,
+    gsl::not_null<ProtocolArguments*> const& protocol) {
     app->add_flag_function(
         "--compatible",
-        [](auto /*unused*/) { Compatibility::SetCompatible(); },
+        [protocol](auto /*unused*/) {
+            protocol->hash_type = HashFunction::Type::PlainSHA256;
+        },
         "At increased computational effort, be compatible with the original "
         "remote build execution protocol. As the change affects identifiers, "
         "the flag must be used consistently for all related invocations.");

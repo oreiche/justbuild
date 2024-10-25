@@ -21,9 +21,9 @@ extern "C" {
 #include <curl/curl.h>
 }
 
-CurlContext::CurlContext() noexcept {
-    // NOLINTNEXTLINE(hicpp-signed-bitwise)
-    if (not(initialized_ = (curl_global_init(CURL_GLOBAL_DEFAULT) >= 0))) {
+CurlContext::CurlContext() noexcept
+    : initialized_{curl_global_init(CURL_GLOBAL_DEFAULT) >= 0} {
+    if (not initialized_) {
         Logger::Log(LogLevel::Error, "initializing libcurl failed");
     }
 }

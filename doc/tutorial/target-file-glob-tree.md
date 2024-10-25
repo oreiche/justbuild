@@ -36,7 +36,7 @@ following content.
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "0e9d13a761c878a647fde5a543946a02bf2c693d"
+      , "commit": "b8ae7e38c0c51467ead55361362a0fd0da3666d5"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }

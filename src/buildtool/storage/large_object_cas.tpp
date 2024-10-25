@@ -16,14 +16,14 @@
 #define INCLUDED_SRC_BUILDTOOL_STORAGE_LARGE_OBJECT_CAS_TPP
 
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 
 #include "fmt/core.h"
 #include "nlohmann/json.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
-#include "src/buildtool/compatibility/native_support.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/storage/file_chunker.hpp"
 #include "src/buildtool/storage/large_object_cas.hpp"
@@ -36,10 +36,9 @@ inline constexpr std::size_t kSizeIndex = 1;
 
 template <bool kDoGlobalUplink, ObjectType kType>
 auto LargeObjectCAS<kDoGlobalUplink, kType>::GetEntryPath(
-    bazel_re::Digest const& digest) const noexcept
+    ArtifactDigest const& digest) const noexcept
     -> std::optional<std::filesystem::path> {
-    const std::string hash = NativeSupport::Unprefix(digest.hash());
-    const std::filesystem::path file_path = file_store_.GetPath(hash);
+    std::filesystem::path file_path = file_store_.GetPath(digest.hash());
     if (FileSystemManager::IsFile(file_path)) {
         return file_path;
     }
@@ -47,8 +46,9 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::GetEntryPath(
     if constexpr (kDoGlobalUplink) {
         // To promote parts of the tree properly, regular uplinking logic for
         // trees is used:
-        bool uplinked =
-            IsTreeObject(kType) and not Compatibility::IsCompatible()
+        auto const hash_type = storage_config_.hash_function.GetType();
+        bool const uplinked =
+            IsTreeObject(kType) and not ProtocolTraits::IsTreeAllowed(hash_type)
                 ? uplinker_.UplinkTree(digest)
                 : uplinker_.UplinkLargeBlob(digest);
         if (uplinked and FileSystemManager::IsFile(file_path)) {
@@ -60,25 +60,31 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::GetEntryPath(
 
 template <bool kDoGlobalUplink, ObjectType kType>
 auto LargeObjectCAS<kDoGlobalUplink, kType>::ReadEntry(
-    bazel_re::Digest const& digest) const noexcept
-    -> std::optional<std::vector<bazel_re::Digest>> {
+    ArtifactDigest const& digest) const noexcept
+    -> std::optional<std::vector<ArtifactDigest>> {
     auto const file_path = GetEntryPath(digest);
     if (not file_path) {
         return std::nullopt;
     }
 
-    std::vector<bazel_re::Digest> parts;
+    std::vector<ArtifactDigest> parts;
     try {
         std::ifstream stream(*file_path);
         nlohmann::json j = nlohmann::json::parse(stream);
         parts.reserve(j.size());
 
+        auto const hash_type = local_cas_.GetHashFunction().GetType();
         for (auto const& j_part : j) {
-            auto hash = j_part.at(kHashIndex).template get<std::string>();
-            auto size = j_part.at(kSizeIndex).template get<std::size_t>();
+            auto digest = ArtifactDigestFactory::Create(
+                hash_type,
+                j_part.at(kHashIndex).template get<std::string>(),
+                j_part.at(kSizeIndex).template get<std::size_t>(),
+                /*is_tree=*/false);
+            if (not digest) {
+                return std::nullopt;
+            }
 
-            parts.emplace_back(
-                ArtifactDigest{std::move(hash), size, /*is_tree=*/false});
+            parts.emplace_back(*std::move(digest));
         }
     } catch (...) {
         return std::nullopt;
@@ -88,8 +94,8 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::ReadEntry(
 
 template <bool kDoGlobalUplink, ObjectType kType>
 auto LargeObjectCAS<kDoGlobalUplink, kType>::WriteEntry(
-    bazel_re::Digest const& digest,
-    std::vector<bazel_re::Digest> const& parts) const noexcept -> bool {
+    ArtifactDigest const& digest,
+    std::vector<ArtifactDigest> const& parts) const noexcept -> bool {
     if (GetEntryPath(digest)) {
         return true;
     }
@@ -106,23 +112,18 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::WriteEntry(
     try {
         for (auto const& part : parts) {
             auto& j_part = j.emplace_back();
-
-            ArtifactDigest const a_digest(part);
-            j_part[kHashIndex] = a_digest.hash();
-            j_part[kSizeIndex] = a_digest.size();
+            j_part[kHashIndex] = part.hash();
+            j_part[kSizeIndex] = part.size();
         }
     } catch (...) {
         return false;
     }
-
-    const auto hash = NativeSupport::Unprefix(digest.hash());
-    return file_store_.AddFromBytes(hash, j.dump());
+    return file_store_.AddFromBytes(digest.hash(), j.dump());
 }
 
 template <bool kDoGlobalUplink, ObjectType kType>
-auto LargeObjectCAS<kDoGlobalUplink, kType>::Split(
-    bazel_re::Digest const& digest) const noexcept
-    -> expected<std::vector<bazel_re::Digest>, LargeObjectError> {
+auto LargeObjectCAS<kDoGlobalUplink, kType>::Split(ArtifactDigest const& digest)
+    const noexcept -> expected<std::vector<ArtifactDigest>, LargeObjectError> {
     if (auto large_entry = ReadEntry(digest)) {
         return std::move(*large_entry);
     }
@@ -154,7 +155,7 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::Split(
                              fmt::format("could not split {}", digest.hash())}};
     }
 
-    std::vector<bazel_re::Digest> parts;
+    std::vector<ArtifactDigest> parts;
     try {
         while (auto chunk = chunker.NextChunk()) {
             auto part = local_cas_.StoreBlob(*chunk, /*is_executable=*/false);
@@ -162,7 +163,7 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::Split(
                 return unexpected{LargeObjectError{
                     LargeObjectErrorCode::Internal, "could not store a part."}};
             }
-            parts.push_back(std::move(*part));
+            parts.emplace_back(*std::move(part));
         }
     } catch (...) {
         return unexpected{LargeObjectError{LargeObjectErrorCode::Internal,
@@ -180,7 +181,7 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::Split(
 
 template <bool kDoGlobalUplink, ObjectType kType>
 auto LargeObjectCAS<kDoGlobalUplink, kType>::TrySplice(
-    bazel_re::Digest const& digest) const noexcept
+    ArtifactDigest const& digest) const noexcept
     -> expected<LargeObject, LargeObjectError> {
     auto parts = ReadEntry(digest);
     if (not parts) {
@@ -193,8 +194,8 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::TrySplice(
 
 template <bool kDoGlobalUplink, ObjectType kType>
 auto LargeObjectCAS<kDoGlobalUplink, kType>::Splice(
-    bazel_re::Digest const& digest,
-    std::vector<bazel_re::Digest> const& parts) const noexcept
+    ArtifactDigest const& digest,
+    std::vector<ArtifactDigest> const& parts) const noexcept
     -> expected<LargeObject, LargeObjectError> {
     // Create temporary space for splicing:
     LargeObject large_object(storage_config_);
@@ -236,7 +237,7 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::Splice(
         stream.close();
     } catch (...) {
         return unexpected{LargeObjectError{LargeObjectErrorCode::Internal,
-                                           "an unknown error occured"}};
+                                           "an unknown error occurred"}};
     }
     return large_object;
 }
@@ -247,7 +248,7 @@ template <bool kIsLocalGeneration>
 auto LargeObjectCAS<kDoGlobalUplink, kType>::LocalUplink(
     LocalCAS<false> const& latest,
     LargeObjectCAS<false, kType> const& latest_large,
-    bazel_re::Digest const& digest) const noexcept -> bool {
+    ArtifactDigest const& digest) const noexcept -> bool {
     // Check the large entry in the youngest generation:
     if (latest_large.GetEntryPath(digest)) {
         return true;
@@ -262,10 +263,10 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::LocalUplink(
 
     // Promoting the parts of the large entry:
     for (auto const& part : *parts) {
-        static constexpr bool is_executable = false;
-        static constexpr bool skip_sync = true;
+        static constexpr bool kIsExecutable = false;
+        static constexpr bool kSkipSync = true;
         if (not local_cas_.LocalUplinkBlob(
-                latest, part, is_executable, skip_sync)) {
+                latest, part, kIsExecutable, kSkipSync)) {
             return false;
         }
     }
@@ -274,9 +275,8 @@ auto LargeObjectCAS<kDoGlobalUplink, kType>::LocalUplink(
     if (not path) {
         return false;
     }
-
-    const auto hash = NativeSupport::Unprefix(digest.hash());
-    return latest_large.file_store_.AddFromFile(hash, *path, /*is_owner=*/true);
+    return latest_large.file_store_.AddFromFile(
+        digest.hash(), *path, /*is_owner=*/true);
 }
 
 #endif  // INCLUDED_SRC_BUILDTOOL_STORAGE_LARGE_OBJECT_CAS_TPP

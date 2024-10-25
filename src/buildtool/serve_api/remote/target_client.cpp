@@ -21,9 +21,28 @@
 
 #include "fmt/core.h"
 #include "nlohmann/json.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/common/remote/client_common.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/logging/log_level.hpp"
+
+namespace {
+[[nodiscard]] auto GetTargetValue(
+    HashFunction::Type hash_type,
+    justbuild::just_serve::ServeTargetResponse const& response) noexcept
+    -> std::optional<ArtifactDigest> {
+    if (not response.has_target_value()) {
+        return std::nullopt;
+    }
+    auto result =
+        ArtifactDigestFactory::FromBazel(hash_type, response.target_value());
+    if (not result) {
+        return std::nullopt;
+    }
+    return *std::move(result);
+}
+}  // namespace
 
 TargetClient::TargetClient(
     ServerAddress const& address,
@@ -38,7 +57,7 @@ TargetClient::TargetClient(
 }
 
 auto TargetClient::ServeTarget(const TargetCacheKey& key,
-                               const std::string& repo_key) const noexcept
+                               const ArtifactDigest& repo_key) const noexcept
     -> std::optional<serve_target_result_t> {
     // make sure the blob containing the key is in the remote cas
     if (not apis_.local->RetrieveToCas({key.Id()}, *apis_.remote)) {
@@ -49,18 +68,19 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
     }
     // make sure the repository configuration blob is in the remote cas
     if (not apis_.local->RetrieveToCas(
-            {Artifact::ObjectInfo{.digest = ArtifactDigest{repo_key, 0, false},
+            {Artifact::ObjectInfo{.digest = repo_key,
                                   .type = ObjectType::File}},
             *apis_.remote)) {
         return serve_target_result_t{
             std::in_place_index<1>,
-            fmt::format("Failed to retrieve to remote cas blob {}", repo_key)};
+            fmt::format("Failed to retrieve to remote cas blob {}",
+                        repo_key.hash())};
     }
 
     // add target cache key to request
-    bazel_re::Digest key_dgst{key.Id().digest};
     justbuild::just_serve::ServeTargetRequest request{};
-    request.mutable_target_cache_key_id()->CopyFrom(key_dgst);
+    *request.mutable_target_cache_key_id() =
+        ArtifactDigestFactory::ToBazel(key.Id().digest);
 
     // add execution properties to request
     for (auto const& [k, v] : exec_config_.platform_properties) {
@@ -71,14 +91,16 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
 
     // add dispatch information to request, while ensuring blob is uploaded
     // to remote cas
-    auto dispatch_list = nlohmann::json::array();
+    std::optional<ArtifactDigest> dispatch_digest;
     try {
+        auto dispatch_list = nlohmann::json::array();
         for (auto const& [props, endpoint] : exec_config_.dispatch) {
             auto entry = nlohmann::json::array();
             entry.push_back(nlohmann::json(props));
             entry.push_back(endpoint.ToJson());
             dispatch_list.push_back(entry);
         }
+        dispatch_digest = storage_.CAS().StoreBlob(dispatch_list.dump(2));
     } catch (std::exception const& ex) {
         return serve_target_result_t{
             std::in_place_index<1>,
@@ -86,22 +108,21 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
                         ex.what())};
     }
 
-    auto dispatch_dgst = storage_.CAS().StoreBlob(dispatch_list.dump(2));
-    if (not dispatch_dgst) {
+    if (not dispatch_digest) {
         return serve_target_result_t{
-            std::in_place_index<1>,
-            fmt::format("Failed to store blob {} to local cas",
-                        dispatch_list.dump(2))};
+            std::in_place_index<1>, "Failed to add dispatch info to local cas"};
     }
-    auto const& dispatch_info = Artifact::ObjectInfo{
-        .digest = ArtifactDigest{*dispatch_dgst}, .type = ObjectType::File};
+
+    auto const dispatch_info = Artifact::ObjectInfo{.digest = *dispatch_digest,
+                                                    .type = ObjectType::File};
     if (not apis_.local->RetrieveToCas({dispatch_info}, *apis_.remote)) {
         return serve_target_result_t{
             std::in_place_index<1>,
             fmt::format("Failed to upload blob {} to remote cas",
                         dispatch_info.ToString())};
     }
-    request.mutable_dispatch_info()->CopyFrom(*dispatch_dgst);
+    (*request.mutable_dispatch_info()) =
+        ArtifactDigestFactory::ToBazel(*dispatch_digest);
 
     // call rpc
     grpc::ClientContext context;
@@ -113,21 +134,29 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
         case grpc::StatusCode::OK: {
             // if log has been set, pass it along as index 0
             if (response.has_log()) {
-                return serve_target_result_t{
-                    std::in_place_index<0>,
-                    ArtifactDigest(response.log()).hash()};
+                auto log_digest = ArtifactDigestFactory::FromBazel(
+                    storage_.GetHashFunction().GetType(), response.log());
+                if (not log_digest) {
+                    return serve_target_result_t{
+                        std::in_place_index<1>,
+                        fmt::format("Failed to convert log digest: {}",
+                                    std::move(log_digest).error())};
+                }
+                return serve_target_result_t{std::in_place_index<0>,
+                                             log_digest->hash()};
             }
             // if no log has been set, it must have the target cache value
-            if (not response.has_target_value()) {
+            auto const target_value_dgst =
+                GetTargetValue(storage_.GetHashFunction().GetType(), response);
+            if (not target_value_dgst) {
                 return serve_target_result_t{
                     std::in_place_index<1>,
                     "Serve endpoint failed to set expected response field"};
             }
-            auto const& target_value_dgst =
-                ArtifactDigest{response.target_value()};
-            auto const& obj_info = Artifact::ObjectInfo{
-                .digest = target_value_dgst, .type = ObjectType::File};
-            if (not apis_.local->IsAvailable(target_value_dgst)) {
+
+            auto const obj_info = Artifact::ObjectInfo{
+                .digest = *target_value_dgst, .type = ObjectType::File};
+            if (not apis_.local->IsAvailable(*target_value_dgst)) {
                 if (not apis_.remote->RetrieveToCas({obj_info}, *apis_.local)) {
                     return serve_target_result_t{
                         std::in_place_index<1>,
@@ -145,7 +174,8 @@ auto TargetClient::ServeTarget(const TargetCacheKey& key,
                                 obj_info.ToString())};
             }
             try {
-                auto const& result = TargetCacheEntry::FromJson(
+                auto const result = TargetCacheEntry::FromJson(
+                    storage_.GetHashFunction().GetType(),
                     nlohmann::json::parse(*target_value_str));
                 // return the target cache value information
                 return serve_target_result_t{std::in_place_index<3>,
@@ -222,7 +252,14 @@ auto TargetClient::ServeTargetDescription(
         LogStatus(&logger_, LogLevel::Error, status);
         return std::nullopt;
     }
-    return ArtifactDigest{response.description_id()};
+
+    auto result = ArtifactDigestFactory::FromBazel(
+        storage_.GetHashFunction().GetType(), response.description_id());
+    if (not result) {
+        logger_.Emit(LogLevel::Error, "{}", std::move(result).error());
+        return std::nullopt;
+    }
+    return *std::move(result);
 }
 
 #endif  // BOOTSTRAP_BUILD_TOOL

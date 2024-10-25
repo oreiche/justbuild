@@ -15,12 +15,20 @@
 #ifndef INCLUDED_SRC_UTILS_CPP_HEX_STRING_HPP
 #define INCLUDED_SRC_UTILS_CPP_HEX_STRING_HPP
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <iomanip>
 #include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
+
+[[nodiscard]] static inline auto IsHexString(std::string const& s) noexcept
+    -> bool {
+    return std::all_of(
+        s.begin(), s.end(), [](unsigned char c) { return std::isxdigit(c); });
+}
 
 [[nodiscard]] static inline auto ToHexString(std::string const& bytes)
     -> std::string {
@@ -36,7 +44,7 @@
 [[nodiscard]] static inline auto FromHexString(std::string const& hexstring)
     -> std::optional<std::string> {
     try {
-        const std::size_t kHexBase = 16;
+        static constexpr std::size_t kHexBase = 16;
         std::stringstream ss{};
         for (std::size_t i = 0; i < hexstring.length(); i += 2) {
             unsigned char c =

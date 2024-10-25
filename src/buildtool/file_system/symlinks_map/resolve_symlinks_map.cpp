@@ -129,9 +129,7 @@ void ResolveKnownEntry(GitObjectToResolve const& obj,
         }
         auto children = source_git_repo->ReadTree(
             entry_info.id,
-            [](std::vector<bazel_re::Digest> const& /*unused*/) {
-                return true;
-            },
+            [](auto const& /*unused*/) { return true; },
             /*is_hex_id=*/true);
         if (not children) {
             (*logger)(fmt::format("ResolveSymlinks: failed to read entries of "
@@ -159,7 +157,7 @@ void ResolveKnownEntry(GitObjectToResolve const& obj,
                                 std::make_optional(GitRepo::TreeEntryInfo{
                                     .id = ToHexString(raw_id),
                                     .type = e.type,
-                                    .symlink_content = *target}),
+                                    .symlink_content = std::move(target)}),
                                 obj.source_cas,
                                 obj.target_cas);
                         }

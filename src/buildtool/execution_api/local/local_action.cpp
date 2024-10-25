@@ -21,8 +21,8 @@
 #include <system_error>
 #include <utility>
 
-#include "src/buildtool/common/bazel_types.hpp"
-#include "src/buildtool/compatibility/native_support.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/execution_api/common/tree_reader.hpp"
 #include "src/buildtool/execution_api/local/local_cas_reader.hpp"
 #include "src/buildtool/execution_api/local/local_response.hpp"
@@ -31,6 +31,7 @@
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/system/system_command.hpp"
+#include "src/utils/cpp/path.hpp"
 
 namespace {
 
@@ -38,43 +39,43 @@ namespace {
 class BuildCleanupAnchor {
   public:
     explicit BuildCleanupAnchor(std::filesystem::path build_path) noexcept
-        : build_path{std::move(build_path)} {}
+        : build_path_{std::move(build_path)} {}
     BuildCleanupAnchor(BuildCleanupAnchor const&) = delete;
     BuildCleanupAnchor(BuildCleanupAnchor&&) = delete;
     auto operator=(BuildCleanupAnchor const&) -> BuildCleanupAnchor& = delete;
     auto operator=(BuildCleanupAnchor&&) -> BuildCleanupAnchor& = delete;
     ~BuildCleanupAnchor() {
-        if (not FileSystemManager::RemoveDirectory(build_path, true)) {
+        if (not FileSystemManager::RemoveDirectory(build_path_, true)) {
             Logger::Log(LogLevel::Error,
                         "Could not cleanup build directory {}",
-                        build_path.string());
+                        build_path_.string());
         }
     }
 
   private:
-    std::filesystem::path const build_path{};
+    std::filesystem::path const build_path_;
 };
 
 [[nodiscard]] auto CreateDigestFromLocalOwnedTree(
     Storage const& storage,
-    std::filesystem::path const& dir_path) -> std::optional<bazel_re::Digest> {
+    std::filesystem::path const& dir_path) -> std::optional<ArtifactDigest> {
     auto const& cas = storage.CAS();
     auto store_blob = [&cas](std::filesystem::path const& path,
-                             auto is_exec) -> std::optional<bazel_re::Digest> {
+                             auto is_exec) -> std::optional<ArtifactDigest> {
         return cas.StoreBlob</*kOwner=*/true>(path, is_exec);
     };
     auto store_tree =
-        [&cas](std::string const& content) -> std::optional<bazel_re::Digest> {
+        [&cas](std::string const& content) -> std::optional<ArtifactDigest> {
         return cas.StoreTree(content);
     };
     auto store_symlink =
-        [&cas](std::string const& content) -> std::optional<bazel_re::Digest> {
+        [&cas](std::string const& content) -> std::optional<ArtifactDigest> {
         return cas.StoreBlob(content);
     };
-    return Compatibility::IsCompatible()
-               ? BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
+    return ProtocolTraits::IsNative(storage.GetHashFunction().GetType())
+               ? BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
                      dir_path, store_blob, store_tree, store_symlink)
-               : BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
+               : BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
                      dir_path, store_blob, store_tree, store_symlink);
 }
 
@@ -84,7 +85,7 @@ auto LocalAction::Execute(Logger const* logger) noexcept
     -> IExecutionResponse::Ptr {
 
     auto do_cache = CacheEnabled(cache_flag_);
-    auto action = CreateActionDigest(root_digest_, not do_cache);
+    auto const action = CreateActionDigest(root_digest_, not do_cache);
     if (not action) {
         if (logger != nullptr) {
             logger->Emit(LogLevel::Error,
@@ -100,8 +101,24 @@ auto LocalAction::Execute(Logger const* logger) noexcept
                      " - exec_dir digest: {}\n"
                      " - action digest: {}",
                      root_digest_.hash(),
-                     NativeSupport::Unprefix(action->hash()));
+                     action->hash());
     }
+
+    auto create_response = [](Logger const* logger,
+                              std::string const& action_hash,
+                              auto&&... args) -> IExecutionResponse::Ptr {
+        try {
+            return IExecutionResponse::Ptr{new LocalResponse{
+                action_hash, std::forward<decltype(args)>(args)...}};
+        } catch (...) {
+            if (logger != nullptr) {
+                logger->Emit(LogLevel::Error,
+                             "failed to create a response for {}",
+                             action_hash);
+            }
+        }
+        return nullptr;
+    };
 
     if (do_cache) {
         if (auto result =
@@ -109,10 +126,11 @@ auto LocalAction::Execute(Logger const* logger) noexcept
             if (result->exit_code() == 0 and
                 ActionResultContainsExpectedOutputs(
                     *result, output_files_, output_dirs_)) {
-                return IExecutionResponse::Ptr{
-                    new LocalResponse{action->hash(),
-                                      {std::move(*result), /*is_cached=*/true},
-                                      local_context_.storage}};
+                return create_response(
+                    logger,
+                    action->hash(),
+                    LocalAction::Output{*std::move(result), /*is_cached=*/true},
+                    local_context_.storage);
             }
         }
     }
@@ -121,7 +139,8 @@ auto LocalAction::Execute(Logger const* logger) noexcept
         if (auto output = Run(*action)) {
             if (cache_flag_ == CacheFlag::PretendCached) {
                 // ensure the same id is created as if caching were enabled
-                auto action_cached = CreateActionDigest(root_digest_, false);
+                auto const action_cached =
+                    CreateActionDigest(root_digest_, false);
                 if (not action_cached) {
                     if (logger != nullptr) {
                         logger->Emit(
@@ -133,24 +152,25 @@ auto LocalAction::Execute(Logger const* logger) noexcept
                 }
 
                 output->is_cached = true;
-                return IExecutionResponse::Ptr{
-                    new LocalResponse{action_cached->hash(),
-                                      std::move(*output),
-                                      local_context_.storage}};
+                return create_response(logger,
+                                       action_cached->hash(),
+                                       *std::move(output),
+                                       local_context_.storage);
             }
-            return IExecutionResponse::Ptr{new LocalResponse{
-                action->hash(), std::move(*output), local_context_.storage}};
+            return create_response(logger,
+                                   action->hash(),
+                                   *std::move(output),
+                                   local_context_.storage);
         }
     }
 
     return nullptr;
 }
 
-auto LocalAction::Run(bazel_re::Digest const& action_id) const noexcept
+auto LocalAction::Run(ArtifactDigest const& action_id) const noexcept
     -> std::optional<Output> {
-    auto exec_path =
-        CreateUniquePath(local_context_.storage_config->ExecutionRoot() /
-                         NativeSupport::Unprefix(action_id.hash()));
+    auto const exec_path = CreateUniquePath(
+        local_context_.storage_config->ExecutionRoot() / action_id.hash());
 
     if (not exec_path) {
         return std::nullopt;
@@ -179,13 +199,13 @@ auto LocalAction::Run(bazel_re::Digest const& action_id) const noexcept
     if (exit_code.has_value()) {
         Output result{};
         result.action.set_exit_code(*exit_code);
-        if (gsl::owner<bazel_re::Digest*> digest_ptr =
-                DigestFromOwnedFile(*exec_path / "stdout")) {
-            result.action.set_allocated_stdout_digest(digest_ptr);
+        if (auto const digest = DigestFromOwnedFile(*exec_path / "stdout")) {
+            *result.action.mutable_stdout_digest() =
+                ArtifactDigestFactory::ToBazel(*digest);
         }
-        if (gsl::owner<bazel_re::Digest*> digest_ptr =
-                DigestFromOwnedFile(*exec_path / "stderr")) {
-            result.action.set_allocated_stderr_digest(digest_ptr);
+        if (auto const digest = DigestFromOwnedFile(*exec_path / "stderr")) {
+            *result.action.mutable_stderr_digest() =
+                ArtifactDigestFactory::ToBazel(*digest);
         }
 
         if (CollectAndStoreOutputs(&result.action, build_root / cwd_)) {
@@ -368,12 +388,21 @@ auto LocalAction::CollectOutputFileOrSymlink(
         return std::nullopt;
     }
     if (IsSymlinkObject(*type)) {
-        auto content = FileSystemManager::ReadSymlink(file_path);
-        if (content and local_context_.storage->CAS().StoreBlob(*content)) {
-            auto out_symlink = bazel_re::OutputSymlink{};
-            out_symlink.set_path(local_path);
-            out_symlink.set_target(*content);
-            return out_symlink;
+        if (auto content = FileSystemManager::ReadSymlink(file_path)) {
+            // in native mode: check validity of symlink
+            if (ProtocolTraits::IsNative(
+                    local_context_.storage->GetHashFunction().GetType()) and
+                not PathIsNonUpwards(*content)) {
+                Logger::Log(
+                    LogLevel::Error, "found invalid symlink at {}", local_path);
+                return std::nullopt;
+            }
+            if (local_context_.storage->CAS().StoreBlob(*content)) {
+                auto out_symlink = bazel_re::OutputSymlink{};
+                out_symlink.set_path(local_path);
+                out_symlink.set_target(*content);
+                return out_symlink;
+            }
         }
     }
     else if (IsFileObject(*type)) {
@@ -383,8 +412,8 @@ auto LocalAction::CollectOutputFileOrSymlink(
         if (digest) {
             auto out_file = bazel_re::OutputFile{};
             out_file.set_path(local_path);
-            out_file.set_allocated_digest(
-                gsl::owner<bazel_re::Digest*>{new bazel_re::Digest{*digest}});
+            *out_file.mutable_digest() =
+                ArtifactDigestFactory::ToBazel(*digest);
             out_file.set_is_executable(is_executable);
             return out_file;
         }
@@ -407,12 +436,21 @@ auto LocalAction::CollectOutputDirOrSymlink(
         return std::nullopt;
     }
     if (IsSymlinkObject(*type)) {
-        auto content = FileSystemManager::ReadSymlink(dir_path);
-        if (content and local_context_.storage->CAS().StoreBlob(*content)) {
-            auto out_symlink = bazel_re::OutputSymlink{};
-            out_symlink.set_path(local_path);
-            out_symlink.set_target(*content);
-            return out_symlink;
+        if (auto content = FileSystemManager::ReadSymlink(dir_path)) {
+            // in native mode: check validity of symlink
+            if (ProtocolTraits::IsNative(
+                    local_context_.storage->GetHashFunction().GetType()) and
+                not PathIsNonUpwards(*content)) {
+                Logger::Log(
+                    LogLevel::Error, "found invalid symlink at {}", local_path);
+                return std::nullopt;
+            }
+            if (local_context_.storage->CAS().StoreBlob(*content)) {
+                auto out_symlink = bazel_re::OutputSymlink{};
+                out_symlink.set_path(local_path);
+                out_symlink.set_target(*content);
+                return out_symlink;
+            }
         }
     }
     else if (IsTreeObject(*type)) {
@@ -420,10 +458,13 @@ auto LocalAction::CollectOutputDirOrSymlink(
                 *local_context_.storage, dir_path)) {
             auto out_dir = bazel_re::OutputDirectory{};
             out_dir.set_path(local_path);
-            out_dir.set_allocated_tree_digest(
-                gsl::owner<bazel_re::Digest*>{new bazel_re::Digest{*digest}});
+            (*out_dir.mutable_tree_digest()) =
+                ArtifactDigestFactory::ToBazel(*digest);
             return out_dir;
         }
+        Logger::Log(LogLevel::Error,
+                    "found invalid entries in directory at {}",
+                    local_path);
     }
     else {
         Logger::Log(
@@ -495,10 +536,7 @@ auto LocalAction::CollectAndStoreOutputs(
 }
 
 auto LocalAction::DigestFromOwnedFile(std::filesystem::path const& file_path)
-    const noexcept -> gsl::owner<bazel_re::Digest*> {
-    if (auto digest = local_context_.storage->CAS().StoreBlob</*kOwner=*/true>(
-            file_path, /*is_executable=*/false)) {
-        return new bazel_re::Digest{std::move(*digest)};
-    }
-    return nullptr;
+    const noexcept -> std::optional<ArtifactDigest> {
+    return local_context_.storage->CAS().StoreBlob</*kOwner=*/true>(
+        file_path, /*is_executable=*/false);
 }

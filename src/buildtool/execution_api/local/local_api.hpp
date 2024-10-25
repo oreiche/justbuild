@@ -19,6 +19,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <new>  // std::nothrow
 #include <optional>
 #include <sstream>
 #include <string>
@@ -31,9 +32,9 @@
 #include "grpcpp/support/status.h"
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/common/repository_config.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
-#include "src/buildtool/compatibility/native_support.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
 #include "src/buildtool/execution_api/common/blob_tree.hpp"
@@ -56,7 +57,7 @@ class LocalApi final : public IExecutionApi {
     explicit LocalApi(gsl::not_null<LocalContext const*> const& local_context,
                       RepositoryConfig const* repo_config = nullptr) noexcept
         : local_context_{*local_context},
-          git_api_{CreateFallbackApi(repo_config)} {}
+          git_api_{CreateFallbackApi(*local_context->storage, repo_config)} {}
 
     [[nodiscard]] auto CreateAction(
         ArtifactDigest const& root_digest,
@@ -67,7 +68,8 @@ class LocalApi final : public IExecutionApi {
         std::map<std::string, std::string> const& env_vars,
         std::map<std::string, std::string> const& properties) const noexcept
         -> IExecutionAction::Ptr final {
-        return IExecutionAction::Ptr{new LocalAction{&local_context_,
+        return IExecutionAction::Ptr{new (std::nothrow)
+                                         LocalAction{&local_context_,
                                                      root_digest,
                                                      command,
                                                      cwd,
@@ -77,7 +79,7 @@ class LocalApi final : public IExecutionApi {
                                                      properties}};
     }
 
-    // NOLINTNEXTLINE(misc-no-recursion,google-default-arguments)
+    // NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] auto RetrieveToPaths(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<std::filesystem::path> const& output_paths,
@@ -152,7 +154,6 @@ class LocalApi final : public IExecutionApi {
             });
     }
 
-    // NOLINTNEXTLINE(misc-no-recursion)
     [[nodiscard]] auto RetrieveToCas(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         IExecutionApi const& api) const noexcept -> bool final {
@@ -210,10 +211,10 @@ class LocalApi final : public IExecutionApi {
             // storage_.ReadTreeInfos() will contain 0 as size.
             ArtifactDigest digest =
                 IsTreeObject(info.type)
-                    ? ArtifactDigest::Create<ObjectType::Tree>(
+                    ? ArtifactDigestFactory::HashDataAs<ObjectType::Tree>(
                           local_context_.storage_config->hash_function,
                           *content)
-                    : ArtifactDigest::Create<ObjectType::File>(
+                    : ArtifactDigestFactory::HashDataAs<ObjectType::File>(
                           local_context_.storage_config->hash_function,
                           *content);
 
@@ -261,19 +262,17 @@ class LocalApi final : public IExecutionApi {
     [[nodiscard]] auto Upload(ArtifactBlobContainer&& blobs,
                               bool /*skip_find_missing*/) const noexcept
         -> bool final {
-        for (auto const& blob : blobs.Blobs()) {
-            auto const is_tree = NativeSupport::IsTree(
-                static_cast<bazel_re::Digest>(blob.digest).hash());
-            auto cas_digest =
-                is_tree ? local_context_.storage->CAS().StoreTree(*blob.data)
-                        : local_context_.storage->CAS().StoreBlob(*blob.data,
-                                                                  blob.is_exec);
-            if (not cas_digest or not std::equal_to<bazel_re::Digest>{}(
-                                      *cas_digest, blob.digest)) {
-                return false;
-            }
-        }
-        return true;
+        auto const range = blobs.Blobs();
+        return std::all_of(
+            range.begin(),
+            range.end(),
+            [&cas = local_context_.storage->CAS()](ArtifactBlob const& blob) {
+                auto const cas_digest =
+                    blob.digest.IsTree()
+                        ? cas.StoreTree(*blob.data)
+                        : cas.StoreBlob(*blob.data, blob.is_exec);
+                return cas_digest and *cas_digest == blob.digest;
+            });
     }
 
     [[nodiscard]] auto UploadTree(
@@ -286,29 +285,29 @@ class LocalApi final : public IExecutionApi {
             return std::nullopt;
         }
 
-        if (Compatibility::IsCompatible()) {
-            return CommonUploadTreeCompatible(
-                *this,
-                *build_root,
-                [&cas = local_context_.storage->CAS()](
-                    std::vector<bazel_re::Digest> const& digests,
-                    std::vector<std::string>* targets) {
-                    targets->reserve(digests.size());
-                    for (auto const& digest : digests) {
-                        auto p = cas.BlobPath(digest, /*is_executable=*/false);
-                        auto content = FileSystemManager::ReadFile(*p);
-                        targets->emplace_back(*content);
-                    }
-                });
+        auto const& cas = local_context_.storage->CAS();
+        if (ProtocolTraits::IsNative(cas.GetHashFunction().GetType())) {
+            return CommonUploadTreeNative(*this, *build_root);
         }
-
-        return CommonUploadTreeNative(*this, *build_root);
+        return CommonUploadTreeCompatible(
+            *this,
+            *build_root,
+            [&cas](std::vector<ArtifactDigest> const& digests,
+                   gsl::not_null<std::vector<std::string>*> const& targets) {
+                targets->reserve(digests.size());
+                for (auto const& digest : digests) {
+                    auto p = cas.BlobPath(digest,
+                                          /*is_executable=*/false);
+                    auto content = FileSystemManager::ReadFile(*p);
+                    targets->emplace_back(*content);
+                }
+            });
     }
 
     [[nodiscard]] auto IsAvailable(ArtifactDigest const& digest) const noexcept
         -> bool final {
         return static_cast<bool>(
-            NativeSupport::IsTree(static_cast<bazel_re::Digest>(digest).hash())
+            digest.IsTree()
                 ? local_context_.storage->CAS().TreePath(digest)
                 : local_context_.storage->CAS().BlobPath(digest, false));
     }
@@ -317,9 +316,8 @@ class LocalApi final : public IExecutionApi {
         const noexcept -> std::vector<ArtifactDigest> final {
         std::vector<ArtifactDigest> result;
         for (auto const& digest : digests) {
-            auto const& path =
-                NativeSupport::IsTree(
-                    static_cast<bazel_re::Digest>(digest).hash())
+            auto const path =
+                digest.IsTree()
                     ? local_context_.storage->CAS().TreePath(digest)
                     : local_context_.storage->CAS().BlobPath(digest, false);
             if (not path) {
@@ -332,9 +330,8 @@ class LocalApi final : public IExecutionApi {
     [[nodiscard]] auto SplitBlob(ArtifactDigest const& blob_digest)
         const noexcept -> std::optional<std::vector<ArtifactDigest>> final {
         Logger::Log(LogLevel::Debug, "SplitBlob({})", blob_digest.hash());
-        auto split_result = CASUtils::SplitBlobFastCDC(
-            static_cast<bazel_re::Digest>(blob_digest),
-            *local_context_.storage);
+        auto split_result =
+            CASUtils::SplitBlobFastCDC(blob_digest, *local_context_.storage);
         if (not split_result) {
             Logger::Log(LogLevel::Error, split_result.error().error_message());
             return std::nullopt;
@@ -346,20 +343,12 @@ class LocalApi final : public IExecutionApi {
                << blob_digest.size() << " into " << chunk_digests.size()
                << " chunks: [ ";
             for (auto const& chunk_digest : chunk_digests) {
-                ss << chunk_digest.hash() << ":" << chunk_digest.size_bytes()
-                   << " ";
+                ss << chunk_digest.hash() << ":" << chunk_digest.size() << " ";
             }
             ss << "]";
             return ss.str();
         });
-        auto artifact_digests = std::vector<ArtifactDigest>{};
-        artifact_digests.reserve(chunk_digests.size());
-        std::transform(
-            chunk_digests.cbegin(),
-            chunk_digests.cend(),
-            std::back_inserter(artifact_digests),
-            [](auto const& digest) { return ArtifactDigest{digest}; });
-        return artifact_digests;
+        return *std::move(split_result);
     }
 
     [[nodiscard]] auto BlobSplitSupport() const noexcept -> bool final {
@@ -374,24 +363,14 @@ class LocalApi final : public IExecutionApi {
                     "SpliceBlob({}, {} chunks)",
                     blob_digest.hash(),
                     chunk_digests.size());
-        auto digests = std::vector<bazel_re::Digest>{};
-        digests.reserve(chunk_digests.size());
-        std::transform(
-            chunk_digests.cbegin(),
-            chunk_digests.cend(),
-            std::back_inserter(digests),
-            [](auto const& artifact_digest) {
-                return static_cast<bazel_re::Digest>(artifact_digest);
-            });
-        auto splice_result =
-            CASUtils::SpliceBlob(static_cast<bazel_re::Digest>(blob_digest),
-                                 digests,
-                                 *local_context_.storage);
+
+        auto splice_result = CASUtils::SpliceBlob(
+            blob_digest, chunk_digests, *local_context_.storage);
         if (not splice_result) {
             Logger::Log(LogLevel::Error, splice_result.error().error_message());
             return std::nullopt;
         }
-        return ArtifactDigest{*std::move(splice_result)};
+        return *std::move(splice_result);
     }
 
     [[nodiscard]] auto BlobSpliceSupport() const noexcept -> bool final {
@@ -403,8 +382,10 @@ class LocalApi final : public IExecutionApi {
     std::optional<GitApi> const git_api_;
 
     [[nodiscard]] static auto CreateFallbackApi(
+        Storage const& storage,
         RepositoryConfig const* repo_config) noexcept -> std::optional<GitApi> {
-        if (repo_config == nullptr or Compatibility::IsCompatible()) {
+        if (repo_config == nullptr or
+            not ProtocolTraits::IsNative(storage.GetHashFunction().GetType())) {
             return std::nullopt;
         }
         return GitApi{repo_config};

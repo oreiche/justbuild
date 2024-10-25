@@ -15,13 +15,16 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_EXECUTION_API_COMMON_REMOTE_EXECUTION_RESPONSE_HPP
 #define INCLUDED_SRC_BUILDTOOL_EXECUTION_API_COMMON_REMOTE_EXECUTION_RESPONSE_HPP
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 /// \brief Abstract response.
 /// Response of an action execution. Contains outputs from multiple commands and
@@ -33,7 +36,7 @@ class IExecutionResponse {
     // set of paths found in output_directory_symlinks list of the action result
     using DirSymlinks = std::unordered_set<std::string>;
 
-    enum class StatusCode { Failed, Success };
+    enum class StatusCode : std::uint8_t { Failed, Success };
 
     IExecutionResponse() = default;
     IExecutionResponse(IExecutionResponse const&) = delete;
@@ -59,9 +62,10 @@ class IExecutionResponse {
     [[nodiscard]] virtual auto ActionDigest() const noexcept
         -> std::string const& = 0;
 
-    [[nodiscard]] virtual auto Artifacts() noexcept -> ArtifactInfos const& = 0;
+    [[nodiscard]] virtual auto Artifacts() noexcept
+        -> expected<gsl::not_null<ArtifactInfos const*>, std::string> = 0;
     [[nodiscard]] virtual auto DirectorySymlinks() noexcept
-        -> DirSymlinks const& = 0;
+        -> expected<gsl::not_null<DirSymlinks const*>, std::string> = 0;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_COMMON_REMOTE_EXECUTION_RESPONSE_HPP

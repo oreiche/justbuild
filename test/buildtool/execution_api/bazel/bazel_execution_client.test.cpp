@@ -17,12 +17,12 @@
 #include <string>
 
 #include "catch2/catch_test_macros.hpp"
-#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/bazel_digest_factory.hpp"
 #include "src/buildtool/common/remote/retry_config.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "test/utils/hermeticity/test_hash_function_type.hpp"
 #include "test/utils/remote_execution/bazel_action_creator.hpp"
 #include "test/utils/remote_execution/test_auth_config.hpp"
 #include "test/utils/remote_execution/test_remote_config.hpp"
@@ -31,12 +31,10 @@ TEST_CASE("Bazel internals: Execution Client", "[execution_api]") {
     std::string instance_name{"remote-execution"};
     std::string content("test");
 
-    HashFunction const hash_function{Compatibility::IsCompatible()
-                                         ? HashFunction::Type::PlainSHA256
-                                         : HashFunction::Type::GitSHA1};
+    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
 
-    auto test_digest = static_cast<bazel_re::Digest>(
-        ArtifactDigest::Create<ObjectType::File>(hash_function, content));
+    auto test_digest = BazelDigestFactory::HashDataAs<ObjectType::File>(
+        hash_function, content);
 
     auto auth_config = TestAuthConfig::ReadFromEnvironment();
     REQUIRE(auth_config);
@@ -95,6 +93,9 @@ TEST_CASE("Bazel internals: Execution Client", "[execution_api]") {
         }
 
         SECTION("Non-blocking, obtain result later") {
+            // note that the boolean false means do not wait for the stream to
+            // become available, and it has nothing to do with waiting until the
+            // action completes. This is WaitExecution's job :)
             auto response = execution_client.Execute(
                 instance_name, *action_delayed, config, false);
 
@@ -115,12 +116,10 @@ TEST_CASE("Bazel internals: Execution Client using env variables",
     std::string instance_name{"remote-execution"};
     std::string content("contents of env variable");
 
-    HashFunction const hash_function{Compatibility::IsCompatible()
-                                         ? HashFunction::Type::PlainSHA256
-                                         : HashFunction::Type::GitSHA1};
+    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
 
-    auto test_digest = static_cast<bazel_re::Digest>(
-        ArtifactDigest::Create<ObjectType::File>(hash_function, content));
+    auto test_digest = BazelDigestFactory::HashDataAs<ObjectType::File>(
+        hash_function, content);
 
     auto auth_config = TestAuthConfig::ReadFromEnvironment();
     REQUIRE(auth_config);

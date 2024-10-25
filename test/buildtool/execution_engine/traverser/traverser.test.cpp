@@ -24,8 +24,10 @@
 
 #include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
 #include "test/utils/container_matchers.hpp"
+#include "test/utils/hermeticity/test_hash_function_type.hpp"
 
 namespace {
 
@@ -93,11 +95,11 @@ class TestBuildInfo {
     }
 
   private:
-    std::unordered_set<ArtifactIdentifier> correctly_built_{};
-    std::unordered_set<ArtifactIdentifier> incorrectly_built_{};
-    std::unordered_set<ArtifactIdentifier> artifacts_uploaded_{};
-    std::unordered_set<ArtifactIdentifier> uploaded_more_than_once_{};
-    std::string name_{};
+    std::unordered_set<ArtifactIdentifier> correctly_built_;
+    std::unordered_set<ArtifactIdentifier> incorrectly_built_;
+    std::unordered_set<ArtifactIdentifier> artifacts_uploaded_;
+    std::unordered_set<ArtifactIdentifier> uploaded_more_than_once_;
+    std::string name_;
     std::mutex mutex_;
 };
 
@@ -132,9 +134,10 @@ class TestExecutor {
                 [[maybe_unused]] auto was_it_added =
                     build_info_->InsertIncorrectlyBuilt(node->Content().Id());
             }
+            return false;
         } catch (...) {
+            return false;
         }
-        return false;
     }
 
     [[nodiscard]] auto Process(
@@ -153,6 +156,7 @@ class TestExecutor {
     TestBuildInfo* build_info_;
 
     template <typename Container>
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward)
     [[nodiscard]] auto AllAvailable(Container&& c) const noexcept -> bool {
         return std::all_of(std::begin(c), std::end(c), [](auto node) {
             return node->TraversalState()->IsAvailable();
@@ -182,8 +186,10 @@ class TestProject {
         auto inputs_desc = ActionDescription::inputs_t{};
         if (not inputs.empty()) {
             command.emplace_back("FROM");
+            auto const hash_type = TestHashType::ReadFromEnvironment();
             for (auto const& input_desc : inputs) {
-                auto artifact = ArtifactDescription::FromJson(input_desc);
+                auto artifact =
+                    ArtifactDescription::FromJson(hash_type, input_desc);
                 REQUIRE(artifact);
                 auto const input_id = artifact->Id();
                 command.push_back(input_id);
@@ -213,9 +219,9 @@ class TestProject {
     }
 
   private:
-    std::vector<ActionDescription> graph_full_description_{};
-    std::unordered_set<ArtifactIdentifier> artifacts_to_be_built_{};
-    std::unordered_set<ArtifactIdentifier> local_artifacts_{};
+    std::vector<ActionDescription> graph_full_description_;
+    std::unordered_set<ArtifactIdentifier> artifacts_to_be_built_;
+    std::unordered_set<ArtifactIdentifier> local_artifacts_;
 };
 
 }  // namespace

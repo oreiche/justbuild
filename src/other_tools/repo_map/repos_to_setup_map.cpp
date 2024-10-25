@@ -19,6 +19,7 @@
 
 #include "fmt/core.h"
 #include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/crypto/hash_info.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
 #include "src/buildtool/logging/log_level.hpp"
@@ -27,6 +28,7 @@
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
 #include "src/other_tools/ops_maps/git_tree_fetch_map.hpp"
 #include "src/other_tools/utils/parse_archive.hpp"
+#include "src/other_tools/utils/parse_git_tree.hpp"
 
 namespace {
 
@@ -495,106 +497,30 @@ void DistdirCheckout(ExpressionPtr const& repo_desc,
         }
         // only do work if repo is archive type
         if (kCheckoutTypeMap.at(repo_type_str) == CheckoutType::Archive) {
-            // check mandatory fields
-            auto repo_desc_content = (*resolved_repo_desc)->At("content");
-            if (not repo_desc_content) {
-                (*logger)(fmt::format(
-                              "DistdirCheckout: Mandatory field \"content\" is "
-                              "missing for repository {}",
-                              nlohmann::json(dist_repo_name).dump()),
-                          /*fatal=*/true);
-                return;
-            }
-            if (not repo_desc_content->get()->IsString()) {
-                (*logger)(fmt::format("DistdirCheckout: Unsupported value {} "
-                                      "for mandatory field \"content\" for "
-                                      "repository {}",
-                                      repo_desc_content->get()->ToString(),
-                                      nlohmann::json(dist_repo_name).dump()),
-                          /*fatal=*/true);
-                return;
-            }
-            auto repo_desc_fetch = (*resolved_repo_desc)->At("fetch");
-            if (not repo_desc_fetch) {
-                (*logger)(fmt::format("DistdirCheckout: Mandatory field "
-                                      "\"fetch\" is missing for repository {}",
-                                      nlohmann::json(dist_repo_name).dump()),
-                          /*fatal=*/true);
-                return;
-            }
-            if (not repo_desc_fetch->get()->IsString()) {
-                (*logger)(fmt::format(
-                              "DistdirCheckout: Unsupported value {} "
-                              "for mandatory field \"fetch\" for repository {}",
-                              repo_desc_fetch->get()->ToString(),
-                              nlohmann::json(dist_repo_name).dump()),
-                          /*fatal=*/true);
-                return;
-            }
-            auto repo_desc_distfile =
-                (*resolved_repo_desc)->Get("distfile", Expression::none_t{});
-            auto repo_desc_sha256 =
-                (*resolved_repo_desc)->Get("sha256", Expression::none_t{});
-            auto repo_desc_sha512 =
-                (*resolved_repo_desc)->Get("sha512", Expression::none_t{});
-
-            // check optional mirrors
-            auto repo_desc_mirrors =
-                (*resolved_repo_desc)->Get("mirrors", Expression::list_t{});
-            std::vector<std::string> mirrors{};
-            if (repo_desc_mirrors->IsList()) {
-                mirrors.reserve(repo_desc_mirrors->List().size());
-                for (auto const& elem : repo_desc_mirrors->List()) {
-                    if (not elem->IsString()) {
-                        (*logger)(fmt::format(
-                                      "DistdirCheckout: Unsupported list entry "
-                                      "{} in optional field \"mirrors\" for "
-                                      "repository {}",
-                                      elem->ToString(),
-                                      nlohmann::json(dist_repo_name).dump()),
-                                  /*fatal=*/true);
-                        return;
-                    }
-                    mirrors.emplace_back(elem->String());
-                }
-            }
-            else {
-                (*logger)(fmt::format("DistdirCheckout: Optional field "
-                                      "\"mirrors\" for repository {} should be "
-                                      "a list of strings, but found: {}",
+            auto const archive =
+                ParseArchiveContent(*resolved_repo_desc, dist_repo_name);
+            if (not archive) {
+                (*logger)(fmt::format("DistdirCheckout: an error occurred "
+                                      "while parsing repository {}\n{}",
                                       nlohmann::json(dist_repo_name).dump(),
-                                      repo_desc_mirrors->ToString()),
+                                      archive.error()),
                           /*fatal=*/true);
                 return;
             }
-
-            ArchiveContent archive = {
-                .content = repo_desc_content->get()->String(),
-                .distfile =
-                    repo_desc_distfile->IsString()
-                        ? std::make_optional(repo_desc_distfile->String())
-                        : std::nullopt,
-                .fetch_url = repo_desc_fetch->get()->String(),
-                .mirrors = std::move(mirrors),
-                .sha256 = repo_desc_sha256->IsString()
-                              ? std::make_optional(repo_desc_sha256->String())
-                              : std::nullopt,
-                .sha512 = repo_desc_sha512->IsString()
-                              ? std::make_optional(repo_desc_sha512->String())
-                              : std::nullopt,
-                .origin = dist_repo_name};
 
             // add to distdir content map
             auto repo_distfile =
-                (archive.distfile ? archive.distfile.value()
-                                  : std::filesystem::path(archive.fetch_url)
-                                        .filename()
-                                        .string());
+                (archive->distfile ? archive->distfile.value()
+                                   : std::filesystem::path(archive->fetch_url)
+                                         .filename()
+                                         .string());
             distdir_content_for_id->insert_or_assign(
-                repo_distfile, std::make_pair(archive.content, false));
-            distdir_content->insert_or_assign(repo_distfile, archive.content);
+                repo_distfile,
+                std::make_pair(archive->content_hash.Hash(), false));
+            distdir_content->insert_or_assign(repo_distfile,
+                                              archive->content_hash.Hash());
             // add to fetch list
-            dist_repos_to_fetch->emplace_back(std::move(archive));
+            dist_repos_to_fetch->emplace_back(*archive);
         }
     }
     // get hash of distdir content
@@ -646,80 +572,12 @@ void GitTreeCheckout(ExpressionPtr const& repo_desc,
                      gsl::not_null<TaskSystem*> const& ts,
                      ReposToSetupMap::SetterPtr const& setter,
                      ReposToSetupMap::LoggerPtr const& logger) {
-    // enforce mandatory fields
-    auto repo_desc_hash = repo_desc->At("id");
-    if (not repo_desc_hash) {
-        (*logger)("GitTreeCheckout: Mandatory field \"id\" is missing",
-                  /*fatal=*/true);
+    auto tree_info = ParseGitTree(repo_desc);
+    if (not tree_info) {
+        (*logger)(
+            fmt::format("GitTreeCheckout: {}", std::move(tree_info).error()),
+            /*fatal=*/true);
         return;
-    }
-    if (not repo_desc_hash->get()->IsString()) {
-        (*logger)(fmt::format("GitTreeCheckout: Unsupported value {} for "
-                              "mandatory field \"id\"",
-                              repo_desc_hash->get()->ToString()),
-                  /*fatal=*/true);
-        return;
-    }
-    auto repo_desc_cmd = repo_desc->At("cmd");
-    if (not repo_desc_cmd) {
-        (*logger)("GitTreeCheckout: Mandatory field \"cmd\" is missing",
-                  /*fatal=*/true);
-        return;
-    }
-    if (not repo_desc_cmd->get()->IsList()) {
-        (*logger)(fmt::format("GitTreeCheckout: Unsupported value {} for "
-                              "mandatory field \"cmd\"",
-                              repo_desc_cmd->get()->ToString()),
-                  /*fatal=*/true);
-        return;
-    }
-    std::vector<std::string> cmd{};
-    for (auto const& token : repo_desc_cmd->get()->List()) {
-        if (token.IsNotNull() and token->IsString()) {
-            cmd.emplace_back(token->String());
-        }
-        else {
-            (*logger)(fmt::format("GitTreeCheckout: Unsupported entry {} in "
-                                  "mandatory field \"cmd\"",
-                                  token->ToString()),
-                      /*fatal=*/true);
-            return;
-        }
-    }
-    std::map<std::string, std::string> env{};
-    auto repo_desc_env = repo_desc->Get("env", Expression::none_t{});
-    if (repo_desc_env.IsNotNull() and repo_desc_env->IsMap()) {
-        for (auto const& envar : repo_desc_env->Map().Items()) {
-            if (envar.second.IsNotNull() and envar.second->IsString()) {
-                env.insert({envar.first, envar.second->String()});
-            }
-            else {
-                (*logger)(fmt::format("GitTreeCheckout: Unsupported value {} "
-                                      "for key {} in optional field \"envs\"",
-                                      envar.second->ToString(),
-                                      nlohmann::json(envar.first).dump()),
-                          /*fatal=*/true);
-                return;
-            }
-        }
-    }
-    std::vector<std::string> inherit_env{};
-    auto repo_desc_inherit_env =
-        repo_desc->Get("inherit env", Expression::none_t{});
-    if (repo_desc_inherit_env.IsNotNull() and repo_desc_inherit_env->IsList()) {
-        for (auto const& envvar : repo_desc_inherit_env->List()) {
-            if (envvar->IsString()) {
-                inherit_env.emplace_back(envvar->String());
-            }
-            else {
-                (*logger)(
-                    fmt::format("GitTreeCheckout: Not a variable name in the "
-                                "specification of \"inherit env\": {}",
-                                envvar->ToString()),
-                    /*fatal=*/true);
-                return;
-            }
-        }
     }
     // check "special" pragma
     auto repo_desc_pragma = repo_desc->At("pragma");
@@ -741,10 +599,7 @@ void GitTreeCheckout(ExpressionPtr const& repo_desc,
                                pragma_absent->get()->Bool();
     // populate struct
     TreeIdInfo tree_id_info = {
-        .tree_info = GitTreeInfo{.hash = repo_desc_hash->get()->String(),
-                                 .env_vars = std::move(env),
-                                 .inherit_env = std::move(inherit_env),
-                                 .command = std::move(cmd)},
+        .tree_info = *std::move(tree_info),
         .ignore_special = pragma_special_value == PragmaSpecial::Ignore,
         .absent = not fetch_absent and pragma_absent_value};
     // get the WS root as git tree

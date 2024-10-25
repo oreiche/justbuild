@@ -19,14 +19,17 @@
 #include <string>
 #include <utility>
 
-#include "execution_server.hpp"
 #include "fmt/core.h"
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/execution_api/execution_service/operation_cache.hpp"
 #include "src/buildtool/execution_api/local/local_cas_reader.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
-#include "src/utils/cpp/verify_hash.hpp"
+#include "src/utils/cpp/hex_string.hpp"
+#include "src/utils/cpp/path.hpp"
 
 namespace {
 void UpdateTimeStamp(
@@ -45,7 +48,7 @@ void UpdateTimeStamp(
     Storage const& storage) noexcept
     -> expected<bazel_re::ActionResult, std::string>;
 
-[[nodiscard]] auto ToBazelAction(::bazel_re::ExecuteRequest const& request,
+[[nodiscard]] auto ToBazelAction(ArtifactDigest const& action_digest,
                                  Storage const& storage) noexcept
     -> expected<::bazel_re::Action, std::string>;
 
@@ -58,8 +61,11 @@ auto ExecutionServiceImpl::ToIExecutionAction(
     ::bazel_re::Action const& action,
     ::bazel_re::Command const& command) const noexcept
     -> std::optional<IExecutionAction::Ptr> {
-    auto const root_digest =
-        static_cast<ArtifactDigest>(action.input_root_digest());
+    auto const root_digest = ArtifactDigestFactory::FromBazel(
+        storage_config_.hash_function.GetType(), action.input_root_digest());
+    if (not root_digest) {
+        return std::nullopt;
+    }
     std::vector<std::string> const args(command.arguments().begin(),
                                         command.arguments().end());
     std::vector<std::string> const files(command.output_files().begin(),
@@ -70,7 +76,7 @@ auto ExecutionServiceImpl::ToIExecutionAction(
     for (auto const& x : command.environment_variables()) {
         env_vars.insert_or_assign(x.name(), x.value());
     }
-    auto execution_action = api_.CreateAction(root_digest,
+    auto execution_action = api_.CreateAction(*root_digest,
                                               args,
                                               command.working_directory(),
                                               files,
@@ -90,8 +96,16 @@ auto ExecutionServiceImpl::ToIExecutionAction(
 auto ExecutionServiceImpl::ToBazelExecuteResponse(
     IExecutionResponse::Ptr const& i_execution_response) const noexcept
     -> expected<::bazel_re::ExecuteResponse, std::string> {
-    auto result = ToBazelActionResult(i_execution_response->Artifacts(),
-                                      i_execution_response->DirectorySymlinks(),
+    auto artifacts = i_execution_response->Artifacts();
+    if (not artifacts) {
+        return unexpected{std::move(artifacts).error()};
+    }
+    auto dir_symlinks = i_execution_response->DirectorySymlinks();
+    if (not dir_symlinks) {
+        return unexpected{std::move(dir_symlinks).error()};
+    }
+    auto result = ToBazelActionResult(*std::move(artifacts).value(),
+                                      *std::move(dir_symlinks).value(),
                                       storage_);
     if (not result) {
         return unexpected{std::move(result).error()};
@@ -101,7 +115,7 @@ auto ExecutionServiceImpl::ToBazelExecuteResponse(
 
     action_result.set_exit_code(i_execution_response->ExitCode());
     if (i_execution_response->HasStdErr()) {
-        auto cas_digest =
+        auto const cas_digest =
             storage_.CAS().StoreBlob(i_execution_response->StdErr(),
                                      /*is_executable=*/false);
         if (not cas_digest) {
@@ -109,11 +123,12 @@ auto ExecutionServiceImpl::ToBazelExecuteResponse(
                 fmt::format("Could not store stderr of action {}",
                             i_execution_response->ActionDigest())};
         }
-        action_result.mutable_stderr_digest()->CopyFrom(*cas_digest);
+        (*action_result.mutable_stderr_digest()) =
+            ArtifactDigestFactory::ToBazel(*cas_digest);
     }
 
     if (i_execution_response->HasStdOut()) {
-        auto cas_digest =
+        auto const cas_digest =
             storage_.CAS().StoreBlob(i_execution_response->StdOut(),
                                      /*is_executable=*/false);
         if (not cas_digest) {
@@ -121,7 +136,8 @@ auto ExecutionServiceImpl::ToBazelExecuteResponse(
                 fmt::format("Could not store stdout of action {}",
                             i_execution_response->ActionDigest())};
         }
-        action_result.mutable_stdout_digest()->CopyFrom(*cas_digest);
+        (*action_result.mutable_stdout_digest()) =
+            ArtifactDigestFactory::ToBazel(*cas_digest);
     }
 
     ::bazel_re::ExecuteResponse bazel_response{};
@@ -151,34 +167,41 @@ auto ExecutionServiceImpl::Execute(
     const ::bazel_re::ExecuteRequest* request,
     ::grpc::ServerWriter<::google::longrunning::Operation>* writer)
     -> ::grpc::Status {
-    auto lock = GarbageCollector::SharedLock(storage_config_);
-    if (not lock) {
-        auto str = fmt::format("Could not acquire SharedLock");
-        logger_.Emit(LogLevel::Error, str);
-        return grpc::Status{grpc::StatusCode::INTERNAL, str};
+    auto const action_digest = ArtifactDigestFactory::FromBazel(
+        storage_config_.hash_function.GetType(), request->action_digest());
+    if (not action_digest) {
+        logger_.Emit(LogLevel::Error, "{}", action_digest.error());
+        return grpc::Status{grpc::StatusCode::INTERNAL, action_digest.error()};
     }
 
-    auto action = ToBazelAction(*request, storage_);
+    auto const lock = GarbageCollector::SharedLock(storage_config_);
+    if (not lock) {
+        static constexpr auto kStr = "Could not acquire SharedLock";
+        logger_.Emit(LogLevel::Error, "{}", kStr);
+        return grpc::Status{grpc::StatusCode::INTERNAL, kStr};
+    }
+
+    auto action = ToBazelAction(*action_digest, storage_);
     if (not action) {
-        logger_.Emit(LogLevel::Error, action.error());
+        logger_.Emit(LogLevel::Error, "{}", action.error());
         return ::grpc::Status{grpc::StatusCode::INTERNAL,
                               std::move(action).error()};
     }
     auto command = ToBazelCommand(*action, storage_);
     if (not command) {
-        logger_.Emit(LogLevel::Error, command.error());
+        logger_.Emit(LogLevel::Error, "{}", command.error());
         return ::grpc::Status{grpc::StatusCode::INTERNAL,
                               std::move(command).error()};
     }
     auto i_execution_action = ToIExecutionAction(*action, *command);
     if (not i_execution_action) {
         auto const str = fmt::format("Could not create action from {}",
-                                     request->action_digest().hash());
-        logger_.Emit(LogLevel::Error, str);
+                                     action_digest->hash());
+        logger_.Emit(LogLevel::Error, "{}", str);
         return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
     }
 
-    logger_.Emit(LogLevel::Info, "Execute {}", request->action_digest().hash());
+    logger_.Emit(LogLevel::Info, "Execute {}", action_digest->hash());
     // send initial response to the client
     auto op = ::google::longrunning::Operation{};
     auto const& op_name = request->action_digest().hash();
@@ -193,19 +216,19 @@ auto ExecutionServiceImpl::Execute(
     logger_.Emit(
         LogLevel::Trace,
         "Finished execution of {} in {} seconds",
-        request->action_digest().hash(),
+        action_digest->hash(),
         std::chrono::duration_cast<std::chrono::seconds>(t1 - t0).count());
 
     if (i_execution_response == nullptr) {
-        auto const str = fmt::format("Failed to execute action {}",
-                                     request->action_digest().hash());
-        logger_.Emit(LogLevel::Error, str);
+        auto const str =
+            fmt::format("Failed to execute action {}", action_digest->hash());
+        logger_.Emit(LogLevel::Error, "{}", str);
         return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
     }
 
     auto execute_response = ToBazelExecuteResponse(i_execution_response);
     if (not execute_response) {
-        logger_.Emit(LogLevel::Error, execute_response.error());
+        logger_.Emit(LogLevel::Error, "{}", execute_response.error());
         return ::grpc::Status{grpc::StatusCode::INTERNAL,
                               std::move(execute_response).error()};
     }
@@ -213,12 +236,12 @@ auto ExecutionServiceImpl::Execute(
     // Store the result in action cache
     if (i_execution_response->ExitCode() == 0 and not action->do_not_cache()) {
         if (not storage_.ActionCache().StoreResult(
-                request->action_digest(), execute_response->result())) {
+                *action_digest, execute_response->result())) {
             auto const str =
                 fmt::format("Could not store action result for action {}",
-                            request->action_digest().hash());
+                            action_digest->hash());
 
-            logger_.Emit(LogLevel::Error, str);
+            logger_.Emit(LogLevel::Error, "{}", str);
             return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
         }
     }
@@ -233,22 +256,23 @@ auto ExecutionServiceImpl::WaitExecution(
     ::grpc::ServerWriter<::google::longrunning::Operation>* writer)
     -> ::grpc::Status {
     auto const& hash = request->name();
-    if (auto error_msg = IsAHash(hash)) {
-        logger_.Emit(LogLevel::Error, "{}", *error_msg);
-        return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, *error_msg};
+    if (not IsHexString(hash)) {
+        auto const str = fmt::format("Invalid hash {}", hash);
+        logger_.Emit(LogLevel::Error, "{}", str);
+        return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, str};
     }
     logger_.Emit(LogLevel::Trace, "WaitExecution: {}", hash);
-    std::optional<::google::longrunning::Operation> op;
-    do {
-        op = op_cache_.Query(hash);
-        if (not op) {
-            auto const& str = fmt::format(
-                "Executing action {} not found in internal cache.", hash);
-            logger_.Emit(LogLevel::Error, "{}", str);
-            return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
-        }
+    auto op = op_cache_.Query(hash);
+    while (op and not op->done()) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
-    } while (not op->done());
+        op = op_cache_.Query(hash);
+    }
+    if (not op) {
+        auto const str = fmt::format(
+            "Executing action {} not found in internal cache.", hash);
+        logger_.Emit(LogLevel::Error, "{}", str);
+        return ::grpc::Status{grpc::StatusCode::INTERNAL, str};
+    }
     writer->Write(*op);
     logger_.Emit(LogLevel::Trace, "Finished WaitExecution {}", hash);
     return ::grpc::Status::OK;
@@ -262,30 +286,37 @@ namespace {
     ::bazel_re::OutputDirectory out_dir{};
     *(out_dir.mutable_path()) = std::move(path);
 
-    if (Compatibility::IsCompatible()) {
-        // In compatible mode: Create a tree digest from directory
-        // digest on the fly and set tree digest.
-        LocalCasReader reader(&storage.CAS());
-        auto tree = reader.MakeTree(digest);
-        if (not tree) {
-            auto error =
-                fmt::format("Failed to build bazel Tree for {}", digest.hash());
-            return unexpected{std::move(error)};
+    LocalCasReader reader(&storage.CAS());
+    if (ProtocolTraits::IsNative(storage.GetHashFunction().GetType())) {
+        // In native mode: Check validity of tree entries, otherwise set the
+        // digest directly.
+        if (not reader.ReadGitTree(digest)) {
+            auto const error = fmt::format(
+                "Found invalid entry in the Git Tree {}", digest.hash());
+            return unexpected{error};
         }
-
-        auto cas_digest = storage.CAS().StoreBlob(tree->SerializeAsString(),
-                                                  /*is_executable=*/false);
-        if (not cas_digest) {
-            auto error = fmt::format(
-                "Failed to add to the storage the bazel Tree for {}",
-                digest.hash());
-            return unexpected{std::move(error)};
-        }
-        *(out_dir.mutable_tree_digest()) = *std::move(cas_digest);
+        (*out_dir.mutable_tree_digest()) =
+            ArtifactDigestFactory::ToBazel(digest);
     }
     else {
-        // In native mode: Set the directory digest directly.
-        *(out_dir.mutable_tree_digest()) = digest;
+        // In compatible mode: Create a tree digest from directory
+        // digest on the fly and set tree digest.
+        auto const tree = reader.MakeTree(digest);
+        if (not tree) {
+            return unexpected{fmt::format("Failed to build bazel Tree for {}",
+                                          digest.hash())};
+        }
+
+        auto const cas_digest =
+            storage.CAS().StoreBlob(tree->SerializeAsString(),
+                                    /*is_executable=*/false);
+        if (not cas_digest) {
+            return unexpected{fmt::format(
+                "Failed to add to the storage the bazel Tree for {}",
+                digest.hash())};
+        }
+        (*out_dir.mutable_tree_digest()) =
+            ArtifactDigestFactory::ToBazel(*cas_digest);
     }
     return std::move(out_dir);
 }
@@ -297,18 +328,24 @@ namespace {
     ::bazel_re::OutputSymlink out_link{};
     *(out_link.mutable_path()) = std::move(path);
     // recover the target of the symlink
-    auto cas_path = storage.CAS().BlobPath(digest, /*is_executable=*/false);
+    auto const cas_path =
+        storage.CAS().BlobPath(digest, /*is_executable=*/false);
     if (not cas_path) {
-        auto error =
-            fmt::format("Failed to recover the symlink for {}", digest.hash());
-        return unexpected{std::move(error)};
+        return unexpected{
+            fmt::format("Failed to recover the symlink for {}", digest.hash())};
     }
 
     auto content = FileSystemManager::ReadFile(*cas_path);
     if (not content) {
-        auto error = fmt::format("Failed to read the symlink content for {}",
-                                 digest.hash());
-        return unexpected{std::move(error)};
+        return unexpected{fmt::format(
+            "Failed to read the symlink content for {}", digest.hash())};
+    }
+
+    // in native mode, check that we do not pass invalid symlinks
+    if (ProtocolTraits::IsNative(storage.GetHashFunction().GetType()) and
+        not PathIsNonUpwards(*content)) {
+        auto const error = fmt::format("Invalid symlink for {}", digest.hash());
+        return unexpected{error};
     }
 
     *(out_link.mutable_target()) = *std::move(content);
@@ -319,8 +356,8 @@ namespace {
                                      Artifact::ObjectInfo const& info) noexcept
     -> ::bazel_re::OutputFile {
     ::bazel_re::OutputFile out_file{};
-    *(out_file.mutable_path()) = std::move(path);
-    *(out_file.mutable_digest()) = info.digest;
+    (*out_file.mutable_path()) = std::move(path);
+    (*out_file.mutable_digest()) = ArtifactDigestFactory::ToBazel(info.digest);
     out_file.set_is_executable(IsExecutableObject(info.type));
     return out_file;
 }
@@ -371,37 +408,37 @@ namespace {
     return std::move(result);
 }
 
-[[nodiscard]] auto ToBazelAction(::bazel_re::ExecuteRequest const& request,
+[[nodiscard]] auto ToBazelAction(ArtifactDigest const& action_digest,
                                  Storage const& storage) noexcept
     -> expected<::bazel_re::Action, std::string> {
-    // get action description
-    if (auto error_msg = IsAHash(request.action_digest().hash())) {
-        return unexpected{std::move(*error_msg)};
-    }
-    auto const action_path =
-        storage.CAS().BlobPath(request.action_digest(), false);
+    auto const action_path = storage.CAS().BlobPath(action_digest, false);
     if (not action_path) {
         return unexpected{fmt::format("could not retrieve blob {} from cas",
-                                      request.action_digest().hash())};
+                                      action_digest.hash())};
     }
 
     ::bazel_re::Action action{};
     if (std::ifstream f(*action_path); not action.ParseFromIstream(&f)) {
         return unexpected{fmt::format("failed to parse action from blob {}",
-                                      request.action_digest().hash())};
+                                      action_digest.hash())};
     }
-    if (auto error_msg = IsAHash(action.input_root_digest().hash())) {
-        return unexpected{*std::move(error_msg)};
+
+    auto const hash_type = storage.GetHashFunction().GetType();
+    auto const input_root_digest =
+        ArtifactDigestFactory::FromBazel(hash_type, action.input_root_digest());
+    if (not input_root_digest) {
+        return unexpected{input_root_digest.error()};
     }
     auto const input_root_path =
-        Compatibility::IsCompatible()
-            ? storage.CAS().BlobPath(action.input_root_digest(), false)
-            : storage.CAS().TreePath(action.input_root_digest());
+        ProtocolTraits::IsNative(hash_type)
+            ? storage.CAS().TreePath(*input_root_digest)
+            : storage.CAS().BlobPath(*input_root_digest,
+                                     /*is_executable=*/false);
 
     if (not input_root_path) {
         return unexpected{
             fmt::format("could not retrieve input root {} from cas",
-                        action.input_root_digest().hash())};
+                        input_root_digest->hash())};
     }
     return std::move(action);
 }
@@ -409,19 +446,22 @@ namespace {
 [[nodiscard]] auto ToBazelCommand(bazel_re::Action const& action,
                                   Storage const& storage) noexcept
     -> expected<bazel_re::Command, std::string> {
-    if (auto error_msg = IsAHash(action.command_digest().hash())) {
-        return unexpected{*std::move(error_msg)};
+    auto const command_digest = ArtifactDigestFactory::FromBazel(
+        storage.GetHashFunction().GetType(), action.command_digest());
+    if (not command_digest) {
+        return unexpected{command_digest.error()};
     }
-    auto path = storage.CAS().BlobPath(action.command_digest(), false);
+    auto const path =
+        storage.CAS().BlobPath(*command_digest, /*is_executable=*/false);
     if (not path) {
         return unexpected{fmt::format("Could not retrieve blob {} from cas",
-                                      action.command_digest().hash())};
+                                      command_digest->hash())};
     }
 
     ::bazel_re::Command c{};
     if (std::ifstream f(*path); not c.ParseFromIstream(&f)) {
         return unexpected{fmt::format("Failed to parse command from blob {}",
-                                      action.command_digest().hash())};
+                                      command_digest->hash())};
     }
     return std::move(c);
 }

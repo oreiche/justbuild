@@ -29,8 +29,8 @@
 #include "fmt/core.h"
 #include "grpcpp/grpcpp.h"
 #include "nlohmann/json.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/common/remote/port.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/execution_api/execution_service/ac_server.hpp"
 #include "src/buildtool/execution_api/execution_service/bytestream_server.hpp"
 #include "src/buildtool/execution_api/execution_service/capabilities_server.hpp"
@@ -112,13 +112,15 @@ auto ServeServerImpl::Run(
         return false;
     }
 
+    auto const hash_type =
+        local_context->storage_config->hash_function.GetType();
     SourceTreeService sts{&serve_config, local_context, &apis};
     TargetService ts{&serve_config,
                      local_context,
                      remote_context,
                      &apis,
                      serve ? &*serve : nullptr};
-    ConfigurationService cs{remote_context->exec_config};
+    ConfigurationService cs{hash_type, remote_context->exec_config};
 
     grpc::ServerBuilder builder;
 
@@ -133,8 +135,8 @@ auto ServeServerImpl::Run(
     [[maybe_unused]] ActionCacheServiceImpl ac{local_context};
     [[maybe_unused]] CASServiceImpl cas{local_context};
     [[maybe_unused]] BytestreamServiceImpl b{local_context};
-    [[maybe_unused]] CapabilitiesServiceImpl cap{};
-    [[maybe_unused]] OperarationsServiceImpl op{&es.GetOpCache()};
+    [[maybe_unused]] CapabilitiesServiceImpl cap{hash_type};
+    [[maybe_unused]] OperationsServiceImpl op{&es.GetOpCache()};
     if (with_execute) {
         builder.RegisterService(&es)
             .RegisterService(&ac)
@@ -186,11 +188,11 @@ auto ServeServerImpl::Run(
 
     auto const& info_str = nlohmann::to_string(info);
     Logger::Log(LogLevel::Info,
-                fmt::format("{}serve{} service{} started: {}",
-                            Compatibility::IsCompatible() ? "compatible " : "",
-                            with_execute ? " and execute" : "",
-                            with_execute ? "s" : "",
-                            info_str));
+                "{}serve{} service{} started: {}",
+                ProtocolTraits::IsNative(hash_type) ? "" : "compatible ",
+                with_execute ? " and execute" : "",
+                with_execute ? "s" : "",
+                info_str);
 
     if (not info_file_.empty()) {
         if (not TryWrite(info_file_, info_str)) {

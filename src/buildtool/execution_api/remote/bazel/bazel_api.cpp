@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <iterator>
 #include <mutex>
+#include <new>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -26,8 +27,10 @@
 
 #include "fmt/core.h"
 #include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
@@ -149,14 +152,16 @@ namespace {
                     transmitted_bytes += chunk_digest.size();
                 }
             }
-            double transmission_factor =
-                (total_size > 0) ? 100.0 * transmitted_bytes / total_size
-                                 : 100.0;
+            double transmission_factor = 0.;
+            if (total_size > 0) {
+                transmission_factor = static_cast<double>(transmitted_bytes) /
+                                      static_cast<double>(total_size);
+            }
             return fmt::format(
                 "Blob splitting saved {} bytes ({:.2f}%) of network traffic "
                 "when fetching {}.\n",
                 total_size - transmitted_bytes,
-                100.0 - transmission_factor,
+                transmission_factor,
                 artifact_info.ToString());
         });
 
@@ -170,7 +175,9 @@ namespace {
     try {
         blobs.reserve(container.Size());
         for (const auto& blob : container.Blobs()) {
-            blobs.emplace_back(blob.digest, blob.data, blob.is_exec);
+            blobs.emplace_back(ArtifactDigestFactory::ToBazel(blob.digest),
+                               blob.data,
+                               blob.is_exec);
         }
     } catch (...) {
         return std::nullopt;
@@ -180,13 +187,14 @@ namespace {
 
 }  // namespace
 
-BazelApi::BazelApi(std::string const& instance_name,
-                   std::string const& host,
-                   Port port,
-                   gsl::not_null<Auth const*> const& auth,
-                   gsl::not_null<RetryConfig const*> const& retry_config,
-                   ExecutionConfiguration const& exec_config,
-                   HashFunction hash_function) noexcept {
+BazelApi::BazelApi(
+    std::string const& instance_name,
+    std::string const& host,
+    Port port,
+    gsl::not_null<Auth const*> const& auth,
+    gsl::not_null<RetryConfig const*> const& retry_config,
+    ExecutionConfiguration const& exec_config,
+    gsl::not_null<HashFunction const*> const& hash_function) noexcept {
     network_ = std::make_shared<BazelNetwork>(instance_name,
                                               host,
                                               port,
@@ -211,7 +219,8 @@ auto BazelApi::CreateAction(
     std::map<std::string, std::string> const& env_vars,
     std::map<std::string, std::string> const& properties) const noexcept
     -> IExecutionAction::Ptr {
-    return std::unique_ptr<BazelAction>{new BazelAction{network_,
+    return std::unique_ptr<BazelAction>{new (std::nothrow)
+                                            BazelAction{network_,
                                                         root_digest,
                                                         command,
                                                         cwd,
@@ -221,7 +230,7 @@ auto BazelApi::CreateAction(
                                                         properties}};
 }
 
-// NOLINTNEXTLINE(misc-no-recursion, google-default-arguments)
+// NOLINTNEXTLINE(google-default-arguments)
 [[nodiscard]] auto BazelApi::RetrieveToPaths(
     std::vector<Artifact::ObjectInfo> const& artifacts_info,
     std::vector<std::filesystem::path> const& output_paths,
@@ -314,7 +323,6 @@ auto BazelApi::CreateAction(
     );
 }
 
-// NOLINTNEXTLINE(misc-no-recursion)
 [[nodiscard]] auto BazelApi::RetrieveToCas(
     std::vector<Artifact::ObjectInfo> const& artifacts_info,
     IExecutionApi const& api) const noexcept -> bool {
@@ -373,7 +381,6 @@ auto BazelApi::CreateAction(
         artifacts_info, api, jobs, use_blob_splitting, &done);
 }
 
-/// NOLINTNEXTLINE(misc-no-recursion)
 [[nodiscard]] auto BazelApi::ParallelRetrieveToCasWithCache(
     std::vector<Artifact::ObjectInfo> const& all_artifacts_info,
     IExecutionApi const& api,
@@ -381,20 +388,24 @@ auto BazelApi::CreateAction(
     bool use_blob_splitting,
     gsl::not_null<std::unordered_set<Artifact::ObjectInfo>*> done)
     const noexcept -> bool {
-
-    std::vector<Artifact::ObjectInfo> artifacts_info{};
-    artifacts_info.reserve(all_artifacts_info.size());
-    for (auto const& info : all_artifacts_info) {
-        if (not done->contains(info)) {
-            artifacts_info.emplace_back(info);
+    std::unordered_set<Artifact::ObjectInfo> artifacts_info;
+    try {
+        artifacts_info.reserve(all_artifacts_info.size());
+        for (auto const& info : all_artifacts_info) {
+            if (not done->contains(info)) {
+                artifacts_info.emplace(info);
+            }
         }
+    } catch (std::exception const& ex) {
+        Logger::Log(
+            LogLevel::Error,
+            "BazelApi: Collecting the set of artifacts failed with:\n{}",
+            ex.what());
+        return false;
     }
     if (artifacts_info.empty()) {
         return true;  // Nothing to do
     }
-    std::sort(artifacts_info.begin(), artifacts_info.end());
-    auto last_info = std::unique(artifacts_info.begin(), artifacts_info.end());
-    artifacts_info.erase(last_info, artifacts_info.end());
 
     // Determine missing artifacts in other CAS.
     auto missing_artifacts_info = GetMissingArtifactsInfo<Artifact::ObjectInfo>(
@@ -527,28 +538,28 @@ auto BazelApi::CreateAction(
         return std::nullopt;
     }
 
-    if (Compatibility::IsCompatible()) {
-        return CommonUploadTreeCompatible(
-            *this,
-            *build_root,
-            [&network = network_](std::vector<bazel_re::Digest> const& digests,
-                                  std::vector<std::string>* targets) {
-                auto reader = network->CreateReader();
-                targets->reserve(digests.size());
-                for (auto blobs : reader.ReadIncrementally(digests)) {
-                    for (auto const& blob : blobs) {
-                        targets->emplace_back(*blob.data);
-                    }
-                }
-            });
+    if (ProtocolTraits::IsNative(network_->GetHashFunction().GetType())) {
+        return CommonUploadTreeNative(*this, *build_root);
     }
-
-    return CommonUploadTreeNative(*this, *build_root);
+    return CommonUploadTreeCompatible(
+        *this,
+        *build_root,
+        [&network = network_](
+            std::vector<ArtifactDigest> const& digests,
+            gsl::not_null<std::vector<std::string>*> const& targets) {
+            auto reader = network->CreateReader();
+            targets->reserve(digests.size());
+            for (auto blobs : reader.ReadIncrementally(digests)) {
+                for (auto const& blob : blobs) {
+                    targets->emplace_back(*blob.data);
+                }
+            }
+        });
 }
 
 [[nodiscard]] auto BazelApi::IsAvailable(
     ArtifactDigest const& digest) const noexcept -> bool {
-    return network_->IsAvailable(digest);
+    return network_->IsAvailable(ArtifactDigestFactory::ToBazel(digest));
 }
 
 [[nodiscard]] auto BazelApi::IsAvailable(
@@ -558,8 +569,8 @@ auto BazelApi::CreateAction(
     bazel_digests.reserve(digests.size());
     std::unordered_map<bazel_re::Digest, ArtifactDigest> digest_map;
     for (auto const& digest : digests) {
-        auto const& bazel_digest = static_cast<bazel_re::Digest>(digest);
-        bazel_digests.push_back(bazel_digest);
+        auto const& bazel_digest =
+            bazel_digests.emplace_back(ArtifactDigestFactory::ToBazel(digest));
         digest_map[bazel_digest] = digest;
     }
     auto bazel_result = network_->IsAvailable(bazel_digests);
@@ -573,17 +584,21 @@ auto BazelApi::CreateAction(
 
 [[nodiscard]] auto BazelApi::SplitBlob(ArtifactDigest const& blob_digest)
     const noexcept -> std::optional<std::vector<ArtifactDigest>> {
-    auto chunk_digests =
-        network_->SplitBlob(static_cast<bazel_re::Digest>(blob_digest));
+    auto const chunk_digests =
+        network_->SplitBlob(ArtifactDigestFactory::ToBazel(blob_digest));
     if (not chunk_digests) {
         return std::nullopt;
     }
     auto artifact_digests = std::vector<ArtifactDigest>{};
     artifact_digests.reserve(chunk_digests->size());
-    std::transform(chunk_digests->cbegin(),
-                   chunk_digests->cend(),
-                   std::back_inserter(artifact_digests),
-                   [](auto const& digest) { return ArtifactDigest{digest}; });
+    for (auto const& chunk : *chunk_digests) {
+        auto part = ArtifactDigestFactory::FromBazel(
+            network_->GetHashFunction().GetType(), chunk);
+        if (not part) {
+            return std::nullopt;
+        }
+        artifact_digests.emplace_back(*std::move(part));
+    }
     return artifact_digests;
 }
 
@@ -601,14 +616,19 @@ auto BazelApi::CreateAction(
                    chunk_digests.cend(),
                    std::back_inserter(digests),
                    [](auto const& artifact_digest) {
-                       return static_cast<bazel_re::Digest>(artifact_digest);
+                       return ArtifactDigestFactory::ToBazel(artifact_digest);
                    });
-    auto digest = network_->SpliceBlob(
-        static_cast<bazel_re::Digest>(blob_digest), digests);
+    auto const digest = network_->SpliceBlob(
+        ArtifactDigestFactory::ToBazel(blob_digest), digests);
     if (not digest) {
         return std::nullopt;
     }
-    return ArtifactDigest{*digest};
+    auto result = ArtifactDigestFactory::FromBazel(
+        network_->GetHashFunction().GetType(), *digest);
+    if (not result) {
+        return std::nullopt;
+    }
+    return *std::move(result);
 }
 
 [[nodiscard]] auto BazelApi::BlobSpliceSupport() const noexcept -> bool {

@@ -15,6 +15,7 @@
 #ifndef INCLUDED_SRC_OTHER_TOOLS_GIT_OPERATIONS_GIT_OPS_TYPES_HPP
 #define INCLUDED_SRC_OTHER_TOOLS_GIT_OPERATIONS_GIT_OPS_TYPES_HPP
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -25,8 +26,8 @@
 
 /// \brief Common parameters for all critical Git operations
 struct GitOpParams {
-    std::filesystem::path target_path{}; /*key*/
-    std::string git_hash{};              /*key*/
+    std::filesystem::path target_path; /*key*/
+    std::string git_hash;              /*key*/
     std::optional<std::string> message{
         std::nullopt};  // mandatory for commits and tags
     std::optional<std::filesystem::path> source_path{
@@ -53,7 +54,7 @@ struct GitOpParams {
 };
 
 /// \brief Defines the type of Git operation
-enum class GitOpType {
+enum class GitOpType : std::uint8_t {
     DEFAULT_OP,  // default value; does nothing
     INITIAL_COMMIT,
     ENSURE_INIT,

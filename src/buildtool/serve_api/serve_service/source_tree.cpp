@@ -23,8 +23,8 @@
 #include "fmt/core.h"
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
-#include "src/buildtool/compatibility/native_support.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/git/git_api.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
@@ -35,6 +35,7 @@
 #include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/buildtool/storage/repository_garbage_collector.hpp"
 #include "src/utils/archive/archive_ops.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 namespace {
 
@@ -286,7 +287,8 @@ auto SourceTreeService::SyncGitEntryToCas(
     std::string const& object_hash,
     std::filesystem::path const& repo_path) const noexcept
     -> std::remove_cvref_t<decltype(TResponse::OK)> {
-    if (IsTreeObject(kType) and Compatibility::IsCompatible()) {
+    auto const hash_type = storage_config_.hash_function.GetType();
+    if (IsTreeObject(kType) and not ProtocolTraits::IsTreeAllowed(hash_type)) {
         logger_->Emit(LogLevel::Error,
                       "Cannot sync tree {} from repository {} with "
                       "the remote in compatible mode",
@@ -295,17 +297,22 @@ auto SourceTreeService::SyncGitEntryToCas(
         return TResponse::SYNC_ERROR;
     }
 
-    auto digest = ArtifactDigest{object_hash, 0, IsTreeObject(kType)};
     auto repo = RepositoryConfig{};
     if (not repo.SetGitCAS(repo_path)) {
         logger_->Emit(
             LogLevel::Error, "Failed to SetGitCAS at {}", repo_path.string());
         return TResponse::INTERNAL_ERROR;
     }
+    auto const digest = ArtifactDigestFactory::Create(
+        hash_type, object_hash, 0, IsTreeObject(kType));
+    if (not digest) {
+        logger_->Emit(LogLevel::Error, "{}", digest.error());
+        return TResponse::INTERNAL_ERROR;
+    }
 
     auto git_api = GitApi{&repo};
     if (not git_api.RetrieveToCas(
-            {Artifact::ObjectInfo{.digest = digest, .type = kType}},
+            {Artifact::ObjectInfo{.digest = *digest, .type = kType}},
             *apis_.remote)) {
         logger_->Emit(LogLevel::Error,
                       "Failed to sync object {} from repository {}",
@@ -454,7 +461,7 @@ auto SourceTreeService::ResolveContentTree(
 }
 
 auto SourceTreeService::CommonImportToGit(
-    std::filesystem::path const& content_path,
+    std::filesystem::path const& root_path,
     std::string const& commit_message) -> expected<std::string, std::string> {
     // the repository path that imports the content must be separate from the
     // content path, to avoid polluting the entries
@@ -474,18 +481,18 @@ auto SourceTreeService::CommonImportToGit(
     // wrap logger for GitRepo call
     std::string err;
     auto wrapped_logger = std::make_shared<GitRepo::anon_logger_t>(
-        [content_path, repo_path, &err](auto const& msg, bool fatal) {
+        [&root_path, &repo_path, &err](auto const& msg, bool fatal) {
             if (fatal) {
                 err = fmt::format(
                     "While committing directory {} in repository {}:\n{}",
-                    content_path.string(),
+                    root_path.string(),
                     repo_path.string(),
                     msg);
             }
         });
     // stage and commit all
     auto commit_hash =
-        git_repo->CommitDirectory(content_path, commit_message, wrapped_logger);
+        git_repo->CommitDirectory(root_path, commit_message, wrapped_logger);
     if (not commit_hash) {
         return unexpected{err};
     }
@@ -755,9 +762,11 @@ auto SourceTreeService::ServeArchiveTree(
         return ::grpc::Status::OK;
     }
     // check if content is in local CAS already
-    auto digest = ArtifactDigest(content, 0, false);
+    auto const digest = ArtifactDigestFactory::Create(
+        storage_config_.hash_function.GetType(), content, 0, /*is_tree=*/false);
     auto const& cas = storage_.CAS();
-    auto content_cas_path = cas.BlobPath(digest, /*is_executable=*/false);
+    auto content_cas_path =
+        digest ? cas.BlobPath(*digest, /*is_executable=*/false) : std::nullopt;
     if (not content_cas_path) {
         // check if content blob is in Git cache
         auto res = GetBlobFromRepo(storage_config_.GitRoot(), content, logger_);
@@ -797,11 +806,11 @@ auto SourceTreeService::ServeArchiveTree(
             }
         }
     }
-    if (not content_cas_path) {
+    if (digest and not content_cas_path) {
         // try to retrieve it from remote CAS
-        if (not(apis_.remote->IsAvailable(digest) and
+        if (not(apis_.remote->IsAvailable(*digest) and
                 apis_.remote->RetrieveToCas(
-                    {Artifact::ObjectInfo{.digest = digest,
+                    {Artifact::ObjectInfo{.digest = *digest,
                                           .type = ObjectType::File}},
                     *apis_.local))) {
             // content could not be found
@@ -809,7 +818,7 @@ auto SourceTreeService::ServeArchiveTree(
             return ::grpc::Status::OK;
         }
         // content should now be in CAS
-        content_cas_path = cas.BlobPath(digest, /*is_executable=*/false);
+        content_cas_path = cas.BlobPath(*digest, /*is_executable=*/false);
         if (not content_cas_path) {
             logger_->Emit(LogLevel::Error,
                           "Retrieving content {} from CAS failed unexpectedly",
@@ -880,9 +889,15 @@ auto SourceTreeService::DistdirImportToGit(
             content_list.begin(),
             content_list.end(),
             [&cas, tmp_path](auto const& kv) {
-                auto content_path = cas.BlobPath(
-                    ArtifactDigest(kv.second.first, 0, /*is_tree=*/false),
-                    kv.second.second);
+                auto const digest = ArtifactDigestFactory::Create(
+                    cas.GetHashFunction().GetType(),
+                    kv.second.first,
+                    0,
+                    /*is_tree=*/false);
+                if (not digest) {
+                    return false;
+                }
+                auto content_path = cas.BlobPath(*digest, kv.second.second);
                 if (content_path) {
                     return FileSystemManager::CreateFileHardlink(
                                *content_path,  // from: cas_path/content_id
@@ -950,6 +965,8 @@ auto SourceTreeService::ServeDistdirTree(
         content_list{};
     content_list.reserve(request->distfiles().size());
 
+    bool const is_native =
+        ProtocolTraits::IsNative(storage_config_.hash_function.GetType());
     for (auto const& kv : request->distfiles()) {
         bool blob_found{};
         std::string blob_digest;  // The digest of the requested distfile, taken
@@ -961,10 +978,14 @@ auto SourceTreeService::ServeDistdirTree(
         // check content blob is known
         // first check the local CAS itself, provided it uses the same type
         // of identifier
-        if (not Compatibility::IsCompatible()) {
-            auto digest = ArtifactDigest(content, 0, /*is_tree=*/false);
-            blob_found =
-                static_cast<bool>(cas.BlobPath(digest, kv.executable()));
+        auto const digest = ArtifactDigestFactory::Create(
+            storage_config_.hash_function.GetType(),
+            content,
+            0,
+            /*is_tree=*/false);
+
+        if (is_native) {
+            blob_found = digest and cas.BlobPath(*digest, kv.executable());
         }
         if (blob_found) {
             blob_digest = content;
@@ -986,7 +1007,7 @@ auto SourceTreeService::ServeDistdirTree(
                     return ::grpc::Status::OK;
                 }
                 blob_found = true;
-                blob_digest = NativeSupport::Unprefix(stored_blob->hash());
+                blob_digest = stored_blob->hash();
             }
             else {
                 if (res.error() == GitLookupError::Fatal) {
@@ -1016,8 +1037,7 @@ auto SourceTreeService::ServeDistdirTree(
                             return ::grpc::Status::OK;
                         }
                         blob_found = true;
-                        blob_digest =
-                            NativeSupport::Unprefix(stored_blob->hash());
+                        blob_digest = stored_blob->hash();
                         break;
                     }
                     if (res.error() == GitLookupError::Fatal) {
@@ -1033,19 +1053,13 @@ auto SourceTreeService::ServeDistdirTree(
                     }
                 }
                 if (not blob_found) {
-                    // Explanation: clang-tidy gets confused by the break in the
-                    // for-loop above into falsely believing that it can reach
-                    // this point with the variable "digest" already moved, so
-                    // we work around this by creating a new variable here
-                    auto digest_clone =
-                        ArtifactDigest(content, 0, /*is_tree=*/false);
                     // check remote CAS
-                    if ((not Compatibility::IsCompatible()) and
-                        apis_.remote->IsAvailable(digest_clone)) {
+                    if (is_native and digest and
+                        apis_.remote->IsAvailable(*digest)) {
                         // retrieve content to local CAS
                         if (not apis_.remote->RetrieveToCas(
                                 {Artifact::ObjectInfo{
-                                    .digest = digest_clone,
+                                    .digest = *digest,
                                     .type = kv.executable()
                                                 ? ObjectType::Executable
                                                 : ObjectType::File}},
@@ -1103,8 +1117,7 @@ auto SourceTreeService::ServeDistdirTree(
     // get hash from raw_id
     auto tree_id = ToHexString(tree->first);
     // add tree to local CAS
-    auto tree_digest = cas.StoreTree(tree->second);
-    if (not tree_digest) {
+    if (not cas.StoreTree(tree->second)) {
         logger_->Emit(LogLevel::Error,
                       "Failed to store distdir tree {} to local CAS",
                       tree_id);
@@ -1224,10 +1237,11 @@ auto SourceTreeService::ServeContent(
     }
 
     // check also in the local CAS
-    auto const digest = ArtifactDigest{content, 0, /*is_tree=*/false};
-    if (apis_.local->IsAvailable(digest)) {
+    auto const digest = ArtifactDigestFactory::Create(
+        storage_config_.hash_function.GetType(), content, 0, /*is_tree=*/false);
+    if (digest and apis_.local->IsAvailable(*digest)) {
         if (not apis_.local->RetrieveToCas(
-                {Artifact::ObjectInfo{.digest = digest,
+                {Artifact::ObjectInfo{.digest = *digest,
                                       .type = ObjectType::File}},
                 *apis_.remote)) {
             logger_->Emit(LogLevel::Error,
@@ -1302,10 +1316,12 @@ auto SourceTreeService::ServeTree(
         }
     }
     // check also in the local CAS
-    auto digest = ArtifactDigest{tree_id, 0, /*is_tree=*/true};
-    if (apis_.local->IsAvailable(digest)) {
+    auto const hash_type = storage_config_.hash_function.GetType();
+    auto const digest =
+        ArtifactDigestFactory::Create(hash_type, tree_id, 0, /*is_tree=*/true);
+    if (digest and apis_.local->IsAvailable(*digest)) {
         // upload tree to remote CAS; only possible in native mode
-        if (Compatibility::IsCompatible()) {
+        if (not ProtocolTraits::IsNative(hash_type)) {
             logger_->Emit(LogLevel::Error,
                           "Cannot sync tree {} from local CAS with the remote "
                           "in compatible mode",
@@ -1314,7 +1330,7 @@ auto SourceTreeService::ServeTree(
             return ::grpc::Status::OK;
         }
         if (not apis_.local->RetrieveToCas(
-                {Artifact::ObjectInfo{.digest = digest,
+                {Artifact::ObjectInfo{.digest = *digest,
                                       .type = ObjectType::Tree}},
                 *apis_.remote)) {
             logger_->Emit(LogLevel::Error,
@@ -1384,8 +1400,9 @@ auto SourceTreeService::CheckRootTree(
         }
     }
     // now check in the local CAS
-    auto digest = ArtifactDigest{tree_id, 0, /*is_tree=*/true};
-    if (auto path = storage_.CAS().TreePath(digest)) {
+    auto const digest = ArtifactDigestFactory::Create(
+        storage_config_.hash_function.GetType(), tree_id, 0, /*is_tree=*/true);
+    if (digest and storage_.CAS().TreePath(*digest)) {
         // As we currently build only against roots in Git repositories, we need
         // to move the tree from CAS to local Git storage
         auto tmp_dir =
@@ -1394,12 +1411,12 @@ auto SourceTreeService::CheckRootTree(
             logger_->Emit(LogLevel::Error,
                           "Failed to create tmp directory for copying git-tree "
                           "{} from remote CAS",
-                          digest.hash());
+                          digest->hash());
             response->set_status(CheckRootTreeResponse::INTERNAL_ERROR);
             return ::grpc::Status::OK;
         }
         if (not apis_.local->RetrieveToPaths(
-                {Artifact::ObjectInfo{.digest = digest,
+                {Artifact::ObjectInfo{.digest = *digest,
                                       .type = ObjectType::Tree}},
                 {tmp_dir->GetPath()})) {
             logger_->Emit(LogLevel::Error,
@@ -1454,8 +1471,9 @@ auto SourceTreeService::GetRemoteTree(
     }
 
     // get tree from remote CAS into tmp dir
-    auto digest = ArtifactDigest{tree_id, 0, /*is_tree=*/true};
-    if (not apis_.remote->IsAvailable(digest)) {
+    auto const digest = ArtifactDigestFactory::Create(
+        storage_config_.hash_function.GetType(), tree_id, 0, /*is_tree=*/true);
+    if (not digest or not apis_.remote->IsAvailable(*digest)) {
         logger_->Emit(LogLevel::Error,
                       "Remote CAS does not contain expected tree {}",
                       tree_id);
@@ -1468,12 +1486,12 @@ auto SourceTreeService::GetRemoteTree(
         logger_->Emit(LogLevel::Error,
                       "Failed to create tmp directory for copying git-tree {} "
                       "from remote CAS",
-                      digest.hash());
+                      digest->hash());
         response->set_status(GetRemoteTreeResponse::INTERNAL_ERROR);
         return ::grpc::Status::OK;
     }
     if (not apis_.remote->RetrieveToPaths(
-            {Artifact::ObjectInfo{.digest = digest, .type = ObjectType::Tree}},
+            {Artifact::ObjectInfo{.digest = *digest, .type = ObjectType::Tree}},
             {tmp_dir->GetPath()},
             &(*apis_.local))) {
         logger_->Emit(LogLevel::Error,

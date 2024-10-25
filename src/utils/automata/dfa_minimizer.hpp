@@ -44,14 +44,14 @@ class DFAMinimizer {
 
     // Bucket of states with equal local properties (content and acceptance)
     struct Bucket {
-        std::vector<std::string> symbols{};
-        states_t states{};
+        std::vector<std::string> symbols;
+        states_t states;
     };
 
     // Key used for state pairs. Reordering names will result in the same key.
     class StatePairKey {
       public:
-        struct hash_t {
+        struct Hash {
             [[nodiscard]] auto operator()(StatePairKey const& p) const
                 -> std::size_t {
                 std::size_t hash{};
@@ -85,13 +85,13 @@ class DFAMinimizer {
     // Value of state pairs.
     struct StatePairValue {
         // Parent pairs depending on this pair's distinguishability
-        std::vector<StatePairValue*> parents{};
+        std::vector<StatePairValue*> parents;
         // Distinguishability flag (true means distinguishable)
         bool marked{};
     };
 
     using state_pairs_t =
-        std::unordered_map<StatePairKey, StatePairValue, StatePairKey::hash_t>;
+        std::unordered_map<StatePairKey, StatePairValue, StatePairKey::Hash>;
 
   public:
     using bisimulation_t = std::unordered_map<std::string, std::string>;
@@ -170,8 +170,8 @@ class DFAMinimizer {
     }
 
   private:
-    std::unordered_map<std::string, Bucket> buckets_{};
-    std::unordered_map<std::string, std::string> buckets_by_state_{};
+    std::unordered_map<std::string, Bucket> buckets_;
+    std::unordered_map<std::string, std::string> buckets_by_state_;
 
     template <class M, class K = typename M::key_type>
     [[nodiscard]] static auto GetKeys(M const& map) -> std::vector<K> {
@@ -196,7 +196,6 @@ class DFAMinimizer {
     }
 
     // Mark pair as distinguishable and recursively mark all parents.
-    // NOLINTNEXTLINE(misc-no-recursion)
     static void MarkPairValue(gsl::not_null<StatePairValue*> const& data) {
         data->marked = true;
         for (auto* parent : data->parents) {
