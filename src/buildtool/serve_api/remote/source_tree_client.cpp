@@ -16,6 +16,7 @@
 
 #include "src/buildtool/serve_api/remote/source_tree_client.hpp"
 
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 
@@ -61,7 +62,9 @@ auto PragmaSpecialToSymlinksResolve(
 
 SourceTreeClient::SourceTreeClient(
     ServerAddress const& address,
-    gsl::not_null<RemoteContext const*> const& remote_context) noexcept {
+    gsl::not_null<HashFunction const*> const& hash_function,
+    gsl::not_null<RemoteContext const*> const& remote_context) noexcept
+    : hash_function_{*hash_function} {
     stub_ =
         justbuild::just_serve::SourceTree::NewStub(CreateChannelWithCredentials(
             address.host, address.port, remote_context->auth));
@@ -95,7 +98,18 @@ auto SourceTreeClient::ServeCommitTree(std::string const& commit_id,
                 ? GitLookupError::Fatal
                 : GitLookupError::NotFound};
     }
-    return response.tree();  // success
+    TreeResult result = {response.tree(), std::nullopt};
+    // if asked to sync, get digest from response
+    if (sync_tree) {
+        auto digest = ArtifactDigestFactory::FromBazel(hash_function_.GetType(),
+                                                       response.digest());
+        if (not digest) {
+            logger_.Emit(LogLevel::Debug, std::move(digest).error());
+            return unexpected{GitLookupError::Fatal};
+        }
+        result.digest = *std::move(digest);
+    }
+    return result;  // success
 }
 
 auto SourceTreeClient::ServeArchiveTree(
@@ -131,7 +145,18 @@ auto SourceTreeClient::ServeArchiveTree(
                 ? GitLookupError::Fatal
                 : GitLookupError::NotFound};
     }
-    return response.tree();  // success
+    TreeResult result = {response.tree(), std::nullopt};
+    // if asked to sync, get digest from response
+    if (sync_tree) {
+        auto digest = ArtifactDigestFactory::FromBazel(hash_function_.GetType(),
+                                                       response.digest());
+        if (not digest) {
+            logger_.Emit(LogLevel::Debug, std::move(digest).error());
+            return unexpected{GitLookupError::Fatal};
+        }
+        result.digest = *std::move(digest);
+    }
+    return result;  // success
 }
 
 auto SourceTreeClient::ServeDistdirTree(
@@ -166,7 +191,18 @@ auto SourceTreeClient::ServeDistdirTree(
                 ? GitLookupError::Fatal
                 : GitLookupError::NotFound};
     }
-    return response.tree();  // success
+    TreeResult result = {response.tree(), std::nullopt};
+    // if asked to sync, get digest from response
+    if (sync_tree) {
+        auto digest = ArtifactDigestFactory::FromBazel(hash_function_.GetType(),
+                                                       response.digest());
+        if (not digest) {
+            logger_.Emit(LogLevel::Debug, std::move(digest).error());
+            return unexpected{GitLookupError::Fatal};
+        }
+        result.digest = *std::move(digest);
+    }
+    return result;  // success
 }
 
 auto SourceTreeClient::ServeForeignFileTree(const std::string& content,
@@ -199,11 +235,11 @@ auto SourceTreeClient::ServeForeignFileTree(const std::string& content,
                 ? GitLookupError::Fatal
                 : GitLookupError::NotFound};
     }
-    return response.tree();  // success
+    return TreeResult{response.tree(), std::nullopt};  // success
 }
 
 auto SourceTreeClient::ServeContent(std::string const& content) const noexcept
-    -> bool {
+    -> expected<ArtifactDigest, GitLookupError> {
     justbuild::just_serve::ServeContentRequest request{};
     request.set_content(content);
 
@@ -213,20 +249,30 @@ auto SourceTreeClient::ServeContent(std::string const& content) const noexcept
 
     if (not status.ok()) {
         LogStatus(&logger_, LogLevel::Debug, status);
-        return false;
+        return unexpected{GitLookupError::Fatal};
     }
     if (response.status() !=
         ::justbuild::just_serve::ServeContentResponse::OK) {
         logger_.Emit(LogLevel::Debug,
                      "ServeContent response returned with {}",
                      static_cast<int>(response.status()));
-        return false;
+        return unexpected{
+            response.status() !=
+                    ::justbuild::just_serve::ServeContentResponse::NOT_FOUND
+                ? GitLookupError::Fatal
+                : GitLookupError::NotFound};
     }
-    return true;
+    auto digest = ArtifactDigestFactory::FromBazel(hash_function_.GetType(),
+                                                   response.digest());
+    if (not digest) {
+        logger_.Emit(LogLevel::Debug, std::move(digest).error());
+        return unexpected{GitLookupError::Fatal};
+    }
+    return *std::move(digest);  // success
 }
 
 auto SourceTreeClient::ServeTree(std::string const& tree_id) const noexcept
-    -> bool {
+    -> expected<ArtifactDigest, GitLookupError> {
     justbuild::just_serve::ServeTreeRequest request{};
     request.set_tree(tree_id);
 
@@ -236,15 +282,25 @@ auto SourceTreeClient::ServeTree(std::string const& tree_id) const noexcept
 
     if (not status.ok()) {
         LogStatus(&logger_, LogLevel::Debug, status);
-        return false;
+        return unexpected{GitLookupError::Fatal};
     }
     if (response.status() != ::justbuild::just_serve::ServeTreeResponse::OK) {
         logger_.Emit(LogLevel::Debug,
                      "ServeTree response returned with {}",
                      static_cast<int>(response.status()));
-        return false;
+        return unexpected{
+            response.status() !=
+                    ::justbuild::just_serve::ServeTreeResponse::NOT_FOUND
+                ? GitLookupError::Fatal
+                : GitLookupError::NotFound};
     }
-    return true;
+    auto digest = ArtifactDigestFactory::FromBazel(hash_function_.GetType(),
+                                                   response.digest());
+    if (not digest) {
+        logger_.Emit(LogLevel::Debug, std::move(digest).error());
+        return unexpected{GitLookupError::Fatal};
+    }
+    return *std::move(digest);  // success
 }
 
 auto SourceTreeClient::CheckRootTree(std::string const& tree_id) const noexcept
@@ -274,10 +330,10 @@ auto SourceTreeClient::CheckRootTree(std::string const& tree_id) const noexcept
     return true;  // tree found
 }
 
-auto SourceTreeClient::GetRemoteTree(std::string const& tree_id) const noexcept
-    -> bool {
+auto SourceTreeClient::GetRemoteTree(
+    ArtifactDigest const& digest) const noexcept -> bool {
     justbuild::just_serve::GetRemoteTreeRequest request{};
-    request.set_tree(tree_id);
+    (*request.mutable_digest()) = ArtifactDigestFactory::ToBazel(digest);
 
     grpc::ClientContext context;
     justbuild::just_serve::GetRemoteTreeResponse response;

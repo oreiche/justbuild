@@ -56,12 +56,17 @@ message ServeCommitTreeResponse {
   // If the status has a code `OK` or `SYNC_ERROR`, the tree is correct.
   // For any other value, the `tree` field is not set.
   ServeCommitTreeStatus status = 2;
+
+  // The digest of the requested tree, which can be used to retrieve it from
+  // the associated remote-execution endpoint CAS, if tree was uploaded to the
+  // remote-execution endpoint.
+  build.bazel.remote.execution.v2.Digest digest = 3;
 }
 
 // A request message for
 // [SourceTree.ServeArchiveTree][justbuild.just_serve.SourceTree.ServeArchiveTree].
 message ServeArchiveTreeRequest {
-  // The git blob identifier of the archive.
+  // The Git blob identifier of the archive.
   string content = 1;
 
   enum ArchiveType {
@@ -126,6 +131,11 @@ message ServeArchiveTreeResponse {
   // If the status has a code `OK` or `SYNC_ERROR`, the tree is correct.
   // For any other value, the `tree` field is not set.
   ServeArchiveTreeStatus status = 2;
+
+  // The digest of the requested tree, which can be used to retrieve it from
+  // the associated remote-execution endpoint CAS, if tree was uploaded to the
+  // remote-execution endpoint.
+  build.bazel.remote.execution.v2.Digest digest = 3;
 }
 
 // A request message for
@@ -136,7 +146,7 @@ message ServeDistdirTreeRequest {
     // The name of the distfile.
     string name = 1;
 
-    // The git blob identifier of the distfile content.
+    // The Git blob identifier of the distfile content.
     string content = 2;
 
     // Whether the blob should occur executable in the resulting
@@ -176,12 +186,17 @@ message ServeDistdirTreeResponse {
   // If the status has a code `OK` or `SYNC_ERROR`, the tree is correct.
   // For any other value, the `tree` field is not set.
   ServeDistdirTreeStatus status = 2;
+
+  // The digest of the requested tree, which can be used to retrieve it from
+  // the associated remote-execution endpoint CAS, if tree was uploaded to the
+  // remote-execution endpoint.
+  build.bazel.remote.execution.v2.Digest digest = 3;
 }
 
 // A request message for
 // [SourceTree.ServeContent][justbuild.just_serve.SourceTree.ServeContent].
 message ServeContentRequest {
-  // The content git blob identifier.
+  // The content Git blob identifier.
   string content = 1;
 }
 
@@ -204,12 +219,16 @@ message ServeContentResponse {
 
   // If the status has a code `OK`, the content blob is in the remote CAS.
   ServeContentStatus status = 1;
+
+  // The digest of the requested blob, which can be used to retrieve it from
+  // the associated remote-execution endpoint CAS.
+  build.bazel.remote.execution.v2.Digest digest = 2;
 }
 
 // A request message for
 // [SourceTree.ServeTree][justbuild.just_serve.SourceTree.ServeTree].
 message ServeTreeRequest {
-  // The git tree identifier.
+  // The Git tree identifier.
   string tree = 1;
 }
 
@@ -232,12 +251,16 @@ message ServeTreeResponse {
 
   // If the status has a code `OK`, the tree is in the remote CAS.
   ServeTreeStatus status = 1;
+
+  // The digest of the requested tree, which can be used to retrieve it from
+  // the associated remote-execution endpoint CAS.
+  build.bazel.remote.execution.v2.Digest digest = 2;
 }
 
 // A request message for
 // [SourceTree.CheckRootTree][justbuild.just_serve.SourceTree.CheckRootTree].
 message CheckRootTreeRequest {
-  // The git tree identifier.
+  // The Git tree identifier.
   string tree = 1;
 }
 
@@ -263,8 +286,11 @@ message CheckRootTreeResponse {
 // A request message for
 // [SourceTree.GetRemoteTree][justbuild.just_serve.SourceTree.GetRemoteTree].
 message GetRemoteTreeRequest {
-  // The git tree identifier.
-  string tree = 1;
+  reserved 1; // The Git tree identifier in an earlier version of the API.
+
+  // The tree digest, which can be used to retrieve it from the associated
+  // remote-execution endpoint.
+  build.bazel.remote.execution.v2.Digest digest = 2;
 }
 
 // A response message for
@@ -324,9 +350,9 @@ service SourceTree {
   // There are no method-specific errors.
   rpc CheckRootTree(CheckRootTreeRequest) returns (CheckRootTreeResponse) {}
 
-  // Retrieve a given Git-tree from the CAS of the associated
-  // remote-execution endpoint and make it available in a location where this
-  // serve instance can build against.
+  // Retrieve a given tree from the CAS of the associated remote-execution
+  // endpoint and make it available in a location where this serve instance
+  // can build against.
   //
   // There are no method-specific errors.
   rpc GetRemoteTree(GetRemoteTreeRequest) returns (GetRemoteTreeResponse) {}

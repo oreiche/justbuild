@@ -24,9 +24,6 @@
     , ["src/buildtool/file_system/symlinks_map", "resolve_symlinks_map"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/serve_api/remote", "config"]
-    , ["src/buildtool/storage", "config"]
-    , ["src/buildtool/storage", "repository_garbage_collector"]
-    , ["src/buildtool/storage", "storage"]
     , ["src/utils/cpp", "expected"]
     ]
   , "stage": ["src", "buildtool", "serve_api", "serve_service"]
@@ -36,11 +33,15 @@
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/common", "protocol_traits"]
     , ["src/buildtool/crypto", "hash_function"]
-    , ["src/buildtool/execution_api/git", "git"]
+    , ["src/buildtool/execution_api/serve", "mr_git_api"]
+    , ["src/buildtool/execution_api/serve", "utils"]
+    , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/file_system", "git_repo"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/multithreading", "async_map_utils"]
     , ["src/buildtool/storage", "fs_utils"]
+    , ["src/buildtool/storage", "repository_garbage_collector"]
+    , ["src/buildtool/storage", "storage"]
     , ["src/utils/archive", "archive_ops"]
     ]
   }
@@ -75,7 +76,13 @@
     , ["src/buildtool/execution_api/execution_service", "cas_server"]
     , ["src/buildtool/execution_api/execution_service", "execution_server"]
     , ["src/buildtool/execution_api/execution_service", "operations_server"]
+    , ["src/buildtool/execution_api/local", "local"]
+    , ["src/buildtool/execution_api/serve", "mr_local_api"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/file_system", "git_repo"]
     , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/storage", "config"]
+    , ["src/buildtool/storage", "storage"]
     ]
   }
 , "target_service":
@@ -126,6 +133,7 @@
     , ["src/buildtool/serve_api/remote", "serve_api"]
     , ["src/buildtool/storage", "backend_description"]
     , ["src/buildtool/storage", "repository_garbage_collector"]
+    , ["src/buildtool/storage", "storage"]
     ]
   }
 , "configuration_service":

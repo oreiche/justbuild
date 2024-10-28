@@ -37,8 +37,6 @@
 #include "src/buildtool/file_system/symlinks_map/resolve_symlinks_map.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/serve_api/remote/config.hpp"
-#include "src/buildtool/storage/config.hpp"
-#include "src/buildtool/storage/storage.hpp"
 #include "src/utils/cpp/expected.hpp"
 
 // Service for improved interaction with the target-level cache.
@@ -63,12 +61,13 @@ class SourceTreeService final
 
     explicit SourceTreeService(
         gsl::not_null<RemoteServeConfig const*> const& serve_config,
-        gsl::not_null<LocalContext const*> const& local_context,
-        gsl::not_null<ApiBundle const*> const& apis) noexcept
+        gsl::not_null<ApiBundle const*> const& apis,
+        gsl::not_null<LocalContext const*> const& native_context,
+        LocalContext const* compat_context = nullptr) noexcept
         : serve_config_{*serve_config},
-          storage_{*local_context->storage},
-          storage_config_{*local_context->storage_config},
-          apis_{*apis} {}
+          apis_{*apis},
+          native_context_{native_context},
+          compat_context_{compat_context} {}
 
     // Retrieve the Git-subtree identifier from a given Git commit.
     //
@@ -123,9 +122,9 @@ class SourceTreeService final
         const ::justbuild::just_serve::CheckRootTreeRequest* request,
         CheckRootTreeResponse* response) -> ::grpc::Status override;
 
-    // Retrieve a given Git-tree from the CAS of the associated
-    // remote-execution endpoint and make it available in a location where this
-    // serve instance can build against.
+    // Retrieve a given tree from the CAS of the associated remote-execution
+    // endpoint and make it available in a location where this serve instance
+    // can build against.
     //
     // There are no method-specific errors.
     auto GetRemoteTree(
@@ -135,9 +134,9 @@ class SourceTreeService final
 
   private:
     RemoteServeConfig const& serve_config_;
-    StorageConfig const& storage_config_;
-    Storage const& storage_;
     ApiBundle const& apis_;
+    gsl::not_null<LocalContext const*> native_context_;
+    LocalContext const* compat_context_;
     mutable std::shared_mutex mutex_;
     std::shared_ptr<Logger> logger_{std::make_shared<Logger>("serve-service")};
     // symlinks resolver map
@@ -182,6 +181,18 @@ class SourceTreeService final
     [[nodiscard]] auto SyncGitEntryToCas(std::string const& object_hash,
                                          std::filesystem::path const& repo_path)
         const noexcept -> std::remove_cvref_t<decltype(TResponse::OK)>;
+
+    /// \brief Set the digest field of a serve response.
+    /// In compatible mode, this handles also the interaction with the storages
+    /// to recover the corresponding compatible digest from a native digest, as
+    /// stored in file mappings.
+    template <typename TResponse>
+    [[nodiscard]] auto SetDigestInResponse(
+        gsl::not_null<TResponse*> const& response,
+        std::string const& object_hash,
+        bool is_tree,
+        bool from_git) const noexcept
+        -> std::remove_cvref_t<decltype(TResponse::OK)>;
 
     /// \brief Resolves a tree from given repository with respect to symlinks.
     /// The resolved tree will always be placed in the Git cache.
