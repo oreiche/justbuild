@@ -18,6 +18,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <shared_mutex>
+#include <type_traits>
 #include <utility>  // std::move
 
 // Atomic wrapper with notify/wait capabilities.
@@ -25,7 +26,7 @@
 // libcxx adds support for notify_*() and wait().
 // [https://libcxx.llvm.org/docs/Cxx2aStatus.html]
 template <class T>
-class atomic {
+class atomic {  // NOLINT(readability-identifier-naming)
   public:
     atomic() = default;
     explicit atomic(T value) : value_{std::move(value)} {}
@@ -51,22 +52,26 @@ class atomic {
         return value_.load(order);
     }
 
-    template <class U = T, class = std::enable_if_t<std::is_integral_v<U>>>
+    template <class U = T>
+        requires(std::is_integral_v<U>)
     auto operator++() -> T {
         std::shared_lock lock(mutex_);
         return ++value_;
     }
-    template <class U = T, class = std::enable_if_t<std::is_integral_v<U>>>
+    template <class U = T>
+        requires(std::is_integral_v<U>)
     [[nodiscard]] auto operator++(int) -> T {
         std::shared_lock lock(mutex_);
         return value_++;
     }
-    template <class U = T, class = std::enable_if_t<std::is_integral_v<U>>>
+    template <class U = T>
+        requires(std::is_integral_v<U>)
     auto operator--() -> T {
         std::shared_lock lock(mutex_);
         return --value_;
     }
-    template <class U = T, class = std::enable_if_t<std::is_integral_v<U>>>
+    template <class U = T>
+        requires(std::is_integral_v<U>)
     [[nodiscard]] auto operator--(int) -> T {
         std::shared_lock lock(mutex_);
         return value_--;
@@ -83,8 +88,8 @@ class atomic {
 
   private:
     std::atomic<T> value_{};
-    mutable std::shared_mutex mutex_{};
-    mutable std::condition_variable_any cv_{};
+    mutable std::shared_mutex mutex_;
+    mutable std::condition_variable_any cv_;
 };
 
 // Atomic shared_pointer with notify/wait capabilities.
@@ -92,7 +97,7 @@ class atomic {
 // std::atomic<std::shared_ptr<T>>, once libcxx adds support for it.
 // [https://libcxx.llvm.org/docs/Cxx2aStatus.html]
 template <class T>
-class atomic_shared_ptr {
+class atomic_shared_ptr {  // NOLINT(readability-identifier-naming)
     using ptr_t = std::shared_ptr<T>;
 
   public:
@@ -129,8 +134,8 @@ class atomic_shared_ptr {
 
   private:
     ptr_t value_{};
-    mutable std::shared_mutex mutex_{};
-    mutable std::condition_variable_any cv_{};
+    mutable std::shared_mutex mutex_;
+    mutable std::condition_variable_any cv_;
 };
 
 #endif  // INCLUDED_SRC_UTILS_CPP_ATOMIC_HPP

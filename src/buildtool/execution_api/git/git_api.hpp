@@ -24,6 +24,7 @@
 
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
@@ -52,7 +53,7 @@ class GitApi final : public IExecutionApi {
         return nullptr;
     }
 
-    // NOLINTNEXTLINE(misc-no-recursion,google-default-arguments)
+    // NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] auto RetrieveToPaths(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<std::filesystem::path> const& output_paths,
@@ -72,13 +73,12 @@ class GitApi final : public IExecutionApi {
                     return false;
                 }
                 for (auto const& [path, entry] : *tree) {
-                    if (not RetrieveToPaths(
-                            {Artifact::ObjectInfo{
-                                .digest = ArtifactDigest{entry->Hash(),
-                                                         /*size*/ 0,
-                                                         entry->IsTree()},
-                                .type = entry->Type(),
-                                .failed = false}},
+                    auto digest = ToArtifactDigest(*entry);
+                    if (not digest or
+                        not RetrieveToPaths(
+                            {Artifact::ObjectInfo{.digest = *std::move(digest),
+                                                  .type = entry->Type(),
+                                                  .failed = false}},
                             {output_paths[i] / path})) {
                         return false;
                     }
@@ -115,8 +115,9 @@ class GitApi final : public IExecutionApi {
             return false;
         }
         for (std::size_t i{}; i < artifacts_info.size(); ++i) {
-            auto fd = fds[i];
             auto const& info = artifacts_info[i];
+
+            std::string content;
             if (IsTreeObject(info.type) and not raw_tree) {
                 auto tree =
                     repo_config_->ReadTreeFromGitCAS(info.digest.hash());
@@ -126,26 +127,22 @@ class GitApi final : public IExecutionApi {
                                 info.digest.hash());
                     return false;
                 }
-                auto json = nlohmann::json::object();
-                for (auto const& [path, entry] : *tree) {
-                    json[path] =
-                        Artifact::ObjectInfo{
-                            .digest = ArtifactDigest{entry->Hash(),
-                                                     /*size*/ 0,
-                                                     entry->IsTree()},
-                            .type = entry->Type(),
-                            .failed = false}
-                            .ToString(/*size_unknown*/ true);
-                }
-                auto msg = json.dump(2) + "\n";
-                if (gsl::owner<FILE*> out = fdopen(fd, "wb")) {  // NOLINT
-                    std::fwrite(msg.data(), 1, msg.size(), out);
-                    std::fclose(out);
-                }
-                else {
-                    Logger::Log(LogLevel::Error,
-                                "dumping to file descriptor {} failed.",
-                                fd);
+
+                try {
+                    auto json = nlohmann::json::object();
+                    for (auto const& [path, entry] : *tree) {
+                        auto digest = ToArtifactDigest(*entry);
+                        if (not digest) {
+                            return false;
+                        }
+                        json[path] =
+                            Artifact::ObjectInfo{.digest = *std::move(digest),
+                                                 .type = entry->Type(),
+                                                 .failed = false}
+                                .ToString(/*size_unknown*/ true);
+                    }
+                    content = json.dump(2) + "\n";
+                } catch (...) {
                     return false;
                 }
             }
@@ -158,23 +155,23 @@ class GitApi final : public IExecutionApi {
                                 info.digest.hash());
                     return false;
                 }
-                auto msg = *blob;
-                if (gsl::owner<FILE*> out = fdopen(fd, "wb")) {  // NOLINT
-                    std::fwrite(msg.data(), 1, msg.size(), out);
-                    std::fclose(out);
-                }
-                else {
-                    Logger::Log(LogLevel::Error,
-                                "dumping to file descriptor {} failed.",
-                                fd);
-                    return false;
-                }
+                content = *std::move(blob);
+            }
+
+            if (gsl::owner<FILE*> out = fdopen(fds[i], "wb")) {  // NOLINT
+                std::fwrite(content.data(), 1, content.size(), out);
+                std::fclose(out);
+            }
+            else {
+                Logger::Log(LogLevel::Error,
+                            "dumping to file descriptor {} failed.",
+                            fds[i]);
+                return false;
             }
         }
         return true;
     }
 
-    // NOLINTNEXTLINE(misc-no-recursion)
     [[nodiscard]] auto RetrieveToCas(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         IExecutionApi const& api) const noexcept -> bool override {
@@ -215,14 +212,13 @@ class GitApi final : public IExecutionApi {
                 ArtifactBlobContainer tree_deps_only_blobs{};
                 for (auto const& [path, entry] : *tree) {
                     if (entry->IsTree()) {
-                        if (not RetrieveToCas(
-                                {Artifact::ObjectInfo{
-                                    .digest = ArtifactDigest{entry->Hash(),
-                                                             /*size*/ 0,
-                                                             entry->IsTree()},
-                                    .type = entry->Type(),
-                                    .failed = false}},
-                                api)) {
+                        auto digest = ToArtifactDigest(*entry);
+                        if (not digest or
+                            not RetrieveToCas({Artifact::ObjectInfo{
+                                                  .digest = *std::move(digest),
+                                                  .type = entry->Type(),
+                                                  .failed = false}},
+                                              api)) {
                             return false;
                         }
                     }
@@ -231,8 +227,9 @@ class GitApi final : public IExecutionApi {
                         if (not entry_content) {
                             return false;
                         }
-                        auto digest = ArtifactDigest::Create<ObjectType::File>(
-                            hash_function, *entry_content);
+                        auto digest =
+                            ArtifactDigestFactory::HashDataAs<ObjectType::File>(
+                                hash_function, *entry_content);
                         // Collect blob and upload to remote CAS if transfer
                         // size reached.
                         if (not UpdateContainerAndUpload<ArtifactDigest>(
@@ -263,10 +260,10 @@ class GitApi final : public IExecutionApi {
 
             ArtifactDigest digest =
                 IsTreeObject(info.type)
-                    ? ArtifactDigest::Create<ObjectType::Tree>(hash_function,
-                                                               *content)
-                    : ArtifactDigest::Create<ObjectType::File>(hash_function,
-                                                               *content);
+                    ? ArtifactDigestFactory::HashDataAs<ObjectType::Tree>(
+                          hash_function, *content)
+                    : ArtifactDigestFactory::HashDataAs<ObjectType::File>(
+                          hash_function, *content);
 
             // Collect blob and upload to remote CAS if transfer size reached.
             if (not UpdateContainerAndUpload<ArtifactDigest>(
@@ -327,6 +324,18 @@ class GitApi final : public IExecutionApi {
 
   private:
     gsl::not_null<const RepositoryConfig*> repo_config_;
+
+    [[nodiscard]] static auto ToArtifactDigest(
+        GitTreeEntry const& entry) noexcept -> std::optional<ArtifactDigest> {
+        auto digest = ArtifactDigestFactory::Create(HashFunction::Type::GitSHA1,
+                                                    entry.Hash(),
+                                                    /*size=*/0,
+                                                    entry.IsTree());
+        if (not digest) {
+            return std::nullopt;
+        }
+        return *std::move(digest);
+    }
 };
 
-#endif
+#endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_GIT_GIT_API_HPP

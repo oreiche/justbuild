@@ -20,7 +20,17 @@
 #include "catch2/catch_test_macros.hpp"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/common/artifact.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "test/utils/hermeticity/test_hash_function_type.hpp"
+
+static auto NamedDigest(std::string const& str) -> ArtifactDigest {
+    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
+    return ArtifactDigestFactory::HashDataAs<ObjectType::File>(hash_function,
+                                                               str);
+}
 
 [[nodiscard]] auto operator==(Artifact const& lhs,
                               Artifact const& rhs) -> bool {
@@ -31,30 +41,31 @@
 TEST_CASE("Local artifact", "[artifact_description]") {
     auto local_desc = ArtifactDescription::CreateLocal(
         std::filesystem::path{"local_path"}, "repo");
-    auto from_json = ArtifactDescription::FromJson(local_desc.ToJson());
+    auto from_json = ArtifactDescription::FromJson(
+        TestHashType::ReadFromEnvironment(), local_desc.ToJson());
     CHECK(local_desc == *from_json);
 }
 
 TEST_CASE("Known artifact", "[artifact_description]") {
     SECTION("File object") {
         auto known_desc = ArtifactDescription::CreateKnown(
-            ArtifactDigest{std::string{"f_fake_hash"}, 0, /*is_tree=*/false},
-            ObjectType::File);
-        auto from_json = ArtifactDescription::FromJson(known_desc.ToJson());
+            NamedDigest("f_fake_hash"), ObjectType::File);
+        auto from_json = ArtifactDescription::FromJson(
+            TestHashType::ReadFromEnvironment(), known_desc.ToJson());
         CHECK(known_desc == *from_json);
     }
     SECTION("Executable object") {
         auto known_desc = ArtifactDescription::CreateKnown(
-            ArtifactDigest{std::string{"x_fake_hash"}, 1, /*is_tree=*/false},
-            ObjectType::Executable);
-        auto from_json = ArtifactDescription::FromJson(known_desc.ToJson());
+            NamedDigest("x_fake_hash"), ObjectType::Executable);
+        auto from_json = ArtifactDescription::FromJson(
+            TestHashType::ReadFromEnvironment(), known_desc.ToJson());
         CHECK(known_desc == *from_json);
     }
     SECTION("Symlink object") {
         auto known_desc = ArtifactDescription::CreateKnown(
-            ArtifactDigest{std::string{"l_fake_hash"}, 2, /*is_tree=*/false},
-            ObjectType::Symlink);
-        auto from_json = ArtifactDescription::FromJson(known_desc.ToJson());
+            NamedDigest("l_fake_hash"), ObjectType::Symlink);
+        auto from_json = ArtifactDescription::FromJson(
+            TestHashType::ReadFromEnvironment(), known_desc.ToJson());
         CHECK(known_desc == *from_json);
     }
 }
@@ -62,88 +73,89 @@ TEST_CASE("Known artifact", "[artifact_description]") {
 TEST_CASE("Action artifact", "[artifact_description]") {
     auto action_desc = ArtifactDescription::CreateAction(
         "action_id", std::filesystem::path{"out_path"});
-    auto from_json = ArtifactDescription::FromJson(action_desc.ToJson());
+    auto from_json = ArtifactDescription::FromJson(
+        TestHashType::ReadFromEnvironment(), action_desc.ToJson());
     CHECK(action_desc == *from_json);
 }
 
 TEST_CASE("From JSON", "[artifact_description]") {
     auto local = ArtifactDescription::CreateLocal("local", "repo").ToJson();
     auto known =
-        ArtifactDescription::CreateKnown(
-            ArtifactDigest{"hash", 0, /*is_tree=*/false}, ObjectType::File)
+        ArtifactDescription::CreateKnown(NamedDigest("hash"), ObjectType::File)
             .ToJson();
     auto action = ArtifactDescription::CreateAction("id", "output").ToJson();
 
+    auto const hash_type = TestHashType::ReadFromEnvironment();
     SECTION("Parse artifacts") {
-        CHECK(ArtifactDescription::FromJson(local));
-        CHECK(ArtifactDescription::FromJson(known));
-        CHECK(ArtifactDescription::FromJson(action));
+        CHECK(ArtifactDescription::FromJson(hash_type, local));
+        CHECK(ArtifactDescription::FromJson(hash_type, known));
+        CHECK(ArtifactDescription::FromJson(hash_type, action));
     }
 
     SECTION("Parse artifact without mandatory type") {
         local.erase("type");
         known.erase("type");
         action.erase("type");
-        CHECK_FALSE(ArtifactDescription::FromJson(local));
-        CHECK_FALSE(ArtifactDescription::FromJson(known));
-        CHECK_FALSE(ArtifactDescription::FromJson(action));
+        CHECK_FALSE(ArtifactDescription::FromJson(hash_type, local));
+        CHECK_FALSE(ArtifactDescription::FromJson(hash_type, known));
+        CHECK_FALSE(ArtifactDescription::FromJson(hash_type, action));
     }
 
     SECTION("Parse artifact without mandatory data") {
         local.erase("data");
         known.erase("data");
         action.erase("data");
-        CHECK_FALSE(ArtifactDescription::FromJson(local));
-        CHECK_FALSE(ArtifactDescription::FromJson(known));
-        CHECK_FALSE(ArtifactDescription::FromJson(action));
+        CHECK_FALSE(ArtifactDescription::FromJson(hash_type, local));
+        CHECK_FALSE(ArtifactDescription::FromJson(hash_type, known));
+        CHECK_FALSE(ArtifactDescription::FromJson(hash_type, action));
     }
 
     SECTION("Parse local artifact without mandatory path") {
         local["data"]["path"] = 0;
-        CHECK_FALSE(ArtifactDescription::FromJson(local));
+        CHECK_FALSE(ArtifactDescription::FromJson(hash_type, local));
 
         local["data"].erase("path");
-        CHECK_FALSE(ArtifactDescription::FromJson(local));
+        CHECK_FALSE(ArtifactDescription::FromJson(hash_type, local));
     }
 
     SECTION("Parse known artifact") {
         SECTION("without mandatory id") {
             known["data"]["id"] = 0;
-            CHECK_FALSE(ArtifactDescription::FromJson(known));
+            CHECK_FALSE(ArtifactDescription::FromJson(hash_type, known));
 
             known["data"].erase("id");
-            CHECK_FALSE(ArtifactDescription::FromJson(known));
+            CHECK_FALSE(ArtifactDescription::FromJson(hash_type, known));
         }
         SECTION("without mandatory size") {
             known["data"]["size"] = "0";
-            CHECK_FALSE(ArtifactDescription::FromJson(known));
+            CHECK_FALSE(ArtifactDescription::FromJson(hash_type, known));
 
             known["data"].erase("size");
-            CHECK_FALSE(ArtifactDescription::FromJson(known));
+            CHECK_FALSE(ArtifactDescription::FromJson(hash_type, known));
         }
         SECTION("without mandatory file_type") {
             known["data"]["file_type"] = "more_than_one_char";
-            CHECK_FALSE(ArtifactDescription::FromJson(known));
+            CHECK_FALSE(ArtifactDescription::FromJson(hash_type, known));
 
             known["data"].erase("file_type");
-            CHECK_FALSE(ArtifactDescription::FromJson(known));
+            CHECK_FALSE(ArtifactDescription::FromJson(hash_type, known));
         }
     }
 
     SECTION("Parse action artifact") {
         SECTION("without mandatory id") {
             action["data"]["id"] = 0;
-            CHECK_FALSE(ArtifactDescription::FromJson(action));
+            CHECK_FALSE(ArtifactDescription::FromJson(hash_type, action));
 
             action["data"].erase("id");
-            CHECK_FALSE(ArtifactDescription::FromJson(action));
+            CHECK_FALSE(ArtifactDescription::FromJson(hash_type, action));
         }
         SECTION("without mandatory path") {
             action["data"]["path"] = 0;
-            CHECK_FALSE(ArtifactDescription::FromJson(action));
+            CHECK_FALSE(ArtifactDescription::FromJson(hash_type, action));
 
             action["data"].erase("path");
-            CHECK_FALSE(ArtifactDescription::FromJson(action));
+            CHECK_FALSE(ArtifactDescription::FromJson(hash_type, action));
         }
     }
 }
@@ -151,16 +163,19 @@ TEST_CASE("From JSON", "[artifact_description]") {
 TEST_CASE("Description missing mandatory key/value pair",
           "[artifact_description]") {
     nlohmann::json const missing_type = {{"data", {{"path", "some/path"}}}};
-    CHECK(not ArtifactDescription::FromJson(missing_type));
+    CHECK(not ArtifactDescription::FromJson(TestHashType::ReadFromEnvironment(),
+                                            missing_type));
     nlohmann::json const missing_data = {{"type", "LOCAL"}};
-    CHECK(not ArtifactDescription::FromJson(missing_data));
+    CHECK(not ArtifactDescription::FromJson(TestHashType::ReadFromEnvironment(),
+                                            missing_data));
 }
 
 TEST_CASE("Local artifact description contains incorrect value for \"data\"",
           "[artifact_description]") {
     nlohmann::json const local_art_missing_path = {
         {"type", "LOCAL"}, {"data", nlohmann::json::object()}};
-    CHECK(not ArtifactDescription::FromJson(local_art_missing_path));
+    CHECK(not ArtifactDescription::FromJson(TestHashType::ReadFromEnvironment(),
+                                            local_art_missing_path));
 }
 
 TEST_CASE("Known artifact description contains incorrect value for \"data\"",
@@ -171,19 +186,22 @@ TEST_CASE("Known artifact description contains incorrect value for \"data\"",
         nlohmann::json const known_art_missing_id = {
             {"type", "KNOWN"},
             {"data", {{"size", 15}, {"file_type", file_type}}}};
-        CHECK(not ArtifactDescription::FromJson(known_art_missing_id));
+        CHECK(not ArtifactDescription::FromJson(
+            TestHashType::ReadFromEnvironment(), known_art_missing_id));
     }
     SECTION("missing \"size\"") {
         nlohmann::json const known_art_missing_size = {
             {"type", "KNOWN"},
             {"data", {{"id", "known_input"}, {"file_type", file_type}}}};
-        CHECK(not ArtifactDescription::FromJson(known_art_missing_size));
+        CHECK(not ArtifactDescription::FromJson(
+            TestHashType::ReadFromEnvironment(), known_art_missing_size));
     }
     SECTION("missing \"file_type\"") {
         nlohmann::json const known_art_missing_file_type = {
             {"type", "KNOWN"}, {"data", {{"id", "known_input"}, {"size", 15}}}};
 
-        CHECK(not ArtifactDescription::FromJson(known_art_missing_file_type));
+        CHECK(not ArtifactDescription::FromJson(
+            TestHashType::ReadFromEnvironment(), known_art_missing_file_type));
     }
 }
 
@@ -191,9 +209,11 @@ TEST_CASE("Action artifact description contains incorrect value for \"data\"",
           "[artifact_description]") {
     nlohmann::json const action_art_missing_id = {
         {"type", "ACTION"}, {"data", {{"path", "output/path"}}}};
-    CHECK(not ArtifactDescription::FromJson(action_art_missing_id));
+    CHECK(not ArtifactDescription::FromJson(TestHashType::ReadFromEnvironment(),
+                                            action_art_missing_id));
 
     nlohmann::json const action_art_missing_path = {
         {"type", "ACTION"}, {"data", {{"id", "action_id"}}}};
-    CHECK(not ArtifactDescription::FromJson(action_art_missing_path));
+    CHECK(not ArtifactDescription::FromJson(TestHashType::ReadFromEnvironment(),
+                                            action_art_missing_path));
 }

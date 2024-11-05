@@ -25,6 +25,7 @@
 
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/git_cas.hpp"
@@ -39,7 +40,7 @@ class RepositoryConfig {
         FileRoot target_root{workspace_root};
         FileRoot rule_root{target_root};
         FileRoot expression_root{rule_root};
-        std::map<std::string, std::string> name_mapping{};
+        std::map<std::string, std::string> name_mapping;
         std::string target_file_name{"TARGETS"};
         std::string rule_file_name{"RULES"};
         std::string expression_file_name{"EXPRESSIONS"};
@@ -140,7 +141,7 @@ class RepositoryConfig {
     // std::nullopt otherwise.
     [[nodiscard]] auto RepositoryKey(Storage const& storage,
                                      std::string const& repo) const noexcept
-        -> std::optional<std::string>;
+        -> std::optional<ArtifactDigest>;
 
     // used for testing
     void Reset() {
@@ -157,24 +158,21 @@ class RepositoryConfig {
         // Info structure (roots, file names, bindings)
         RepositoryInfo info{};
         // Base description if content-fixed
-        std::optional<nlohmann::json> base_desc{};
+        std::optional<nlohmann::json> base_desc;
         // Cache key if content-fixed
-        AtomicValue<std::optional<std::string>> key{};
+        AtomicValue<std::optional<ArtifactDigest>> key;
     };
 
     std::unordered_map<std::string, RepositoryData> repos_;
     GitCASPtr git_cas_;
-    AtomicValue<duplicates_t> duplicates_{};
+    AtomicValue<duplicates_t> duplicates_;
 
     template <class T>
     [[nodiscard]] auto Get(std::string const& repo,
                            std::function<T const*(RepositoryInfo const&)> const&
                                getter) const noexcept -> T const* {
         if (auto const* info = Info(repo)) {
-            try {  // satisfy clang-tidy's bugprone-exception-escape
-                return getter(*info);
-            } catch (...) {
-            }
+            return getter(*info);
         }
         return nullptr;
     }

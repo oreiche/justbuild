@@ -30,9 +30,9 @@
 #include "src/utils/cpp/hash_combine.hpp"
 
 struct RepoDescriptionForUpdating {
-    std::string repo{};
-    std::string branch{};
-    std::vector<std::string> inherit_env{}; /*non-key!*/
+    std::string repo;
+    std::string branch;
+    std::vector<std::string> inherit_env; /*non-key!*/
 
     [[nodiscard]] auto operator==(const RepoDescriptionForUpdating& other) const
         -> bool {
@@ -60,7 +60,8 @@ struct hash<RepoDescriptionForUpdating> {
     GitCASPtr const& git_cas,
     std::string const& git_bin,
     std::vector<std::string> const& launcher,
-    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<StorageConfig const*> const&
+        storage_config,  // native storage config
     gsl::not_null<JustMRStatistics*> const& stats,
     gsl::not_null<JustMRProgress*> const& progress,
     std::size_t jobs) -> GitUpdateMap;

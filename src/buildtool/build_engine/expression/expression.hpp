@@ -16,6 +16,7 @@
 #define INCLUDED_SRC_BUILDTOOL_BUILD_ENGINE_EXPRESSION_EXPRESSION_HPP
 
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -152,11 +153,7 @@ class Expression {
 
     [[nodiscard]] auto At(
         std::string const& key) && -> std::optional<ExpressionPtr> {
-        auto value = std::move(*this).Map().Find(key);
-        if (value) {
-            return std::move(*value);
-        }
-        return std::nullopt;
+        return std::move(*this).Map().Find(key);
     }
 
     template <class T>
@@ -222,7 +219,11 @@ class Expression {
         std::size_t pos) const& -> ExpressionPtr const&;
     [[nodiscard]] auto operator[](std::size_t pos) && -> ExpressionPtr;
 
-    enum class JsonMode { SerializeAll, SerializeAllButNodes, NullForNonJson };
+    enum class JsonMode : std::uint8_t {
+        SerializeAll,
+        SerializeAllButNodes,
+        NullForNonJson
+    };
 
     [[nodiscard]] auto ToJson(JsonMode mode = JsonMode::SerializeAll) const
         -> nlohmann::json;
@@ -264,8 +265,8 @@ class Expression {
                  map_t>
         data_{none_t{}};
 
-    AtomicValue<std::string> hash_{};
-    AtomicValue<bool> is_cachable_{};
+    AtomicValue<std::string> hash_;
+    AtomicValue<bool> is_cachable_;
 
     template <class T, std::size_t kIndex = 0>
         requires(IsValidType<T>())

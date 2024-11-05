@@ -27,7 +27,6 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
 #include "src/buildtool/common/retry_cli.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/git_context.hpp"
 #include "src/buildtool/logging/log_config.hpp"
@@ -208,14 +207,13 @@ void SetupLogging(MultiRepoLogArguments const& clargs) {
 }
 
 [[nodiscard]] auto CreateStorageConfig(MultiRepoCommonArguments const& args,
-                                       bool is_compatible) noexcept
+                                       HashFunction::Type hash_type) noexcept
     -> std::optional<StorageConfig> {
     StorageConfig::Builder builder;
     if (args.just_mr_paths->root.has_value()) {
         builder.SetBuildRoot(*args.just_mr_paths->root);
     }
-    builder.SetHashType(is_compatible ? HashFunction::Type::PlainSHA256
-                                      : HashFunction::Type::GitSHA1);
+    builder.SetHashType(hash_type);
 
     // As just-mr does not require the TargetCache, we do not need to set any of
     // the remote execution fields for the backend description.
@@ -238,6 +236,7 @@ auto main(int argc, char* argv[]) -> int {
             my_name = std::filesystem::path(argv[0]).filename().string();
         } catch (...) {
             // ignore, as my_name is only used for error messages
+            my_name.clear();
         }
     }
     try {
@@ -317,10 +316,11 @@ auto main(int argc, char* argv[]) -> int {
             arguments.common.explicit_distdirs.end());
 
         // Setup LocalStorageConfig to store the local_build_root properly
-        // and make the cas and git cache roots available
-        auto storage_config = CreateStorageConfig(
-            arguments.common, Compatibility::IsCompatible());
-        if (not storage_config) {
+        // and make the cas and git cache roots available. A native storage is
+        // always instantiated, while a compatible one only if needed.
+        auto const native_storage_config =
+            CreateStorageConfig(arguments.common, HashFunction::Type::GitSHA1);
+        if (not native_storage_config) {
             Logger::Log(LogLevel::Error,
                         "Failed to configure local build root.");
             return kExitGenericFailure;
@@ -328,12 +328,12 @@ auto main(int argc, char* argv[]) -> int {
 
         if (arguments.cmd == SubCommand::kGcRepo) {
             return RepositoryGarbageCollector::TriggerGarbageCollection(
-                       *storage_config)
+                       *native_storage_config)
                        ? kExitSuccess
                        : kExitBuiltinCommandFailure;
         }
 
-        auto const storage = Storage::Create(&*storage_config);
+        auto const native_storage = Storage::Create(&*native_storage_config);
 
         // check for conflicts in main repo name
         if ((not arguments.setup.sub_all) and arguments.common.main and
@@ -365,13 +365,6 @@ auto main(int argc, char* argv[]) -> int {
         // Run subcommands known to just and `do`
         if (arguments.cmd == SubCommand::kJustDo or
             arguments.cmd == SubCommand::kJustSubCmd) {
-            // check setup configuration arguments for validity
-            if (arguments.common.compatible and arguments.common.fetch_absent) {
-                Logger::Log(LogLevel::Error,
-                            "Fetching absent repositories only available in "
-                            "native mode!");
-                return kExitConfigError;
-            }
             return CallJust(config_file,
                             arguments.common,
                             arguments.setup,
@@ -380,17 +373,17 @@ auto main(int argc, char* argv[]) -> int {
                             arguments.auth,
                             arguments.retry,
                             arguments.launch_fwd,
-                            *storage_config,
-                            storage,
+                            *native_storage_config,
+                            native_storage,
                             forward_build_root,
                             my_name);
         }
         auto repo_lock =
-            RepositoryGarbageCollector::SharedLock(*storage_config);
+            RepositoryGarbageCollector::SharedLock(*native_storage_config);
         if (not repo_lock) {
             return kExitGenericFailure;
         }
-        auto lock = GarbageCollector::SharedLock(*storage_config);
+        auto lock = GarbageCollector::SharedLock(*native_storage_config);
         if (not lock) {
             return kExitGenericFailure;
         }
@@ -402,13 +395,6 @@ auto main(int argc, char* argv[]) -> int {
         // Run subcommand `setup` or `setup-env`
         if (arguments.cmd == SubCommand::kSetup or
             arguments.cmd == SubCommand::kSetupEnv) {
-            // check setup configuration arguments for validity
-            if (arguments.common.compatible and arguments.common.fetch_absent) {
-                Logger::Log(LogLevel::Error,
-                            "Fetching absent repositories only available in "
-                            "native mode!");
-                return kExitConfigError;
-            }
             auto mr_config_path = MultiRepoSetup(
                 config,
                 arguments.common,
@@ -416,8 +402,8 @@ auto main(int argc, char* argv[]) -> int {
                 arguments.just_cmd,
                 arguments.auth,
                 arguments.retry,
-                *storage_config,
-                storage,
+                *native_storage_config,
+                native_storage,
                 /*interactive=*/(arguments.cmd == SubCommand::kSetupEnv),
                 my_name);
             // dump resulting config to stdout
@@ -436,37 +422,20 @@ auto main(int argc, char* argv[]) -> int {
             return MultiRepoUpdate(config,
                                    arguments.common,
                                    arguments.update,
-                                   *storage_config,
+                                   *native_storage_config,
                                    my_name);
         }
 
         // Run subcommand `fetch`
         if (arguments.cmd == SubCommand::kFetch) {
-            // check fetch configuration arguments for validity
-            if (arguments.common.compatible) {
-                if (arguments.common.remote_execution_address and
-                    arguments.fetch.backup_to_remote) {
-                    Logger::Log(
-                        LogLevel::Error,
-                        "Remote backup for fetched archives only available "
-                        "in native mode!");
-                    return kExitConfigError;
-                }
-                if (arguments.common.fetch_absent) {
-                    Logger::Log(LogLevel::Error,
-                                "Fetching absent repositories only available "
-                                "in native mode!");
-                    return kExitConfigError;
-                }
-            }
             return MultiRepoFetch(config,
                                   arguments.common,
                                   arguments.setup,
                                   arguments.fetch,
                                   arguments.auth,
                                   arguments.retry,
-                                  *storage_config,
-                                  storage,
+                                  *native_storage_config,
+                                  native_storage,
                                   my_name);
         }
 

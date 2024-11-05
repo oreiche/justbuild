@@ -23,7 +23,7 @@
 
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
-#include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
@@ -43,7 +43,7 @@ class ObjectCAS {
   public:
     /// \brief Callback type for checking blob existence.
     /// \returns true if a blob for the given digest exists at the given path.
-    using ExistsFunc = std::function<bool(bazel_re::Digest const&,
+    using ExistsFunc = std::function<bool(ArtifactDigest const&,
                                           std::filesystem::path const&)>;
 
     /// \brief Create new object CAS in store_path directory.
@@ -53,13 +53,13 @@ class ObjectCAS {
     /// \param store_path   The path to use for storing blobs.
     /// \param exists       (optional) Function for checking blob existence.
     explicit ObjectCAS(
-        HashFunction hash_function,
+        gsl::not_null<HashFunction const*> const& hash_function,
         std::filesystem::path const& store_path,
         std::optional<gsl::not_null<ExistsFunc>> exists = std::nullopt)
         : file_store_{store_path},
           exists_{exists.has_value() ? std::move(exists)->get()
                                      : kDefaultExists},
-          hash_function_{hash_function} {}
+          hash_function_{*hash_function} {}
 
     ObjectCAS(ObjectCAS const&) = delete;
     ObjectCAS(ObjectCAS&&) = delete;
@@ -77,7 +77,7 @@ class ObjectCAS {
     /// \param bytes    The bytes do create the blob from.
     /// \returns Digest of the stored blob or nullopt in case of error.
     [[nodiscard]] auto StoreBlobFromBytes(std::string const& bytes)
-        const noexcept -> std::optional<bazel_re::Digest> {
+        const noexcept -> std::optional<ArtifactDigest> {
         return StoreBlob(bytes, /*is_owner=*/true);
     }
 
@@ -87,16 +87,16 @@ class ObjectCAS {
     /// \returns Digest of the stored blob or nullopt in case of error.
     [[nodiscard]] auto StoreBlobFromFile(std::filesystem::path const& file_path,
                                          bool is_owner = false) const noexcept
-        -> std::optional<bazel_re::Digest> {
+        -> std::optional<ArtifactDigest> {
         return StoreBlob(file_path, is_owner);
     }
 
     /// \brief Get path to blob.
     /// \param digest   Digest of the blob to lookup.
     /// \returns Path to blob if found or nullopt otherwise.
-    [[nodiscard]] auto BlobPath(bazel_re::Digest const& digest) const noexcept
+    [[nodiscard]] auto BlobPath(ArtifactDigest const& digest) const noexcept
         -> std::optional<std::filesystem::path> {
-        auto id = NativeSupport::Unprefix(digest.hash());
+        auto const& id = digest.hash();
         auto blob_path = file_store_.GetPath(id);
         if (not IsAvailable(digest, blob_path)) {
             logger_.Emit(LogLevel::Debug, "Blob not found {}", id);
@@ -115,7 +115,7 @@ class ObjectCAS {
     FileStorage<kStorageType, StoreMode::FirstWins, /*kSetEpochTime=*/true>
         file_store_;
     gsl::not_null<ExistsFunc> exists_;
-    HashFunction const hash_function_;
+    HashFunction const& hash_function_;
 
     /// Default callback for checking blob existence.
     static inline ExistsFunc const kDefaultExists = [](auto const& /*digest*/,
@@ -124,17 +124,18 @@ class ObjectCAS {
     };
 
     [[nodiscard]] auto CreateDigest(std::string const& bytes) const noexcept
-        -> std::optional<bazel_re::Digest> {
-        return ArtifactDigest::Create<kType>(hash_function_, bytes);
+        -> std::optional<ArtifactDigest> {
+        return ArtifactDigestFactory::HashDataAs<kType>(hash_function_, bytes);
     }
 
     [[nodiscard]] auto CreateDigest(std::filesystem::path const& file_path)
-        const noexcept -> std::optional<bazel_re::Digest> {
-        return ArtifactDigest::CreateFromFile<kType>(hash_function_, file_path);
+        const noexcept -> std::optional<ArtifactDigest> {
+        return ArtifactDigestFactory::HashFileAs<kType>(hash_function_,
+                                                        file_path);
     }
 
     [[nodiscard]] auto IsAvailable(
-        bazel_re::Digest const& digest,
+        ArtifactDigest const& digest,
         std::filesystem::path const& path) const noexcept -> bool {
         try {
             return std::invoke(exists_.get(), digest, path);
@@ -160,9 +161,9 @@ class ObjectCAS {
     /// \brief Store blob from unspecified data to storage.
     template <class T>
     [[nodiscard]] auto StoreBlob(T const& data, bool is_owner) const noexcept
-        -> std::optional<bazel_re::Digest> {
+        -> std::optional<ArtifactDigest> {
         if (auto digest = CreateDigest(data)) {
-            auto id = NativeSupport::Unprefix(digest->hash());
+            auto const& id = digest->hash();
             if (IsAvailable(*digest, file_store_.GetPath(id))) {
                 return digest;
             }

@@ -17,32 +17,33 @@
 #include <cstddef>
 
 #include "nlohmann/json.hpp"
-#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/json.hpp"
 
 namespace {
 [[nodiscard]] auto DescribeLocalArtifact(std::filesystem::path const& src_path,
-                                         std::string const& repository) noexcept
+                                         std::string const& repository)
     -> nlohmann::json;
 
-[[nodiscard]] auto DescribeKnownArtifact(
-    std::string const& blob_id,
-    std::size_t size,
-    ObjectType type = ObjectType::File) noexcept -> nlohmann::json;
+[[nodiscard]] auto DescribeKnownArtifact(std::string const& blob_id,
+                                         std::size_t size,
+                                         ObjectType type = ObjectType::File)
+    -> nlohmann::json;
 
 [[nodiscard]] auto DescribeActionArtifact(std::string const& action_id,
-                                          std::string const& out_path) noexcept
+                                          std::string const& out_path)
     -> nlohmann::json;
 
-[[nodiscard]] auto DescribeTreeArtifact(std::string const& tree_id) noexcept
+[[nodiscard]] auto DescribeTreeArtifact(std::string const& tree_id)
     -> nlohmann::json;
 
 [[nodiscard]] auto CreateLocalArtifactDescription(nlohmann::json const& data)
     -> std::optional<ArtifactDescription>;
 
-[[nodiscard]] auto CreateKnownArtifactDescription(nlohmann::json const& data)
+[[nodiscard]] auto CreateKnownArtifactDescription(HashFunction::Type hash_type,
+                                                  nlohmann::json const& data)
     -> std::optional<ArtifactDescription>;
 
 [[nodiscard]] auto CreateActionArtifactDescription(nlohmann::json const& data)
@@ -79,7 +80,8 @@ auto ArtifactDescription::CreateTree(std::string tree_id) noexcept
     return ArtifactDescription{std::move(tree_id)};
 }
 
-auto ArtifactDescription::FromJson(nlohmann::json const& json) noexcept
+auto ArtifactDescription::FromJson(HashFunction::Type hash_type,
+                                   nlohmann::json const& json) noexcept
     -> std::optional<ArtifactDescription> {
     try {
         auto const type = ExtractValueAs<std::string>(
@@ -107,7 +109,7 @@ auto ArtifactDescription::FromJson(nlohmann::json const& json) noexcept
             return CreateLocalArtifactDescription(*data);
         }
         if (*type == "KNOWN") {
-            return CreateKnownArtifactDescription(*data);
+            return CreateKnownArtifactDescription(hash_type, *data);
         }
         if (*type == "ACTION") {
             return CreateActionArtifactDescription(*data);
@@ -127,30 +129,23 @@ auto ArtifactDescription::FromJson(nlohmann::json const& json) noexcept
     return std::nullopt;
 }
 
-auto ArtifactDescription::ToJson() const noexcept -> nlohmann::json {
-    try {
-        if (std::holds_alternative<Local>(data_)) {
-            auto const& [path, repo] = std::get<Local>(data_);
-            return DescribeLocalArtifact(path.string(), repo);
-        }
-        if (std::holds_alternative<Known>(data_)) {
-            auto const& [digest, file_type, _] = std::get<Known>(data_);
-            return DescribeKnownArtifact(
-                digest.hash(), digest.size(), file_type);
-        }
-        if (std::holds_alternative<Action>(data_)) {
-            auto const& [action_id, path] = std::get<Action>(data_);
-            return DescribeActionArtifact(action_id, path);
-        }
-        if (std::holds_alternative<Tree>(data_)) {
-            return DescribeTreeArtifact(std::get<Tree>(data_));
-        }
-        Logger::Log(LogLevel::Error, "Internal error, unknown artifact type");
-    } catch (std::exception const& ex) {
-        Logger::Log(LogLevel::Error,
-                    "Serializing to JSON failed with error:\n{}",
-                    ex.what());
+auto ArtifactDescription::ToJson() const -> nlohmann::json {
+    if (std::holds_alternative<Local>(data_)) {
+        auto const& [path, repo] = std::get<Local>(data_);
+        return DescribeLocalArtifact(path.string(), repo);
     }
+    if (std::holds_alternative<Known>(data_)) {
+        auto const& [digest, file_type, _] = std::get<Known>(data_);
+        return DescribeKnownArtifact(digest.hash(), digest.size(), file_type);
+    }
+    if (std::holds_alternative<Action>(data_)) {
+        auto const& [action_id, path] = std::get<Action>(data_);
+        return DescribeActionArtifact(action_id, path);
+    }
+    if (std::holds_alternative<Tree>(data_)) {
+        return DescribeTreeArtifact(std::get<Tree>(data_));
+    }
+    Logger::Log(LogLevel::Error, "Internal error, unknown artifact type");
     Ensures(false);  // unreachable
     return {};
 }
@@ -163,8 +158,7 @@ auto ArtifactDescription::ToArtifact() const noexcept -> Artifact {
         }
         if (std::holds_alternative<Known>(data_)) {
             auto const& [digest, file_type, repo] = std::get<Known>(data_);
-            return Artifact::CreateKnownArtifact(
-                id_, digest.hash(), digest.size(), file_type, repo);
+            return Artifact::CreateKnownArtifact(id_, digest, file_type, repo);
         }
         if (std::holds_alternative<Action>(data_) or
             std::holds_alternative<Tree>(data_)) {
@@ -209,8 +203,7 @@ auto ArtifactDescription::ComputeId(nlohmann::json const& desc) noexcept
 
 namespace {
 auto DescribeLocalArtifact(std::filesystem::path const& src_path,
-                           std::string const& repository) noexcept
-    -> nlohmann::json {
+                           std::string const& repository) -> nlohmann::json {
     return {
         {"type", "LOCAL"},
         {"data", {{"path", src_path.string()}, {"repository", repository}}}};
@@ -218,7 +211,7 @@ auto DescribeLocalArtifact(std::filesystem::path const& src_path,
 
 auto DescribeKnownArtifact(std::string const& blob_id,
                            std::size_t size,
-                           ObjectType type) noexcept -> nlohmann::json {
+                           ObjectType type) -> nlohmann::json {
     std::string const typestr{ToChar(type)};
     return {
         {"type", "KNOWN"},
@@ -226,14 +219,12 @@ auto DescribeKnownArtifact(std::string const& blob_id,
 }
 
 auto DescribeActionArtifact(std::string const& action_id,
-                            std::string const& out_path) noexcept
-    -> nlohmann::json {
+                            std::string const& out_path) -> nlohmann::json {
     return {{"type", "ACTION"},
             {"data", {{"id", action_id}, {"path", out_path}}}};
 }
 
-auto DescribeTreeArtifact(std::string const& tree_id) noexcept
-    -> nlohmann::json {
+auto DescribeTreeArtifact(std::string const& tree_id) -> nlohmann::json {
     return {{"type", "TREE"}, {"data", {{"id", tree_id}}}};
 }
 
@@ -260,7 +251,8 @@ auto CreateLocalArtifactDescription(nlohmann::json const& data)
     return std::nullopt;
 }
 
-auto CreateKnownArtifactDescription(nlohmann::json const& data)
+auto CreateKnownArtifactDescription(HashFunction::Type hash_type,
+                                    nlohmann::json const& data)
     -> std::optional<ArtifactDescription> {
     auto const blob_id =
         ExtractValueAs<std::string>(data, "id", [](std::string const& error) {
@@ -285,9 +277,15 @@ auto CreateKnownArtifactDescription(nlohmann::json const& data)
         });
     if (blob_id.has_value() and size.has_value() and file_type.has_value() and
         file_type->size() == 1) {
-        auto const& object_type = FromChar((*file_type)[0]);
-        ArtifactDigest digest{*blob_id, *size, IsTreeObject(object_type)};
-        return ArtifactDescription::CreateKnown(std::move(digest), object_type);
+        auto const object_type = FromChar((*file_type)[0]);
+
+        auto digest = ArtifactDigestFactory::Create(
+            hash_type, *blob_id, *size, IsTreeObject(object_type));
+        if (not digest) {
+            return std::nullopt;
+        }
+        return ArtifactDescription::CreateKnown(*std::move(digest),
+                                                object_type);
     }
     return std::nullopt;
 }

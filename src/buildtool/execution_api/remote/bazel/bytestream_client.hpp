@@ -17,19 +17,17 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <functional>
 #include <iomanip>
 #include <optional>
 #include <string>
 #include <utility>  // std::move
-#include <vector>
 
 #include "google/bytestream/bytestream.grpc.pb.h"
 #include "gsl/gsl"
 #include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/common/remote/port.hpp"
-#include "src/buildtool/execution_api/common/bytestream_common.hpp"
+#include "src/buildtool/execution_api/common/bytestream_utils.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -72,11 +70,11 @@ class ByteStreamClient {
 
         IncrementalReader(
             gsl::not_null<google::bytestream::ByteStream::Stub*> const& stub,
-            Logger const* logger,
-            std::string const& resource_name)
+            ByteStreamUtils::ReadRequest&& read_request,
+            Logger const* logger)
             : logger_{logger} {
             google::bytestream::ReadRequest request{};
-            request.set_resource_name(resource_name);
+            request.set_resource_name(std::move(read_request).ToString());
             reader_ = stub->Read(&ctx_, request);
         }
     };
@@ -88,14 +86,14 @@ class ByteStreamClient {
             CreateChannelWithCredentials(server, port, auth));
     }
 
-    [[nodiscard]] auto IncrementalRead(
-        std::string const& resource_name) const noexcept -> IncrementalReader {
-        return IncrementalReader{stub_.get(), &logger_, resource_name};
+    [[nodiscard]] auto IncrementalRead(ByteStreamUtils::ReadRequest&& request)
+        const noexcept -> IncrementalReader {
+        return IncrementalReader{stub_.get(), std::move(request), &logger_};
     }
 
-    [[nodiscard]] auto Read(std::string const& resource_name) const noexcept
-        -> std::optional<std::string> {
-        auto reader = IncrementalRead(resource_name);
+    [[nodiscard]] auto Read(ByteStreamUtils::ReadRequest&& request)
+        const noexcept -> std::optional<std::string> {
+        auto reader = IncrementalRead(std::move(request));
         std::string output{};
         auto data = reader.Next();
         while (data and not data->empty()) {
@@ -108,22 +106,21 @@ class ByteStreamClient {
         return output;
     }
 
-    [[nodiscard]] auto Write(std::string const& resource_name,
+    [[nodiscard]] auto Write(ByteStreamUtils::WriteRequest&& write_request,
                              std::string const& data) const noexcept -> bool {
         try {
             grpc::ClientContext ctx;
             google::bytestream::WriteResponse response{};
             auto writer = stub_->Write(&ctx, &response);
 
-            auto* allocated_data =
-                std::make_unique<std::string>(kChunkSize, '\0').release();
             google::bytestream::WriteRequest request{};
-            request.set_resource_name(resource_name);
-            request.set_allocated_data(allocated_data);
+            request.set_resource_name(std::move(write_request).ToString());
+            request.mutable_data()->resize(ByteStreamUtils::kChunkSize, '\0');
 
-            std::size_t pos{};
-            do {
-                auto const size = std::min(data.size() - pos, kChunkSize);
+            std::size_t pos = 0;
+            do {  // NOLINT(cppcoreguidelines-avoid-do-while)
+                auto const size =
+                    std::min(data.size() - pos, ByteStreamUtils::kChunkSize);
                 request.mutable_data()->resize(size);
                 data.copy(request.mutable_data()->data(), size, pos);
                 request.set_write_offset(static_cast<int>(pos));
@@ -134,24 +131,25 @@ class ByteStreamClient {
                     // the `Write()`, the client should check the status of the
                     // `Write()` by calling `QueryWriteStatus()` and continue
                     // writing from the returned `committed_size`.
-                    auto const committed_size = QueryWriteStatus(resource_name);
+                    auto const committed_size =
+                        QueryWriteStatus(request.resource_name());
                     if (committed_size <= 0) {
                         logger_.Emit(
                             LogLevel::Warning,
                             "broken stream for upload to resource name {}",
-                            resource_name);
+                            request.resource_name());
                         return false;
                     }
                     pos = gsl::narrow<std::size_t>(committed_size);
                 }
                 else {
-                    pos += kChunkSize;
+                    pos += ByteStreamUtils::kChunkSize;
                 }
             } while (pos < data.size());
             if (not writer->WritesDone()) {
                 logger_.Emit(LogLevel::Warning,
                              "broken stream for upload to resource name {}",
-                             resource_name);
+                             request.resource_name());
                 return false;
             }
 
@@ -174,32 +172,6 @@ class ByteStreamClient {
             logger_.Emit(LogLevel::Warning, "Caught exception in Write");
             return false;
         }
-    }
-
-    template <class T_Input>
-    void ReadMany(
-        std::vector<T_Input> const& inputs,
-        std::function<std::string(T_Input const&)> const& to_resource_name,
-        std::function<void(std::string)> const& parse_data) const noexcept {
-        for (auto const& i : inputs) {
-            auto data = Read(to_resource_name(i));
-            if (data) {
-                parse_data(std::move(*data));
-            }
-        }
-    }
-
-    template <class T_Input>
-    [[nodiscard]] auto WriteMany(
-        std::vector<T_Input> const& inputs,
-        std::function<std::string(T_Input const&)> const& to_resource_name,
-        std::function<std::string(T_Input const&)> const& to_data)
-        const noexcept -> bool {
-        return std::all_of(inputs.begin(),
-                           inputs.end(),
-                           [this, &to_resource_name, &to_data](auto const& i) {
-                               return Write(to_resource_name(i), to_data(i));
-                           });
     }
 
   private:

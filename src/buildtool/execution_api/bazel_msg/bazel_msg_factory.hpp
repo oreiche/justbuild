@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "gsl/gsl"
@@ -29,11 +30,13 @@
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
 #include "src/buildtool/execution_api/bazel_msg/directory_tree.hpp"
+#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 /// \brief Factory for creating Bazel API protobuf messages.
 /// Responsible for creating protobuf messages necessary for Bazel API server
@@ -41,16 +44,29 @@
 class BazelMsgFactory {
   public:
     /// \brief Store or otherwise process a blob. Returns success flag.
-    using BlobProcessFunc = std::function<bool(BazelBlob&&)>;
+    using BlobProcessFunc = std::function<bool(ArtifactBlob&&)>;
     using LinkDigestResolveFunc =
-        std::function<void(std::vector<bazel_re::Digest> const&,
-                           std::vector<std::string>*)>;
+        std::function<void(std::vector<ArtifactDigest> const&,
+                           gsl::not_null<std::vector<std::string>*> const&)>;
+    using GitReadFunc = std::function<std::optional<
+        std::variant<std::filesystem::path, std::string>>(ArtifactDigest const&,
+                                                          ObjectType)>;
+    using BlobStoreFunc = std::function<std::optional<ArtifactDigest>(
+        std::variant<std::filesystem::path, std::string> const&,
+        bool)>;
     using FileStoreFunc = std::function<
-        std::optional<bazel_re::Digest>(std::filesystem::path const&, bool)>;
+        std::optional<ArtifactDigest>(std::filesystem::path const&, bool)>;
     using SymlinkStoreFunc =
-        std::function<std::optional<bazel_re::Digest>(std::string const&)>;
+        std::function<std::optional<ArtifactDigest>(std::string const&)>;
     using TreeStoreFunc =
-        std::function<std::optional<bazel_re::Digest>(std::string const&)>;
+        std::function<std::optional<ArtifactDigest>(std::string const&)>;
+    using RehashedDigestReadFunc =
+        std::function<expected<std::optional<Artifact::ObjectInfo>,
+                               std::string>(ArtifactDigest const&)>;
+    using RehashedDigestStoreFunc =
+        std::function<std::optional<std::string>(ArtifactDigest const&,
+                                                 ArtifactDigest const&,
+                                                 ObjectType)>;
 
     /// \brief Create Directory digest from artifact tree structure. Uses
     /// compatible HashFunction for hashing. Recursively traverse entire tree
@@ -63,7 +79,32 @@ class BazelMsgFactory {
         DirectoryTreePtr const& tree,
         LinkDigestResolveFunc const& resolve_links,
         BlobProcessFunc const& process_blob) noexcept
-        -> std::optional<bazel_re::Digest>;
+        -> std::optional<ArtifactDigest>;
+
+    /// \brief Create Directory digest from an owned Git tree.
+    /// Recursively traverse entire tree and store files and directories.
+    /// Used to convert from native to compatible representation of trees.
+    /// \param digest       Digest of a Git tree.
+    /// \param read_git     Function for reading Git tree entries. Reading from
+    ///                     CAS returns the CAS path, while reading from Git CAS
+    ///                     returns content directly. This differentiation is
+    ///                     made to avoid unnecessary storing blobs in memory.
+    /// \param store_file   Function for storing file via path or content.
+    /// \param store_dir    Function for storing Directory blobs.
+    /// \param store_symlink    Function for storing symlink via content.
+    /// \param read_rehashed    Function to read mapping between digests.
+    /// \param store_rehashed   Function to store mapping between digests.
+    /// \returns Digest representing the entire tree directory, or error string
+    /// on failure.
+    [[nodiscard]] static auto CreateDirectoryDigestFromGitTree(
+        ArtifactDigest const& digest,
+        GitReadFunc const& read_git,
+        BlobStoreFunc const& store_file,
+        TreeStoreFunc const& store_dir,
+        SymlinkStoreFunc const& store_symlink,
+        RehashedDigestReadFunc const& read_rehashed,
+        RehashedDigestStoreFunc const& store_rehashed) noexcept
+        -> expected<ArtifactDigest, std::string>;
 
     /// \brief Create Directory digest from local file root.
     /// Recursively traverse entire root and store files and directories.
@@ -77,7 +118,7 @@ class BazelMsgFactory {
         FileStoreFunc const& store_file,
         TreeStoreFunc const& store_dir,
         SymlinkStoreFunc const& store_symlink) noexcept
-        -> std::optional<bazel_re::Digest>;
+        -> std::optional<ArtifactDigest>;
 
     /// \brief Create Git tree digest from local file root.
     /// Recursively traverse entire root and store files and directories.
@@ -91,7 +132,7 @@ class BazelMsgFactory {
         FileStoreFunc const& store_file,
         TreeStoreFunc const& store_tree,
         SymlinkStoreFunc const& store_symlink) noexcept
-        -> std::optional<bazel_re::Digest>;
+        -> std::optional<ArtifactDigest>;
 
     struct ActionDigestRequest;
     /// \brief Creates Action digest from command line.
@@ -99,7 +140,7 @@ class BazelMsgFactory {
     /// CommandBundle that can be captured via BlobStoreFunc.
     /// \returns Digest representing the action.
     [[nodiscard]] static auto CreateActionDigestFromCommandLine(
-        ActionDigestRequest const& request) -> std::optional<bazel_re::Digest>;
+        ActionDigestRequest const& request) -> std::optional<ArtifactDigest>;
 
     /// \brief Create message vector from std::map.
     /// \param[in]  input   map
@@ -160,7 +201,7 @@ struct BazelMsgFactory::ActionDigestRequest final {
     VectorPtr<bazel_re::Platform_Property> const properties;
 
     /// \brief The Digest of the execution directory.
-    gsl::not_null<bazel_re::Digest const*> const exec_dir;
+    gsl::not_null<ArtifactDigest const*> const exec_dir;
 
     /// \brief Hash function to be used.
     HashFunction const hash_function;

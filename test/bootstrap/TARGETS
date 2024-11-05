@@ -7,9 +7,9 @@
     ]
   , "test": ["test-bootstrap.sh"]
   , "deps":
-    [ ["@", "src", "", "bootstrap-src"]
+    [ "prune-config.py"
     , ["@", "just-distfiles", "", "distdir"]
-    , "prune-config.py"
+    , ["@", "src", "", "bootstrap-src"]
     ]
   }
 , "bundled-test-debug":
@@ -60,6 +60,7 @@
     , ["@", "protoc", "", "protoc"]
     , ["@", "protoc", "", "libprotobuf"]
     , ["@", "grpc", "", "grpc++"]
+    , ["@", "grpc", "", "grpc"]
     , ["@", "grpc", "", "grpc_cpp_plugin"]
     , ["@", "src", "", "libarchive"]
     ]
@@ -107,8 +108,8 @@
     [ "bundled-test"
     , "bundled-test-debug"
     , "bundled-test-gnu"
-    , "pkgconfig-test"
     , "mixed-test"
+    , "pkgconfig-test"
     , "symlink-test"
     ]
   }

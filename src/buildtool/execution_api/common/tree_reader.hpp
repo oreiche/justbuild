@@ -23,6 +23,7 @@
 
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/execution_api/common/tree_reader_utils.hpp"
 #include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
@@ -52,13 +53,13 @@ class TreeReader final {
 
         TreeReaderUtils::InfoStoreFunc store_info =
             [&result, &parent](std::filesystem::path const& path,
-                               Artifact::ObjectInfo const& info) {
+                               Artifact::ObjectInfo&& info) {
                 result.paths.emplace_back(parent / path);
-                result.infos.emplace_back(info);
+                result.infos.emplace_back(std::move(info));
                 return true;
             };
 
-        if (Compatibility::IsCompatible()) {
+        if (not impl_.IsNativeProtocol()) {
             auto tree = impl_.ReadDirectory(digest);
             if (tree and
                 not TreeReaderUtils::ReadObjectInfos(*tree, store_info)) {
@@ -101,16 +102,16 @@ class TreeReader final {
                     store, parent, digest, include_trees)) {
                 return result;
             }
+            return std::nullopt;
         } catch (...) {
-            // fallthrough
+            return std::nullopt;
         }
-        return std::nullopt;
     }
 
   private:
     TImpl impl_;
 
-    [[nodiscard]] static inline auto IsDirectoryEmpty(
+    [[nodiscard]] static auto IsDirectoryEmpty(
         bazel_re::Directory const& dir) noexcept -> bool {
         return dir.files().empty() and dir.directories().empty() and
                dir.symlinks().empty();
@@ -124,14 +125,14 @@ class TreeReader final {
         TreeReaderUtils::InfoStoreFunc internal_store =
             [this, &store, &parent, include_trees](
                 std::filesystem::path const& path,
-                Artifact::ObjectInfo const& info) -> bool {
+                Artifact::ObjectInfo&& info) -> bool {
             return IsTreeObject(info.type)
                        ? ReadObjectInfosRecursively(
                              store, parent / path, info.digest, include_trees)
-                       : store(parent / path, info);
+                       : store(parent / path, std::move(info));
         };
 
-        if (Compatibility::IsCompatible()) {
+        if (not impl_.IsNativeProtocol()) {
             if (auto tree = impl_.ReadDirectory(digest)) {
                 if (include_trees and IsDirectoryEmpty(*tree)) {
                     if (not store(parent, {digest, ObjectType::Tree})) {

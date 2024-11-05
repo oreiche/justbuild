@@ -23,6 +23,7 @@
 
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/file_system/object_cas.hpp"
@@ -51,15 +52,15 @@ class LocalCAS {
     explicit LocalCAS(
         GenerationConfig const& config,
         gsl::not_null<Uplinker<kDoGlobalUplink> const*> const& uplinker)
-        : cas_file_{config.storage_config->hash_function,
+        : cas_file_{&config.storage_config->hash_function,
                     config.cas_f,
-                    MakeUplinker<ObjectType::File>(uplinker)},
-          cas_exec_{config.storage_config->hash_function,
+                    MakeUplinker<ObjectType::File>(config, uplinker)},
+          cas_exec_{&config.storage_config->hash_function,
                     config.cas_x,
-                    MakeUplinker<ObjectType::Executable>(uplinker)},
-          cas_tree_{config.storage_config->hash_function,
+                    MakeUplinker<ObjectType::Executable>(config, uplinker)},
+          cas_tree_{&config.storage_config->hash_function,
                     config.cas_t,
-                    MakeUplinker<ObjectType::Tree>(uplinker)},
+                    MakeUplinker<ObjectType::Tree>(config, uplinker)},
           cas_file_large_{this, config, uplinker},
           cas_tree_large_{this, config, uplinker},
           hash_function_{config.storage_config->hash_function} {}
@@ -95,7 +96,7 @@ class LocalCAS {
     template <bool kOwner = false>
     [[nodiscard]] auto StoreBlob(std::filesystem::path const& file_path,
                                  bool is_executable) const noexcept
-        -> std::optional<bazel_re::Digest> {
+        -> std::optional<ArtifactDigest> {
         return is_executable ? cas_exec_.StoreBlobFromFile(file_path, kOwner)
                              : cas_file_.StoreBlobFromFile(file_path, kOwner);
     }
@@ -106,7 +107,7 @@ class LocalCAS {
     /// \returns Digest of the stored blob or nullopt otherwise.
     [[nodiscard]] auto StoreBlob(std::string const& bytes,
                                  bool is_executable = false) const noexcept
-        -> std::optional<bazel_re::Digest> {
+        -> std::optional<ArtifactDigest> {
         return is_executable ? cas_exec_.StoreBlobFromBytes(bytes)
                              : cas_file_.StoreBlobFromBytes(bytes);
     }
@@ -117,7 +118,7 @@ class LocalCAS {
     /// \returns Digest of the stored tree or nullopt otherwise.
     template <bool kOwner = false>
     [[nodiscard]] auto StoreTree(std::filesystem::path const& file_path)
-        const noexcept -> std::optional<bazel_re::Digest> {
+        const noexcept -> std::optional<ArtifactDigest> {
         return cas_tree_.StoreBlobFromFile(file_path, kOwner);
     }
 
@@ -125,7 +126,7 @@ class LocalCAS {
     /// \param bytes    The bytes to create the tree from.
     /// \returns Digest of the stored tree or nullopt otherwise.
     [[nodiscard]] auto StoreTree(std::string const& bytes) const noexcept
-        -> std::optional<bazel_re::Digest> {
+        -> std::optional<ArtifactDigest> {
         return cas_tree_.StoreBlobFromBytes(bytes);
     }
 
@@ -134,7 +135,7 @@ class LocalCAS {
     /// \param digest           Digest of the blob to lookup.
     /// \param is_executable    Lookup blob with executable permissions.
     /// \returns Path to the blob if found or nullopt otherwise.
-    [[nodiscard]] auto BlobPath(bazel_re::Digest const& digest,
+    [[nodiscard]] auto BlobPath(ArtifactDigest const& digest,
                                 bool is_executable) const noexcept
         -> std::optional<std::filesystem::path> {
         auto const path = BlobPathNoSync(digest, is_executable);
@@ -146,7 +147,7 @@ class LocalCAS {
     /// \param digest           Digest of the blob to lookup.
     /// \param is_executable    Lookup blob with executable permissions.
     /// \returns Path to the blob if found or nullopt otherwise.
-    [[nodiscard]] auto BlobPathNoSync(bazel_re::Digest const& digest,
+    [[nodiscard]] auto BlobPathNoSync(ArtifactDigest const& digest,
                                       bool is_executable) const noexcept
         -> std::optional<std::filesystem::path> {
         return is_executable ? cas_exec_.BlobPath(digest)
@@ -157,8 +158,8 @@ class LocalCAS {
     /// \param digest           The digest of a blob to be split.
     /// \returns                Digests of the parts of the large object or an
     /// error code on failure.
-    [[nodiscard]] auto SplitBlob(bazel_re::Digest const& digest) const noexcept
-        -> expected<std::vector<bazel_re::Digest>, LargeObjectError> {
+    [[nodiscard]] auto SplitBlob(ArtifactDigest const& digest) const noexcept
+        -> expected<std::vector<ArtifactDigest>, LargeObjectError> {
         return cas_file_large_.Split(digest);
     }
 
@@ -168,10 +169,10 @@ class LocalCAS {
     /// \param is_executable    Splice the blob with executable permissions.
     /// \return                 The digest of the result or an error code on
     /// failure.
-    [[nodiscard]] auto SpliceBlob(bazel_re::Digest const& digest,
-                                  std::vector<bazel_re::Digest> const& parts,
+    [[nodiscard]] auto SpliceBlob(ArtifactDigest const& digest,
+                                  std::vector<ArtifactDigest> const& parts,
                                   bool is_executable) const noexcept
-        -> expected<bazel_re::Digest, LargeObjectError> {
+        -> expected<ArtifactDigest, LargeObjectError> {
         return is_executable ? Splice<ObjectType::Executable>(digest, parts)
                              : Splice<ObjectType::File>(digest, parts);
     }
@@ -179,7 +180,7 @@ class LocalCAS {
     /// \brief Obtain tree path from digest.
     /// \param digest   Digest of the tree to lookup.
     /// \returns Path to the tree if found or nullopt otherwise.
-    [[nodiscard]] auto TreePath(bazel_re::Digest const& digest) const noexcept
+    [[nodiscard]] auto TreePath(ArtifactDigest const& digest) const noexcept
         -> std::optional<std::filesystem::path> {
         return cas_tree_.BlobPath(digest);
     }
@@ -188,8 +189,8 @@ class LocalCAS {
     /// \param digest           The digest of a tree to be split.
     /// \returns                Digests of the parts of the large object or an
     /// error code on failure.
-    [[nodiscard]] auto SplitTree(bazel_re::Digest const& digest) const noexcept
-        -> expected<std::vector<bazel_re::Digest>, LargeObjectError> {
+    [[nodiscard]] auto SplitTree(ArtifactDigest const& digest) const noexcept
+        -> expected<std::vector<ArtifactDigest>, LargeObjectError> {
         return cas_tree_large_.Split(digest);
     }
 
@@ -198,9 +199,9 @@ class LocalCAS {
     /// \param parts            The parts of the large object.
     /// \return                 The digest of the result or an error code on
     /// failure.
-    [[nodiscard]] auto SpliceTree(bazel_re::Digest const& digest,
-                                  std::vector<bazel_re::Digest> const& parts)
-        const noexcept -> expected<bazel_re::Digest, LargeObjectError> {
+    [[nodiscard]] auto SpliceTree(ArtifactDigest const& digest,
+                                  std::vector<ArtifactDigest> const& parts)
+        const noexcept -> expected<ArtifactDigest, LargeObjectError> {
         return Splice<ObjectType::Tree>(digest, parts);
     }
 
@@ -208,8 +209,16 @@ class LocalCAS {
     /// \param tree_digest      Digest of the tree to be checked.
     /// \param tree_data        Content of the tree.
     /// \return                 An error on fail.
-    [[nodiscard]] auto CheckTreeInvariant(bazel_re::Digest const& tree_digest,
+    [[nodiscard]] auto CheckTreeInvariant(ArtifactDigest const& tree_digest,
                                           std::string const& tree_data)
+        const noexcept -> std::optional<LargeObjectError>;
+
+    /// \brief Check whether all parts of the tree are in the storage.
+    /// \param tree_digest      Digest of the tree to be checked.
+    /// \param file             Content of the tree.
+    /// \return                 An error on fail.
+    [[nodiscard]] auto CheckTreeInvariant(ArtifactDigest const& tree_digest,
+                                          std::filesystem::path const& file)
         const noexcept -> std::optional<LargeObjectError>;
 
     /// \brief Uplink blob from this generation to latest LocalCAS generation.
@@ -228,7 +237,7 @@ class LocalCAS {
         requires(kIsLocalGeneration)
     [[nodiscard]] auto LocalUplinkBlob(
         LocalGenerationCAS const& latest,
-        bazel_re::Digest const& digest,
+        ArtifactDigest const& digest,
         bool is_executable,
         bool skip_sync = false,
         bool splice_result = false) const noexcept -> bool;
@@ -251,7 +260,7 @@ class LocalCAS {
         requires(kIsLocalGeneration)
     [[nodiscard]] auto LocalUplinkTree(
         LocalGenerationCAS const& latest,
-        bazel_re::Digest const& digest,
+        ArtifactDigest const& digest,
         bool splice_result = false) const noexcept -> bool;
 
     /// \brief Uplink large entry from this generation to latest LocalCAS
@@ -267,7 +276,7 @@ class LocalCAS {
         requires(kIsLocalGeneration)
     [[nodiscard]] auto LocalUplinkLargeObject(
         LocalGenerationCAS const& latest,
-        bazel_re::Digest const& digest) const noexcept -> bool;
+        ArtifactDigest const& digest) const noexcept -> bool;
 
   private:
     ObjectCAS<ObjectType::File> cas_file_;
@@ -275,18 +284,22 @@ class LocalCAS {
     ObjectCAS<ObjectType::Tree> cas_tree_;
     LargeObjectCAS<kDoGlobalUplink, ObjectType::File> cas_file_large_;
     LargeObjectCAS<kDoGlobalUplink, ObjectType::Tree> cas_tree_large_;
-    HashFunction const hash_function_;
+    HashFunction const& hash_function_;
 
     /// \brief Provides uplink via "exists callback" for physical object CAS.
     template <ObjectType kType>
     [[nodiscard]] static auto MakeUplinker(
+        GenerationConfig const& config,
         gsl::not_null<Uplinker<kDoGlobalUplink> const*> const& uplinker) {
         if constexpr (kDoGlobalUplink) {
-            return [uplinker](auto const& digest, auto const& /*path*/) {
+            bool const native = ProtocolTraits::IsNative(
+                config.storage_config->hash_function.GetType());
+            return [native, uplinker](auto const& digest,
+                                      auto const& /*path*/) {
                 if constexpr (IsTreeObject(kType)) {
                     // in non-compatible mode, do explicit deep tree uplink
                     // in compatible mode, treat all trees as blobs
-                    if (not Compatibility::IsCompatible()) {
+                    if (native) {
                         return uplinker->UplinkTree(digest);
                     }
                 }
@@ -302,7 +315,7 @@ class LocalCAS {
     /// \param digest        Blob digest.
     /// \param to_executable Sync direction.
     /// \returns Path to blob in target CAS.
-    [[nodiscard]] auto TrySyncBlob(bazel_re::Digest const& digest,
+    [[nodiscard]] auto TrySyncBlob(ArtifactDigest const& digest,
                                    bool to_executable) const noexcept
         -> std::optional<std::filesystem::path> {
         auto const src_blob = BlobPathNoSync(digest, not to_executable);
@@ -316,45 +329,53 @@ class LocalCAS {
         requires(kIsLocalGeneration)
     [[nodiscard]] auto LocalUplinkGitTree(
         LocalGenerationCAS const& latest,
-        bazel_re::Digest const& digest,
+        ArtifactDigest const& digest,
         bool splice_result = false) const noexcept -> bool;
 
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
         requires(kIsLocalGeneration)
     [[nodiscard]] auto LocalUplinkBazelDirectory(
         LocalGenerationCAS const& latest,
-        bazel_re::Digest const& digest,
-        gsl::not_null<std::unordered_set<bazel_re::Digest>*> const& seen,
+        ArtifactDigest const& digest,
+        gsl::not_null<std::unordered_set<ArtifactDigest>*> const& seen,
         bool splice_result = false) const noexcept -> bool;
 
     template <ObjectType kType, bool kIsLocalGeneration = not kDoGlobalUplink>
         requires(kIsLocalGeneration)
-    [[nodiscard]] auto TrySplice(bazel_re::Digest const& digest) const noexcept
+    [[nodiscard]] auto TrySplice(ArtifactDigest const& digest) const noexcept
         -> std::optional<LargeObject>;
 
     template <ObjectType kType>
-    [[nodiscard]] auto Splice(bazel_re::Digest const& digest,
-                              std::vector<bazel_re::Digest> const& parts)
-        const noexcept -> expected<bazel_re::Digest, LargeObjectError>;
+    [[nodiscard]] auto Splice(ArtifactDigest const& digest,
+                              std::vector<ArtifactDigest> const& parts)
+        const noexcept -> expected<ArtifactDigest, LargeObjectError>;
 };
 
 #ifndef BOOTSTRAP_BUILD_TOOL
+// NOLINTNEXTLINE(misc-header-include-cycle)
 #include "src/buildtool/storage/local_cas.tpp"
 #else
 template <bool kDoGlobalUplink>
 auto LocalCAS<kDoGlobalUplink>::CheckTreeInvariant(
-    bazel_re::Digest const& tree_digest,
+    ArtifactDigest const& tree_digest,
     std::string const& tree_data) const noexcept
     -> std::optional<LargeObjectError> {
     return std::nullopt;
 }
 
 template <bool kDoGlobalUplink>
+auto LocalCAS<kDoGlobalUplink>::CheckTreeInvariant(
+    ArtifactDigest const& tree_digest,
+    std::filesystem::path const& file) const noexcept
+    -> std::optional<LargeObjectError> {
+    return std::nullopt;
+}
+
+template <bool kDoGlobalUplink>
 template <ObjectType kType>
-auto LocalCAS<kDoGlobalUplink>::Splice(
-    bazel_re::Digest const& digest,
-    std::vector<bazel_re::Digest> const& parts) const noexcept
-    -> expected<bazel_re::Digest, LargeObjectError> {
+auto LocalCAS<kDoGlobalUplink>::Splice(ArtifactDigest const& digest,
+                                       std::vector<ArtifactDigest> const& parts)
+    const noexcept -> expected<ArtifactDigest, LargeObjectError> {
     return unexpected{
         LargeObjectError{LargeObjectErrorCode::Internal, "not allowed"}};
 }

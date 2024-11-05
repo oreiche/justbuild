@@ -24,7 +24,7 @@
 
 #include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
@@ -33,6 +33,7 @@
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "test/utils/hermeticity/test_hash_function_type.hpp"
 
 using ApiFactory = std::function<IExecutionApi::Ptr()>;
 using ExecProps = std::map<std::string, std::string>;
@@ -139,12 +140,10 @@ using ExecProps = std::map<std::string, std::string>;
     bool is_hermetic = false) {
     std::string test_content("test");
 
-    HashFunction const hash_function{Compatibility::IsCompatible()
-                                         ? HashFunction::Type::PlainSHA256
-                                         : HashFunction::Type::GitSHA1};
+    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
 
-    auto test_digest =
-        ArtifactDigest::Create<ObjectType::File>(hash_function, test_content);
+    auto test_digest = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
+        hash_function, test_content);
 
     std::string output_path{"output_file"};
 
@@ -165,26 +164,28 @@ using ExecProps = std::map<std::string, std::string>;
         action->SetCacheFlag(IExecutionAction::CacheFlag::CacheOutput);
 
         // run execution
-        auto response = action->Execute();
+        auto const response = action->Execute();
         REQUIRE(response);
 
         // verify result
-        auto artifacts = response->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(artifacts.at(output_path).digest == test_digest);
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(artifacts.value()->at(output_path).digest == test_digest);
 
         if (is_hermetic) {
             CHECK(not response->IsCached());
 
             SECTION("Rerun execution to verify caching") {
                 // run execution
-                auto response = action->Execute();
+                auto const response = action->Execute();
                 REQUIRE(response);
 
                 // verify result
-                auto artifacts = response->Artifacts();
-                REQUIRE(artifacts.contains(output_path));
-                CHECK(artifacts.at(output_path).digest == test_digest);
+                auto const artifacts = response->Artifacts();
+                REQUIRE(artifacts.has_value());
+                REQUIRE(artifacts.value()->contains(output_path));
+                CHECK(artifacts.value()->at(output_path).digest == test_digest);
                 CHECK(response->IsCached());
             }
         }
@@ -194,24 +195,25 @@ using ExecProps = std::map<std::string, std::string>;
         action->SetCacheFlag(IExecutionAction::CacheFlag::DoNotCacheOutput);
 
         // run execution
-        auto response = action->Execute();
+        auto const response = action->Execute();
         REQUIRE(response);
 
         // verify result
-        auto artifacts = response->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(artifacts.at(output_path).digest == test_digest);
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(artifacts.value()->at(output_path).digest == test_digest);
         CHECK(not response->IsCached());
 
         SECTION("Rerun execution to verify caching") {
             // run execution
-            auto response = action->Execute();
+            auto const response = action->Execute();
             REQUIRE(response);
 
             // verify result
-            auto artifacts = response->Artifacts();
-            REQUIRE(artifacts.contains(output_path));
-            CHECK(artifacts.at(output_path).digest == test_digest);
+            auto const artifacts = response->Artifacts();
+            REQUIRE(artifacts.value()->contains(output_path));
+            CHECK(artifacts.value()->at(output_path).digest == test_digest);
             CHECK(not response->IsCached());
         }
     }
@@ -223,12 +225,10 @@ using ExecProps = std::map<std::string, std::string>;
     bool is_hermetic = false) {
     std::string test_content("test");
 
-    HashFunction const hash_function{Compatibility::IsCompatible()
-                                         ? HashFunction::Type::PlainSHA256
-                                         : HashFunction::Type::GitSHA1};
+    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
 
-    auto test_digest =
-        ArtifactDigest::Create<ObjectType::File>(hash_function, test_content);
+    auto test_digest = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
+        hash_function, test_content);
 
     auto input_artifact_opt =
         ArtifactDescription::CreateKnown(test_digest, ObjectType::File)
@@ -257,26 +257,28 @@ using ExecProps = std::map<std::string, std::string>;
         action->SetCacheFlag(IExecutionAction::CacheFlag::CacheOutput);
 
         // run execution
-        auto response = action->Execute();
+        auto const response = action->Execute();
         REQUIRE(response);
 
         // verify result
-        auto artifacts = response->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(artifacts.at(output_path).digest == test_digest);
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(artifacts.value()->at(output_path).digest == test_digest);
 
         if (is_hermetic) {
             CHECK(not response->IsCached());
 
             SECTION("Rerun execution to verify caching") {
                 // run execution
-                auto response = action->Execute();
+                auto const response = action->Execute();
                 REQUIRE(response);
 
                 // verify result
-                auto artifacts = response->Artifacts();
-                REQUIRE(artifacts.contains(output_path));
-                CHECK(artifacts.at(output_path).digest == test_digest);
+                auto const artifacts = response->Artifacts();
+                REQUIRE(artifacts.has_value());
+                REQUIRE(artifacts.value()->contains(output_path));
+                CHECK(artifacts.value()->at(output_path).digest == test_digest);
                 CHECK(response->IsCached());
             }
         }
@@ -286,24 +288,26 @@ using ExecProps = std::map<std::string, std::string>;
         action->SetCacheFlag(IExecutionAction::CacheFlag::DoNotCacheOutput);
 
         // run execution
-        auto response = action->Execute();
+        auto const response = action->Execute();
         REQUIRE(response);
 
         // verify result
-        auto artifacts = response->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(artifacts.at(output_path).digest == test_digest);
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(artifacts.value()->at(output_path).digest == test_digest);
         CHECK(not response->IsCached());
 
         SECTION("Rerun execution to verify caching") {
             // run execution
-            auto response = action->Execute();
+            auto const response = action->Execute();
             REQUIRE(response);
 
             // verify result
-            auto artifacts = response->Artifacts();
-            REQUIRE(artifacts.contains(output_path));
-            CHECK(artifacts.at(output_path).digest == test_digest);
+            auto const artifacts = response->Artifacts();
+            REQUIRE(artifacts.has_value());
+            REQUIRE(artifacts.value()->contains(output_path));
+            CHECK(artifacts.value()->at(output_path).digest == test_digest);
             CHECK(not response->IsCached());
         }
     }
@@ -314,12 +318,10 @@ using ExecProps = std::map<std::string, std::string>;
     ExecProps const& props) {
     std::string test_content("test");
 
-    HashFunction const hash_function{Compatibility::IsCompatible()
-                                         ? HashFunction::Type::PlainSHA256
-                                         : HashFunction::Type::GitSHA1};
+    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
 
-    auto test_digest =
-        ArtifactDigest::Create<ObjectType::File>(hash_function, test_content);
+    auto test_digest = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
+        hash_function, test_content);
 
     std::string output_path{"output_file"};
 
@@ -340,27 +342,29 @@ using ExecProps = std::map<std::string, std::string>;
         action->SetCacheFlag(IExecutionAction::CacheFlag::CacheOutput);
 
         // run execution
-        auto response = action->Execute();
+        auto const response = action->Execute();
         REQUIRE(response);
 
         // verify result
         CHECK(response->ExitCode() == 1);
-        auto artifacts = response->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(artifacts.at(output_path).digest == test_digest);
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(artifacts.value()->at(output_path).digest == test_digest);
 
         CHECK(not response->IsCached());
 
         SECTION("Rerun execution to verify that non-zero actions are rerun") {
             // run execution
-            auto response = action->Execute();
+            auto const response = action->Execute();
             REQUIRE(response);
 
             // verify result
             CHECK(response->ExitCode() == 1);
-            auto artifacts = response->Artifacts();
-            REQUIRE(artifacts.contains(output_path));
-            CHECK(artifacts.at(output_path).digest == test_digest);
+            auto const artifacts = response->Artifacts();
+            REQUIRE(artifacts.has_value());
+            REQUIRE(artifacts.value()->contains(output_path));
+            CHECK(artifacts.value()->at(output_path).digest == test_digest);
             CHECK(not response->IsCached());
         }
     }
@@ -369,14 +373,15 @@ using ExecProps = std::map<std::string, std::string>;
         action->SetCacheFlag(IExecutionAction::CacheFlag::DoNotCacheOutput);
 
         // run execution
-        auto response = action->Execute();
+        auto const response = action->Execute();
         REQUIRE(response);
 
         // verify result
         CHECK(response->ExitCode() == 1);
-        auto artifacts = response->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(artifacts.at(output_path).digest == test_digest);
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(artifacts.value()->at(output_path).digest == test_digest);
         CHECK(not response->IsCached());
 
         SECTION("Rerun execution to verify non-zero actions are not cached") {
@@ -386,9 +391,10 @@ using ExecProps = std::map<std::string, std::string>;
 
             // verify result
             CHECK(response->ExitCode() == 1);
-            auto artifacts = response->Artifacts();
-            REQUIRE(artifacts.contains(output_path));
-            CHECK(artifacts.at(output_path).digest == test_digest);
+            auto const artifacts = response->Artifacts();
+            REQUIRE(artifacts.has_value());
+            REQUIRE(artifacts.value()->contains(output_path));
+            CHECK(artifacts.value()->at(output_path).digest == test_digest);
             CHECK(not response->IsCached());
         }
     }
@@ -432,7 +438,7 @@ using ExecProps = std::map<std::string, std::string>;
     action->SetCacheFlag(IExecutionAction::CacheFlag::CacheOutput);
 
     // run execution
-    auto response = action->Execute();
+    auto const response = action->Execute();
     REQUIRE(response);
 
     // verify result
@@ -442,10 +448,11 @@ using ExecProps = std::map<std::string, std::string>;
         CHECK_FALSE(response->IsCached());
     }
 
-    auto artifacts = response->Artifacts();
-    REQUIRE_FALSE(artifacts.empty());
+    auto const artifacts = response->Artifacts();
+    REQUIRE(artifacts.has_value());
+    REQUIRE_FALSE(artifacts.value()->empty());
 
-    auto info = artifacts.begin()->second;
+    auto info = artifacts.value()->begin()->second;
 
     SECTION("retrieve via same API object") {
         auto out_path = GetTestDir(test_name) / "out1";
@@ -505,7 +512,7 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
     action->SetCacheFlag(IExecutionAction::CacheFlag::CacheOutput);
 
     // run execution
-    auto response = action->Execute();
+    auto const response = action->Execute();
     REQUIRE(response);
 
     // verify result
@@ -515,10 +522,11 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
         CHECK_FALSE(response->IsCached());
     }
 
-    auto artifacts = response->Artifacts();
-    REQUIRE_FALSE(artifacts.empty());
+    auto const artifacts = response->Artifacts();
+    REQUIRE(artifacts.has_value());
+    REQUIRE_FALSE(artifacts.value()->empty());
 
-    auto info = artifacts.begin()->second;
+    auto info = artifacts.value()->begin()->second;
 
     SECTION("retrieve via same API object") {
         auto out_path = GetTestDir(test_name) / "out1";
@@ -574,7 +582,7 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
     action->SetCacheFlag(IExecutionAction::CacheFlag::CacheOutput);
 
     // run execution
-    auto response = action->Execute();
+    auto const response = action->Execute();
     REQUIRE(response);
 
     // verify result
@@ -584,16 +592,17 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
         CHECK_FALSE(response->IsCached());
     }
 
-    auto artifacts = response->Artifacts();
-    REQUIRE_FALSE(artifacts.empty());
+    auto const artifacts = response->Artifacts();
+    REQUIRE(artifacts.has_value());
+    REQUIRE_FALSE(artifacts.value()->empty());
 
     std::vector<std::filesystem::path> paths{};
     std::vector<Artifact::ObjectInfo> infos{};
 
     SECTION("retrieve via same API object") {
         auto out_path = GetTestDir(test_name) / "out1";
-        std::for_each(artifacts.begin(),
-                      artifacts.end(),
+        std::for_each(artifacts.value()->begin(),
+                      artifacts.value()->end(),
                       [&out_path, &paths, &infos](auto const& entry) {
                           paths.emplace_back(out_path / entry.first);
                           infos.emplace_back(entry.second);
@@ -607,8 +616,8 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
     SECTION("retrieve from new API object but same endpoint") {
         auto second_api = api_factory();
         auto out_path = GetTestDir(test_name) / "out2";
-        std::for_each(artifacts.begin(),
-                      artifacts.end(),
+        std::for_each(artifacts.value()->begin(),
+                      artifacts.value()->end(),
                       [&out_path, &paths, &infos](auto const& entry) {
                           paths.emplace_back(out_path / entry.first);
                           infos.emplace_back(entry.second);
@@ -643,26 +652,28 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
         action->SetCacheFlag(IExecutionAction::CacheFlag::CacheOutput);
 
         // run execution
-        auto response = action->Execute();
+        auto const response = action->Execute();
         REQUIRE(response);
 
         // verify result
-        auto artifacts = response->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(IsTreeObject(artifacts.at(output_path).type));
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(IsTreeObject(artifacts.value()->at(output_path).type));
 
         if (is_hermetic) {
             CHECK(not response->IsCached());
 
             SECTION("Rerun execution to verify caching") {
                 // run execution
-                auto response = action->Execute();
+                auto const response = action->Execute();
                 REQUIRE(response);
 
                 // verify result
-                auto artifacts = response->Artifacts();
-                REQUIRE(artifacts.contains(output_path));
-                CHECK(IsTreeObject(artifacts.at(output_path).type));
+                auto const artifacts = response->Artifacts();
+                REQUIRE(artifacts.has_value());
+                REQUIRE(artifacts.value()->contains(output_path));
+                CHECK(IsTreeObject(artifacts.value()->at(output_path).type));
                 CHECK(response->IsCached());
             }
         }
@@ -672,24 +683,26 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
         action->SetCacheFlag(IExecutionAction::CacheFlag::DoNotCacheOutput);
 
         // run execution
-        auto response = action->Execute();
+        auto const response = action->Execute();
         REQUIRE(response);
 
         // verify result
-        auto artifacts = response->Artifacts();
-        REQUIRE(artifacts.contains(output_path));
-        CHECK(IsTreeObject(artifacts.at(output_path).type));
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains(output_path));
+        CHECK(IsTreeObject(artifacts.value()->at(output_path).type));
         CHECK(not response->IsCached());
 
         SECTION("Rerun execution to verify caching") {
             // run execution
-            auto response = action->Execute();
+            auto const response = action->Execute();
             REQUIRE(response);
 
             // verify result
-            auto artifacts = response->Artifacts();
-            REQUIRE(artifacts.contains(output_path));
-            CHECK(IsTreeObject(artifacts.at(output_path).type));
+            auto const artifacts = response->Artifacts();
+            REQUIRE(artifacts.has_value());
+            REQUIRE(artifacts.value()->contains(output_path));
+            CHECK(IsTreeObject(artifacts.value()->at(output_path).type));
             CHECK(not response->IsCached());
         }
     }

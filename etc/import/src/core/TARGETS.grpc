@@ -4,6 +4,20 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/channel/channel_fwd.h"]
   }
+, "dump_args":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["dump_args"]
+  , "stage": ["src", "core"]
+  , "srcs": ["lib/gprpp/dump_args.cc"]
+  , "hdrs": ["lib/gprpp/dump_args.h"]
+  , "deps":
+    [ ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr_platform"]
+    ]
+  }
 , "slice_cast":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["slice_cast"]
@@ -16,14 +30,18 @@
   , "stage": ["src", "core"]
   , "hdrs":
     [ "lib/event_engine/extensions/can_track_errors.h"
+    , "lib/event_engine/extensions/chaotic_good_extension.h"
     , "lib/event_engine/extensions/supports_fd.h"
+    , "lib/event_engine/extensions/tcp_trace.h"
     ]
   , "deps":
-    [ ["", "event_engine_base_hdrs"]
-    , ["", "gpr_platform"]
-    , ["@", "absl", "absl/status", "statusor"]
+    [ "memory_quota"
     , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr_platform"]
+    , ["", "tcp_tracer"]
     ]
   }
 , "event_engine_common":
@@ -48,20 +66,69 @@
     , "slice_buffer"
     , "slice_cast"
     , "slice_refcount"
+    , ["@", "absl", "absl/container", "flat_hash_set"]
+    , ["@", "absl", "absl/hash", "hash"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/utility", "utility"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
-    , ["@", "absl", "absl/container", "flat_hash_set"]
-    , ["@", "absl", "absl/hash", "hash"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/utility", "utility"]
     ]
+  }
+, "latent_see":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["latent_see"]
+  , "stage": ["src", "core"]
+  , "srcs": ["util/latent_see.cc"]
+  , "hdrs": ["util/latent_see.h"]
+  , "deps":
+    [ "per_cpu"
+    , "ring_buffer"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
+    ]
+  }
+, "ring_buffer":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["ring_buffer"]
+  , "stage": ["src", "core"]
+  , "hdrs": ["util/ring_buffer.h"]
+  , "deps": [["@", "absl", "absl/types", "optional"], ["", "gpr_platform"]]
   }
 , "transport_fwd":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["transport_fwd"]
   , "stage": ["src", "core"]
   , "hdrs": ["lib/transport/transport_fwd.h"]
+  }
+, "server_call_tracer_filter":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["server_call_tracer_filter"]
+  , "stage": ["src", "core"]
+  , "srcs": ["server/server_call_tracer_filter.cc"]
+  , "hdrs": ["server/server_call_tracer_filter.h"]
+  , "deps":
+    [ "arena_promise"
+    , "call_finalization"
+    , "cancel_callback"
+    , "channel_args"
+    , "channel_fwd"
+    , "channel_stack_type"
+    , "context"
+    , "map"
+    , "pipe"
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["", "call_tracer"]
+    , ["", "config"]
+    , ["", "gpr_platform"]
+    , ["", "grpc_base"]
+    ]
   }
 , "atomic_utils":
   { "type": ["@", "rules", "CC", "library"]
@@ -77,6 +144,22 @@
   , "hdrs": ["lib/transport/metadata_compression_traits.h"]
   , "deps": [["", "gpr_platform"]]
   }
+, "metadata_info":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["metadata_info"]
+  , "stage": ["src", "core"]
+  , "srcs": ["lib/transport/metadata_info.cc"]
+  , "hdrs": ["lib/transport/metadata_info.h"]
+  , "deps":
+    [ "channel_args"
+    , "hpack_constants"
+    , "metadata_batch"
+    , "slice"
+    , ["", "call_tracer"]
+    , ["", "gpr_platform"]
+    , ["", "grpc_base"]
+    ]
+  }
 , "experiments":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["experiments"]
@@ -85,10 +168,12 @@
   , "hdrs": ["lib/experiments/config.h", "lib/experiments/experiments.h"]
   , "deps":
     [ "no_destruct"
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "config_vars"]
     , ["", "gpr"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "init_internally":
@@ -103,11 +188,24 @@
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["useful"]
   , "stage": ["src", "core"]
-  , "hdrs": ["lib/gpr/useful.h"]
+  , "hdrs": ["util/useful.h"]
   , "deps":
-    [ ["", "gpr_platform"]
+    [ ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/numeric", "bits"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "variant"]
+    , ["", "gpr_platform"]
+    ]
+  }
+, "unique_ptr_with_bitset":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["unique_ptr_with_bitset"]
+  , "stage": ["src", "core"]
+  , "hdrs": ["util/unique_ptr_with_bitset.h"]
+  , "deps":
+    [ ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/numeric", "bits"]
+    , ["", "gpr_platform"]
     ]
   }
 , "examine_stack":
@@ -116,13 +214,13 @@
   , "stage": ["src", "core"]
   , "srcs": ["lib/gprpp/examine_stack.cc"]
   , "hdrs": ["lib/gprpp/examine_stack.h"]
-  , "deps": [["", "gpr_platform"], ["@", "absl", "absl/types", "optional"]]
+  , "deps": [["@", "absl", "absl/types", "optional"], ["", "gpr_platform"]]
   }
 , "gpr_atm":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["gpr_atm"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/gpr/atm.cc"]
+  , "srcs": ["util/atm.cc"]
   , "hdrs": [["include/grpc", "gpr_atm_headers"]]
   , "deps": ["useful", ["", "gpr_platform"]]
   }
@@ -137,15 +235,8 @@
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["gpr_spinlock"]
   , "stage": ["src", "core"]
-  , "hdrs": ["lib/gpr/spinlock.h"]
+  , "hdrs": ["util/spinlock.h"]
   , "deps": ["gpr_atm", ["", "gpr_platform"]]
-  }
-, "gpr_log_internal":
-  { "type": ["@", "rules", "CC", "library"]
-  , "name": ["gpr_log_internal"]
-  , "stage": ["src", "core"]
-  , "hdrs": ["lib/gpr/log_internal.h"]
-  , "deps": [["", "gpr_platform"]]
   }
 , "env":
   { "type": ["@", "rules", "CC", "library"]
@@ -158,7 +249,7 @@
     ]
   , "hdrs": ["lib/gprpp/env.h"]
   , "deps":
-    ["tchar", ["", "gpr_platform"], ["@", "absl", "absl/types", "optional"]]
+    ["tchar", ["@", "absl", "absl/types", "optional"], ["", "gpr_platform"]]
   }
 , "directory_reader":
   { "type": ["@", "rules", "CC", "library"]
@@ -170,12 +261,12 @@
     ]
   , "hdrs": ["lib/gprpp/directory_reader.h"]
   , "deps":
-    [ ["", "gpr"]
-    , ["", "gpr_platform"]
-    , ["@", "absl", "absl/functional", "function_ref"]
+    [ ["@", "absl", "absl/functional", "function_ref"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
+    , ["", "gpr_platform"]
     ]
   }
 , "chunked_vector":
@@ -183,7 +274,12 @@
   , "name": ["chunked_vector"]
   , "stage": ["src", "core"]
   , "hdrs": ["lib/gprpp/chunked_vector.h"]
-  , "deps": ["arena", "gpr_manual_constructor", ["", "gpr"]]
+  , "deps":
+    [ "arena"
+    , "gpr_manual_constructor"
+    , ["@", "absl", "absl/log", "check"]
+    , ["", "gpr"]
+    ]
   }
 , "construct_destruct":
   { "type": ["@", "rules", "CC", "library"]
@@ -211,16 +307,17 @@
   , "deps":
     [ "percent_encoding"
     , "slice"
-    , ["", "debug_location"]
-    , ["", "gpr"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/strings", "cord"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/time", "time"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "debug_location"]
+    , ["", "gpr"]
+    , ["src/core/ext/upb-gen", "upb-gen-lib"]
     , ["third_party/upb", "base"]
     , ["third_party/upb", "mem"]
-    , ["src/core/ext/upb-gen", "upb-gen-lib"]
     ]
   , "private-deps": ["status_helper_private_proto_deps"]
   }
@@ -230,7 +327,7 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/gprpp/unique_type_name.h"]
   , "deps":
-    ["useful", ["", "gpr_platform"], ["@", "absl", "absl/strings", "strings"]]
+    ["useful", ["@", "absl", "absl/strings", "strings"], ["", "gpr_platform"]]
   }
 , "validation_errors":
   { "type": ["@", "rules", "CC", "library"]
@@ -239,9 +336,10 @@
   , "srcs": ["lib/gprpp/validation_errors.cc"]
   , "hdrs": ["lib/gprpp/validation_errors.h"]
   , "deps":
-    [ ["", "gpr_platform"]
+    [ ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
     ]
   }
 , "overload":
@@ -257,7 +355,7 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/gprpp/match.h"]
   , "deps":
-    ["overload", ["", "gpr_platform"], ["@", "absl", "absl/types", "variant"]]
+    ["overload", ["@", "absl", "absl/types", "variant"], ["", "gpr_platform"]]
   }
 , "table":
   { "type": ["@", "rules", "CC", "library"]
@@ -266,9 +364,9 @@
   , "hdrs": ["lib/gprpp/table.h"]
   , "deps":
     [ "bitset"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/meta", "type_traits"]
     , ["@", "absl", "absl/utility", "utility"]
+    , ["", "gpr_platform"]
     ]
   }
 , "packed_table":
@@ -305,7 +403,14 @@
   , "name": ["poll"]
   , "stage": ["src", "core"]
   , "hdrs": ["lib/promise/poll.h"]
-  , "deps": ["construct_destruct", ["", "gpr"], ["", "gpr_platform"]]
+  , "deps":
+    [ "construct_destruct"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
+    , ["", "gpr_platform"]
+    ]
   }
 , "status_flag":
   { "type": ["@", "rules", "CC", "library"]
@@ -314,11 +419,13 @@
   , "hdrs": ["lib/promise/status_flag.h"]
   , "deps":
     [ "promise_status"
-    , ["", "gpr"]
-    , ["", "gpr_platform"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
+    , ["", "gpr_platform"]
     ]
   }
 , "map_pipe":
@@ -332,11 +439,11 @@
     , "pipe"
     , "poll"
     , "promise_factory"
-    , "promise_trace"
     , "try_seq"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
-    , ["@", "absl", "absl/status", "status"]
     ]
   }
 , "1999":
@@ -350,17 +457,22 @@
     , "arena"
     , "construct_destruct"
     , "context"
+    , "event_engine_context"
+    , "latent_see"
     , "poll"
     , "promise_factory"
-    , "promise_trace"
     , "ref_counted"
+    , "useful"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "event_engine_base_hdrs"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
+    , ["", "grpc_trace"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/strings", "str_format"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "context":
@@ -369,7 +481,11 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/promise/context.h"]
   , "deps":
-    ["down_cast", ["", "gpr"], ["@", "absl", "absl/meta", "type_traits"]]
+    [ "down_cast"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/meta", "type_traits"]
+    , ["", "gpr"]
+    ]
   }
 , "map":
   { "type": ["@", "rules", "CC", "library"]
@@ -387,13 +503,13 @@
   , "deps":
     [ "activity"
     , "context"
-    , "default_event_engine"
+    , "event_engine_context"
     , "poll"
     , "time"
+    , ["@", "absl", "absl/status", "status"]
     , ["", "event_engine_base_hdrs"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
-    , ["@", "absl", "absl/status", "status"]
     ]
   }
 , "wait_for_callback":
@@ -404,8 +520,8 @@
   , "deps":
     [ "activity"
     , "poll"
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
+    , ["", "gpr"]
     ]
   }
 , "arena_promise":
@@ -418,8 +534,8 @@
     , "construct_destruct"
     , "context"
     , "poll"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/meta", "type_traits"]
+    , ["", "gpr_platform"]
     ]
   }
 , "promise_like":
@@ -428,14 +544,18 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/promise/detail/promise_like.h"]
   , "deps":
-    ["poll", ["", "gpr_platform"], ["@", "absl", "absl/meta", "type_traits"]]
+    [ "poll"
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/meta", "type_traits"]
+    , ["", "gpr_platform"]
+    ]
   }
 , "cancel_callback":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["cancel_callback"]
   , "stage": ["src", "core"]
   , "hdrs": ["lib/promise/cancel_callback.h"]
-  , "deps": ["promise_like", ["", "gpr_platform"]]
+  , "deps": ["arena", "context", "promise_like", ["", "gpr_platform"]]
   }
 , "promise_factory":
   { "type": ["@", "rules", "CC", "library"]
@@ -444,8 +564,8 @@
   , "hdrs": ["lib/promise/detail/promise_factory.h"]
   , "deps":
     [ "promise_like"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/meta", "type_traits"]
+    , ["", "gpr_platform"]
     ]
   }
 , "if":
@@ -458,9 +578,9 @@
     , "poll"
     , "promise_factory"
     , "promise_like"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/types", "variant"]
+    , ["", "gpr_platform"]
     ]
   }
 , "switch":
@@ -476,9 +596,10 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/promise/detail/status.h"]
   , "deps":
-    [ ["", "gpr_platform"]
+    [ ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
+    , ["", "gpr_platform"]
     ]
   }
 , "race":
@@ -504,10 +625,10 @@
     [ "construct_destruct"
     , "poll"
     , "promise_factory"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/types", "variant"]
+    , ["", "gpr_platform"]
     ]
   }
 , "join_state":
@@ -520,10 +641,10 @@
     , "construct_destruct"
     , "poll"
     , "promise_like"
-    , "promise_trace"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["", "gpr"]
-    , ["", "gpr_platform"]
-    , ["@", "absl", "absl/utility", "utility"]
+    , ["", "grpc_trace"]
     ]
   }
 , "join":
@@ -534,8 +655,8 @@
   , "deps":
     [ "join_state"
     , "map"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/meta", "type_traits"]
+    , ["", "gpr_platform"]
     ]
   }
 , "try_join":
@@ -548,10 +669,11 @@
     , "map"
     , "poll"
     , "status_flag"
-    , ["", "gpr_platform"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/meta", "type_traits"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
+    , ["", "gpr_platform"]
     ]
   }
 , "all_ok":
@@ -564,10 +686,10 @@
     , "map"
     , "poll"
     , "status_flag"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/meta", "type_traits"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
+    , ["", "gpr_platform"]
     ]
   }
 , "basic_seq":
@@ -587,11 +709,12 @@
     , "poll"
     , "promise_factory"
     , "promise_like"
-    , "promise_trace"
-    , ["", "debug_location"]
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "debug_location"]
+    , ["", "grpc_trace"]
     ]
   }
 , "seq":
@@ -604,6 +727,7 @@
     , "poll"
     , "promise_like"
     , "seq_state"
+    , ["@", "absl", "absl/log", "log"]
     , ["", "debug_location"]
     , ["", "gpr_platform"]
     ]
@@ -620,11 +744,12 @@
     , "promise_status"
     , "seq_state"
     , "status_flag"
-    , ["", "debug_location"]
-    , ["", "gpr_platform"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/meta", "type_traits"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
+    , ["", "debug_location"]
+    , ["", "gpr_platform"]
     ]
   }
 , "activity":
@@ -637,17 +762,21 @@
     [ "atomic_utils"
     , "construct_destruct"
     , "context"
+    , "dump_args"
+    , "latent_see"
     , "no_destruct"
     , "poll"
     , "promise_factory"
     , "promise_status"
-    , ["", "gpr"]
-    , ["", "orphanable"]
     , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
+    , ["", "grpc_trace"]
+    , ["", "orphanable"]
     ]
   }
 , "exec_ctx_wakeup_scheduler":
@@ -658,10 +787,10 @@
   , "deps":
     [ "closure"
     , "error"
+    , ["@", "absl", "absl/status", "status"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
     , ["", "gpr_platform"]
-    , ["@", "absl", "absl/status", "status"]
     ]
   }
 , "event_engine_wakeup_scheduler":
@@ -670,7 +799,11 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/promise/event_engine_wakeup_scheduler.h"]
   , "deps":
-    [["", "event_engine_base_hdrs"], ["", "exec_ctx"], ["", "gpr_platform"]]
+    [ ["@", "absl", "absl/log", "check"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "exec_ctx"]
+    , ["", "gpr_platform"]
+    ]
   }
 , "wait_set":
   { "type": ["@", "rules", "CC", "library"]
@@ -680,9 +813,9 @@
   , "deps":
     [ "activity"
     , "poll"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/container", "flat_hash_set"]
     , ["@", "absl", "absl/hash", "hash"]
+    , ["", "gpr_platform"]
     ]
   }
 , "latch":
@@ -693,9 +826,11 @@
   , "deps":
     [ "activity"
     , "poll"
-    , "promise_trace"
-    , ["", "gpr"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
+    , ["", "grpc_trace"]
     ]
   }
 , "inter_activity_latch":
@@ -706,11 +841,12 @@
   , "deps":
     [ "activity"
     , "poll"
-    , "promise_trace"
     , "wait_set"
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
+    , ["", "grpc_trace"]
     ]
   }
 , "interceptor_list":
@@ -724,12 +860,13 @@
     , "context"
     , "poll"
     , "promise_factory"
-    , "promise_trace"
-    , ["", "debug_location"]
-    , ["", "gpr"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "debug_location"]
+    , ["", "gpr"]
     ]
   }
 , "pipe":
@@ -745,22 +882,24 @@
     , "interceptor_list"
     , "map"
     , "poll"
-    , "promise_trace"
     , "seq"
-    , ["", "debug_location"]
-    , ["", "gpr"]
-    , ["", "ref_counted_ptr"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
     , ["@", "absl", "absl/types", "variant"]
+    , ["", "debug_location"]
+    , ["", "gpr"]
+    , ["", "ref_counted_ptr"]
     ]
   }
-, "promise_mutes":
+, "promise_mutex":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["promise_mutex"]
   , "stage": ["src", "core"]
   , "hdrs": ["lib/promise/promise_mutex.h"]
-  , "deps": ["activity", "poll", ["", "gpr"]]
+  , "deps":
+    ["activity", "poll", ["@", "absl", "absl/log", "check"], ["", "gpr"]]
   }
 , "inter_activity_pipe":
   { "type": ["@", "rules", "CC", "library"]
@@ -771,20 +910,12 @@
     [ "activity"
     , "poll"
     , "ref_counted"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "debug_location"]
     , ["", "gpr"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
-  }
-, "promise_trace":
-  { "type": ["@", "rules", "CC", "library"]
-  , "name": ["promise_trace"]
-  , "stage": ["src", "core"]
-  , "srcs": ["lib/promise/trace.cc"]
-  , "hdrs": ["lib/promise/trace.h"]
-  , "deps": [["", "gpr_platform"], ["", "grpc_trace"]]
   }
 , "mpsc":
   { "type": ["@", "rules", "CC", "library"]
@@ -796,9 +927,10 @@
     , "poll"
     , "ref_counted"
     , "wait_set"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
     , ["", "gpr"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/base", "core_headers"]
     ]
   }
 , "observable":
@@ -809,9 +941,10 @@
   , "deps":
     [ "activity"
     , "poll"
-    , ["", "gpr"]
     , ["@", "absl", "absl/container", "flat_hash_set"]
     , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["", "gpr"]
     ]
   }
 , "for_each":
@@ -824,11 +957,13 @@
     , "construct_destruct"
     , "poll"
     , "promise_factory"
-    , "promise_trace"
-    , ["", "gpr"]
-    , ["", "gpr_platform"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
+    , ["", "gpr_platform"]
+    , ["", "grpc_trace"]
     ]
   }
 , "ref_counted":
@@ -838,6 +973,9 @@
   , "hdrs": ["lib/gprpp/ref_counted.h"]
   , "deps":
     [ "atomic_utils"
+    , "down_cast"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["", "debug_location"]
     , ["", "gpr"]
     , ["", "ref_counted_ptr"]
@@ -863,9 +1001,9 @@
   , "hdrs": ["lib/gprpp/ref_counted_string.h"]
   , "deps":
     [ "ref_counted"
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "gpr"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "uuid_v4":
@@ -874,21 +1012,21 @@
   , "stage": ["src", "core"]
   , "srcs": ["lib/gprpp/uuid_v4.cc"]
   , "hdrs": ["lib/gprpp/uuid_v4.h"]
-  , "deps": [["", "gpr"], ["@", "absl", "absl/strings", "str_format"]]
+  , "deps": [["@", "absl", "absl/strings", "str_format"], ["", "gpr"]]
   }
 , "handshaker_factory":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["handshaker_factory"]
   , "stage": ["src", "core"]
-  , "hdrs": ["lib/transport/handshaker_factory.h"]
+  , "hdrs": ["handshaker/handshaker_factory.h"]
   , "deps": ["channel_args", "iomgr_fwd", ["", "gpr_platform"]]
   }
 , "handshaker_registry":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["handshaker_registry"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/transport/handshaker_registry.cc"]
-  , "hdrs": ["lib/transport/handshaker_registry.h"]
+  , "srcs": ["handshaker/handshaker_registry.cc"]
+  , "hdrs": ["handshaker/handshaker_registry.h"]
   , "deps":
     ["channel_args", "handshaker_factory", "iomgr_fwd", ["", "gpr_platform"]]
   }
@@ -896,8 +1034,8 @@
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["tcp_connect_handshaker"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/transport/tcp_connect_handshaker.cc"]
-  , "hdrs": ["lib/transport/tcp_connect_handshaker.h"]
+  , "srcs": ["handshaker/tcp_connect/tcp_connect_handshaker.cc"]
+  , "hdrs": ["handshaker/tcp_connect/tcp_connect_handshaker.h"]
   , "deps":
     [ "channel_args"
     , "channel_args_endpoint_config"
@@ -909,19 +1047,44 @@
     , "pollset_set"
     , "resolved_address"
     , "slice"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
     , ["", "grpc_base"]
     , ["", "handshaker"]
+    , ["", "iomgr"]
     , ["", "parse_address"]
     , ["", "ref_counted_ptr"]
     , ["", "uri_parser"]
-    , ["@", "absl", "absl/base", "core_headers"]
+    ]
+  }
+, "endpoint_info_handshaker":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["endpoint_info_handshaker"]
+  , "stage": ["src", "core"]
+  , "srcs": ["handshaker/endpoint_info/endpoint_info_handshaker.cc"]
+  , "hdrs": ["handshaker/endpoint_info/endpoint_info_handshaker.h"]
+  , "deps":
+    [ "channel_args"
+    , "closure"
+    , "handshaker_factory"
+    , "handshaker_registry"
+    , ["@", "absl", "absl/functional", "any_invocable"]
     , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/types", "optional"]
+    , ["", "config"]
+    , ["", "debug_location"]
+    , ["", "exec_ctx"]
+    , ["", "gpr"]
+    , ["", "handshaker"]
+    , ["", "iomgr"]
+    , ["", "ref_counted_ptr"]
     ]
   }
 , "channel_creds_registry":
@@ -934,9 +1097,9 @@
     , "json_args"
     , "ref_counted"
     , "validation_errors"
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "gpr_platform"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "event_engine_memory_allocator":
@@ -945,7 +1108,7 @@
   , "stage": ["src", "core"]
   , "hdrs": [["include/grpc", "event_engine_memory_allocator_headers"]]
   , "deps":
-    ["slice", ["", "gpr_platform"], ["@", "absl", "absl/strings", "strings"]]
+    ["slice", ["@", "absl", "absl/strings", "strings"], ["", "gpr_platform"]]
   }
 , "event_engine_memory_allocator_factory":
   { "type": ["@", "rules", "CC", "library"]
@@ -955,8 +1118,8 @@
   , "deps":
     [ "event_engine_memory_allocator"
     , "memory_quota"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr_platform"]
     ]
   }
 , "memory_quota":
@@ -975,20 +1138,21 @@
     , "periodic_update"
     , "poll"
     , "race"
-    , "resource_quota_trace"
     , "seq"
     , "slice_refcount"
     , "time"
     , "useful"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/container", "flat_hash_set"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "gpr"]
     , ["", "grpc_trace"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/container", "flat_hash_set"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "periodic_update":
@@ -1000,8 +1164,8 @@
   , "deps":
     [ "time"
     , "useful"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/functional", "function_ref"]
+    , ["", "gpr_platform"]
     ]
   }
 , "arena":
@@ -1015,6 +1179,8 @@
     , "context"
     , "event_engine_memory_allocator"
     , "memory_quota"
+    , "resource_quota"
+    , ["@", "absl", "absl/log", "log"]
     , ["", "gpr"]
     ]
   }
@@ -1026,18 +1192,25 @@
   , "hdrs": ["lib/resource_quota/thread_quota.h"]
   , "deps":
     [ "ref_counted"
+    , ["@", "absl", "absl/base", "core_headers"]
     , ["", "gpr"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/base", "core_headers"]
     ]
   }
-, "resource_quota_trace":
+, "connection_quota":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["resource_quota_trace"]
+  , "name": ["connection_quota"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/resource_quota/trace.cc"]
-  , "hdrs": ["lib/resource_quota/trace.h"]
-  , "deps": [["", "gpr_platform"], ["", "grpc_trace"]]
+  , "srcs": ["lib/resource_quota/connection_quota.cc"]
+  , "hdrs": ["lib/resource_quota/connection_quota.h"]
+  , "deps":
+    [ "memory_quota"
+    , "ref_counted"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["", "gpr"]
+    , ["", "ref_counted_ptr"]
+    ]
   }
 , "resource_quota":
   { "type": ["@", "rules", "CC", "library"]
@@ -1046,26 +1219,27 @@
   , "srcs": ["lib/resource_quota/resource_quota.cc"]
   , "hdrs": ["lib/resource_quota/resource_quota.h"]
   , "deps":
-    [ "memory_quota"
+    [ "connection_quota"
+    , "memory_quota"
     , "ref_counted"
     , "thread_quota"
     , "useful"
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "channel_arg_names"]
     , ["", "cpp_impl_of"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr_platform"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "slice_refcount":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["slice_refcount"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/slice/slice_refcount.cc"]
   , "hdrs": ["lib/slice/slice_refcount.h", ["include/grpc", "slice.h"]]
   , "deps":
-    [ ["", "debug_location"]
+    [ ["@", "absl", "absl/log", "log"]
+    , ["", "debug_location"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr"]
     , ["", "grpc_trace"]
@@ -1085,11 +1259,12 @@
   , "deps":
     [ "slice_cast"
     , "slice_refcount"
+    , ["@", "absl", "absl/hash", "hash"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "debug_location"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr"]
-    , ["@", "absl", "absl/hash", "hash"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "slice_buffer":
@@ -1098,7 +1273,12 @@
   , "stage": ["src", "core"]
   , "srcs": ["lib/slice/slice_buffer.cc"]
   , "hdrs": ["lib/slice/slice_buffer.h", ["include/grpc", "slice_buffer.h"]]
-  , "deps": ["slice", "slice_refcount", ["", "gpr"]]
+  , "deps":
+    [ "slice"
+    , "slice_refcount"
+    , ["@", "absl", "absl/log", "check"]
+    , ["", "gpr"]
+    ]
   }
 , "error":
   { "type": ["@", "rules", "CC", "library"]
@@ -1113,11 +1293,14 @@
     , "status_helper"
     , "strerror"
     , "useful"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "gpr"]
     , ["", "grpc_public_hdrs"]
     , ["", "grpc_trace"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/strings", "str_format"]
     ]
   }
 , "closure":
@@ -1129,9 +1312,11 @@
   , "deps":
     [ "error"
     , "gpr_manual_constructor"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "str_format"]
     , ["", "debug_location"]
     , ["", "gpr"]
-    , ["@", "absl", "absl/strings", "str_format"]
     ]
   }
 , "time":
@@ -1143,10 +1328,12 @@
   , "deps":
     [ "no_destruct"
     , "useful"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
     ]
   }
 , "iomgr_port":
@@ -1175,7 +1362,7 @@
     , "lib/iomgr/sockaddr_windows.h"
     , "lib/iomgr/socket_utils.h"
     ]
-  , "deps": ["iomgr_port", ["", "gpr"]]
+  , "deps": ["iomgr_port", ["@", "absl", "absl/log", "check"], ["", "gpr"]]
   }
 , "avl":
   { "type": ["@", "rules", "CC", "library"]
@@ -1200,7 +1387,9 @@
   , "srcs": ["lib/event_engine/forkable.cc"]
   , "hdrs": ["lib/event_engine/forkable.h"]
   , "deps":
-    [ ["", "config_vars"]
+    [ ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["", "config_vars"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
     , ["", "grpc_trace"]
@@ -1212,9 +1401,9 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/event_engine/poller.h"]
   , "deps":
-    [ ["", "event_engine_base_hdrs"]
+    [ ["@", "absl", "absl/functional", "function_ref"]
+    , ["", "event_engine_base_hdrs"]
     , ["", "gpr_platform"]
-    , ["@", "absl", "absl/functional", "function_ref"]
     ]
   }
 , "event_engine_time_util":
@@ -1238,9 +1427,9 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/event_engine/work_queue/work_queue.h"]
   , "deps":
-    [ ["", "event_engine_base_hdrs"]
+    [ ["@", "absl", "absl/functional", "any_invocable"]
+    , ["", "event_engine_base_hdrs"]
     , ["", "gpr"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
     ]
   }
 , "event_engine_basic_work_queue":
@@ -1252,10 +1441,10 @@
   , "deps":
     [ "common_event_engine_closures"
     , "event_engine_work_queue"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
     , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
     ]
   }
 , "common_event_engine_closures":
@@ -1264,9 +1453,9 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/event_engine/common_closures.h"]
   , "deps":
-    [ ["", "event_engine_base_hdrs"]
+    [ ["@", "absl", "absl/functional", "any_invocable"]
+    , ["", "event_engine_base_hdrs"]
     , ["", "gpr_platform"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
     ]
   }
 , "posix_event_engine_timer":
@@ -1285,10 +1474,10 @@
     [ "time"
     , "time_averaged_stats"
     , "useful"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
     ]
   }
 , "event_engine_thread_local":
@@ -1308,11 +1497,12 @@
   , "deps":
     [ "time"
     , "useful"
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/time", "time"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/time", "time"]
+    , ["", "gpr"]
     ]
   }
 , "event_engine_thread_pool":
@@ -1333,21 +1523,23 @@
     , "event_engine_basic_work_queue"
     , "event_engine_thread_count"
     , "event_engine_thread_local"
-    , "event_engine_trace"
     , "event_engine_work_queue"
     , "examine_stack"
     , "forkable"
     , "no_destruct"
     , "notification"
     , "time"
-    , ["", "backoff"]
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
     , ["@", "absl", "absl/container", "flat_hash_set"]
     , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/time", "time"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "backoff"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
+    , ["", "grpc_trace"]
     ]
   }
 , "posix_event_engine_base_hdrs":
@@ -1358,11 +1550,11 @@
   , "deps":
     [ "event_engine_extensions"
     , "event_engine_query_extensions"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
     , ["@", "absl", "absl/functional", "any_invocable"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
     ]
   }
 , "posix_event_engine_timer_manager":
@@ -1377,12 +1569,14 @@
     , "notification"
     , "posix_event_engine_timer"
     , "time"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/time", "time"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr"]
     , ["", "grpc_trace"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/time", "time"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "posix_event_engine_event_poller":
@@ -1394,11 +1588,11 @@
     [ "event_engine_poller"
     , "forkable"
     , "posix_event_engine_closure"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/functional", "any_invocable"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr_platform"]
     ]
   }
 , "posix_event_engine_closure":
@@ -1407,10 +1601,10 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/event_engine/posix_engine/posix_engine_closure.h"]
   , "deps":
-    [ ["", "event_engine_base_hdrs"]
-    , ["", "gpr_platform"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
+    [ ["@", "absl", "absl/functional", "any_invocable"]
     , ["@", "absl", "absl/status", "status"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr_platform"]
     ]
   }
 , "posix_event_engine_lockfree_event":
@@ -1424,8 +1618,9 @@
     , "posix_event_engine_closure"
     , "posix_event_engine_event_poller"
     , "status_helper"
-    , ["", "gpr"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/status", "status"]
+    , ["", "gpr"]
     ]
   }
 , "posix_event_engine_wakeup_fd_posix":
@@ -1433,7 +1628,7 @@
   , "name": ["posix_event_engine_wakeup_fd_posix"]
   , "stage": ["src", "core"]
   , "hdrs": ["lib/event_engine/posix_engine/wakeup_fd_posix.h"]
-  , "deps": [["", "gpr_platform"], ["@", "absl", "absl/status", "status"]]
+  , "deps": [["@", "absl", "absl/status", "status"], ["", "gpr_platform"]]
   }
 , "posix_event_engine_wakeup_fd_posix_pipe":
   { "type": ["@", "rules", "CC", "library"]
@@ -1445,10 +1640,10 @@
     [ "iomgr_port"
     , "posix_event_engine_wakeup_fd_posix"
     , "strerror"
-    , ["", "gpr"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
     ]
   }
 , "posix_event_engine_wakeup_fd_posix_eventfd":
@@ -1461,10 +1656,10 @@
     [ "iomgr_port"
     , "posix_event_engine_wakeup_fd_posix"
     , "strerror"
-    , ["", "gpr"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
     ]
   }
 , "posix_event_engine_wakeup_fd_posix_default":
@@ -1478,9 +1673,9 @@
     , "posix_event_engine_wakeup_fd_posix"
     , "posix_event_engine_wakeup_fd_posix_eventfd"
     , "posix_event_engine_wakeup_fd_posix_pipe"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
+    , ["", "gpr_platform"]
     ]
   }
 , "posix_event_engine_poller_posix_epoll1":
@@ -1501,16 +1696,18 @@
     , "posix_event_engine_wakeup_fd_posix_default"
     , "status_helper"
     , "strerror"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
-    , ["", "grpc_public_hdrs"]
     , ["@", "absl", "absl/base", "core_headers"]
     , ["@", "absl", "absl/container", "inlined_vector"]
     , ["@", "absl", "absl/functional", "function_ref"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
+    , ["", "grpc_public_hdrs"]
     ]
   }
 , "posix_event_engine_poller_posix_poll":
@@ -1531,17 +1728,18 @@
     , "status_helper"
     , "strerror"
     , "time"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
-    , ["", "grpc_public_hdrs"]
     , ["@", "absl", "absl/base", "core_headers"]
     , ["@", "absl", "absl/container", "inlined_vector"]
     , ["@", "absl", "absl/functional", "any_invocable"]
     , ["@", "absl", "absl/functional", "function_ref"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
+    , ["", "grpc_public_hdrs"]
     ]
   }
 , "posix_event_engine_poller_posix_default":
@@ -1557,9 +1755,9 @@
     , "posix_event_engine_event_poller"
     , "posix_event_engine_poller_posix_epoll1"
     , "posix_event_engine_poller_posix_poll"
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "config_vars"]
     , ["", "gpr"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "posix_event_engine_internal_errqueue":
@@ -1568,7 +1766,8 @@
   , "stage": ["src", "core"]
   , "srcs": ["lib/event_engine/posix_engine/internal_errqueue.cc"]
   , "hdrs": ["lib/event_engine/posix_engine/internal_errqueue.h"]
-  , "deps": ["iomgr_port", "strerror", ["", "gpr"]]
+  , "deps":
+    ["iomgr_port", "strerror", ["@", "absl", "absl/log", "log"], ["", "gpr"]]
   }
 , "posix_event_engine_traced_buffer_list":
   { "type": ["@", "rules", "CC", "library"]
@@ -1579,10 +1778,11 @@
   , "deps":
     [ "iomgr_port"
     , "posix_event_engine_internal_errqueue"
-    , ["", "gpr"]
     , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
     ]
   }
 , "posix_event_engine_endpoint":
@@ -1595,7 +1795,6 @@
     [ "event_engine_common"
     , "event_engine_extensions"
     , "event_engine_tcp_socket_utils"
-    , "event_engine_trace"
     , "experiments"
     , "iomgr_port"
     , "load_file"
@@ -1612,20 +1811,23 @@
     , "status_helper"
     , "strerror"
     , "time"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/hash", "hash"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "debug_location"]
     , ["", "event_engine_base_hdrs"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
     , ["", "grpc_public_hdrs"]
+    , ["", "grpc_trace"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/container", "flat_hash_map"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
-    , ["@", "absl", "absl/hash", "hash"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "event_engine_utils":
@@ -1636,9 +1838,10 @@
   , "hdrs": ["lib/event_engine/utils.h"]
   , "deps":
     [ "time"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr_platform"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "posix_event_engine_tcp_socket_utils":
@@ -1656,15 +1859,17 @@
     , "strerror"
     , "time"
     , "useful"
-    , ["", "channel_arg_names"]
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
-    , ["", "ref_counted_ptr"]
     , ["@", "absl", "absl/cleanup", "cleanup"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "channel_arg_names"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
+    , ["", "ref_counted_ptr"]
     ]
   }
 , "posix_event_engine_listener_utils":
@@ -1679,12 +1884,14 @@
     , "posix_event_engine_tcp_socket_utils"
     , "socket_mutator"
     , "status_helper"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
     , ["@", "absl", "absl/cleanup", "cleanup"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
     ]
   }
 , "posix_event_engine_listener":
@@ -1695,7 +1902,6 @@
   , "hdrs": ["lib/event_engine/posix_engine/posix_engine_listener.h"]
   , "deps":
     [ "event_engine_tcp_socket_utils"
-    , "event_engine_trace"
     , "iomgr_port"
     , "posix_event_engine_base_hdrs"
     , "posix_event_engine_closure"
@@ -1707,15 +1913,18 @@
     , "status_helper"
     , "strerror"
     , "time"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "exec_ctx"]
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
     , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "exec_ctx"]
+    , ["", "gpr"]
+    , ["", "grpc_trace"]
     ]
   }
 , "posix_event_engine":
@@ -1730,7 +1939,6 @@
     , "event_engine_poller"
     , "event_engine_tcp_socket_utils"
     , "event_engine_thread_pool"
-    , "event_engine_trace"
     , "event_engine_utils"
     , "forkable"
     , "init_internally"
@@ -1748,19 +1956,20 @@
     , "posix_event_engine_timer_manager"
     , "ref_counted_dns_resolver_interface"
     , "useful"
-    , ["", "config_vars"]
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
-    , ["", "grpc_trace"]
-    , ["", "orphanable"]
     , ["@", "absl", "absl/base", "core_headers"]
     , ["@", "absl", "absl/cleanup", "cleanup"]
     , ["@", "absl", "absl/container", "flat_hash_map"]
     , ["@", "absl", "absl/functional", "any_invocable"]
     , ["@", "absl", "absl/hash", "hash"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
+    , ["", "grpc_trace"]
+    , ["", "orphanable"]
     ]
   }
 , "windows_event_engine":
@@ -1773,11 +1982,11 @@
     [ "ares_resolver"
     , "channel_args_endpoint_config"
     , "common_event_engine_closures"
+    , "dump_args"
     , "error"
     , "event_engine_common"
     , "event_engine_tcp_socket_utils"
     , "event_engine_thread_pool"
-    , "event_engine_trace"
     , "event_engine_utils"
     , "init_internally"
     , "iomgr_port"
@@ -1787,11 +1996,13 @@
     , "windows_event_engine_listener"
     , "windows_iocp"
     , "windows_native_resolver"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
     ]
   }
 , "windows_native_resolver":
@@ -1803,10 +2014,10 @@
   , "deps":
     [ "error"
     , "status_helper"
+    , ["@", "absl", "absl/strings", "str_format"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
-    , ["@", "absl", "absl/strings", "str_format"]
     ]
   }
 , "windows_iocp":
@@ -1827,15 +2038,16 @@
     , "event_engine_tcp_socket_utils"
     , "event_engine_thread_pool"
     , "event_engine_time_util"
-    , "event_engine_trace"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/strings", "str_format"]
     , ["", "debug_location"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/strings", "str_format"]
     ]
   }
 , "windows_endpoint":
@@ -1848,17 +2060,18 @@
     [ "error"
     , "event_engine_tcp_socket_utils"
     , "event_engine_thread_pool"
-    , "event_engine_trace"
     , "status_helper"
     , "windows_iocp"
+    , ["@", "absl", "absl/cleanup", "cleanup"]
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/strings", "str_format"]
     , ["", "debug_location"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
-    , ["@", "absl", "absl/cleanup", "cleanup"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/strings", "str_format"]
     ]
   }
 , "windows_event_engine_listener":
@@ -1872,16 +2085,17 @@
     , "error"
     , "event_engine_tcp_socket_utils"
     , "event_engine_thread_pool"
-    , "event_engine_trace"
     , "windows_endpoint"
     , "windows_iocp"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
+    , ["", "gpr_platform"]
     ]
   }
 , "cf_event_engine":
@@ -1903,7 +2117,6 @@
     [ "event_engine_common"
     , "event_engine_tcp_socket_utils"
     , "event_engine_thread_pool"
-    , "event_engine_trace"
     , "event_engine_utils"
     , "init_internally"
     , "posix_event_engine_closure"
@@ -1912,14 +2125,16 @@
     , "posix_event_engine_timer_manager"
     , "ref_counted"
     , "strerror"
+    , ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr"]
     , ["", "parse_address"]
     , ["", "ref_counted_ptr"]
     , ["", "sockaddr_utils"]
-    , ["@", "absl", "absl/container", "flat_hash_map"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/strings", "str_format"]
     ]
   }
 , "event_engine_tcp_socket_utils":
@@ -1932,25 +2147,19 @@
     [ "iomgr_port"
     , "resolved_address"
     , "status_helper"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
-    , ["", "gpr_platform"]
-    , ["", "parse_address"]
-    , ["", "uri_parser"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
+    , ["", "gpr_platform"]
+    , ["", "parse_address"]
+    , ["", "uri_parser"]
     ]
-  }
-, "event_engine_trace":
-  { "type": ["@", "rules", "CC", "library"]
-  , "name": ["event_engine_trace"]
-  , "stage": ["src", "core"]
-  , "srcs": ["lib/event_engine/trace.cc"]
-  , "hdrs": ["lib/event_engine/trace.h"]
-  , "deps": [["", "gpr"], ["", "gpr_platform"], ["", "grpc_trace"]]
   }
 , "event_engine_shim":
   { "type": ["@", "rules", "CC", "library"]
@@ -1967,10 +2176,10 @@
   , "srcs": ["lib/event_engine/default_event_engine_factory.cc"]
   , "hdrs": ["lib/event_engine/default_event_engine_factory.h"]
   , "deps":
-    [ ["", "event_engine_base_hdrs"]
-    , ["", "gpr_platform"]
+    [ "posix_event_engine"
     , ["@", "absl", "absl/memory", "memory"]
-    , "posix_event_engine"
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr_platform"]
     ]
   }
 , "channel_args_endpoint_config":
@@ -1981,10 +2190,10 @@
   , "hdrs": ["lib/event_engine/channel_args_endpoint_config.h"]
   , "deps":
     [ "channel_args"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr_platform"]
     ]
   }
 , "thready_event_engine":
@@ -1994,13 +2203,20 @@
   , "srcs": ["lib/event_engine/thready_event_engine/thready_event_engine.cc"]
   , "hdrs": ["lib/event_engine/thready_event_engine/thready_event_engine.h"]
   , "deps":
-    [ ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
+    [ ["@", "absl", "absl/functional", "any_invocable"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
     ]
+  }
+, "event_engine_context":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["event_engine_context"]
+  , "stage": ["src", "core"]
+  , "hdrs": ["lib/event_engine/event_engine_context.h"]
+  , "deps": ["arena", ["", "event_engine_base_hdrs"], ["", "gpr"]]
   }
 , "default_event_engine":
   { "type": ["@", "rules", "CC", "library"]
@@ -2010,17 +2226,15 @@
   , "hdrs": ["lib/event_engine/default_event_engine.h"]
   , "deps":
     [ "channel_args"
-    , "context"
     , "default_event_engine_factory"
-    , "event_engine_trace"
     , "no_destruct"
     , "thready_event_engine"
+    , ["@", "absl", "absl/functional", "any_invocable"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr"]
     , ["", "grpc_trace"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
     ]
   }
 , "ref_counted_dns_resolver_interface":
@@ -2029,10 +2243,10 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/event_engine/ref_counted_dns_resolver_interface.h"]
   , "deps":
-    [ ["", "event_engine_base_hdrs"]
+    [ ["@", "absl", "absl/strings", "strings"]
+    , ["", "event_engine_base_hdrs"]
     , ["", "gpr_platform"]
     , ["", "orphanable"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "native_posix_dns_resolver":
@@ -2044,13 +2258,13 @@
   , "deps":
     [ "iomgr_port"
     , "useful"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
     , ["@", "absl", "absl/functional", "any_invocable"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
     ]
   }
 , "ares_resolver":
@@ -2081,6 +2295,20 @@
     , "resolved_address"
     , "slice"
     , "windows_iocp"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/hash", "hash"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
+    , ["@", "cares", "", "ares"]
+    , ["", "config_vars"]
     , ["", "debug_location"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr"]
@@ -2089,17 +2317,6 @@
     , ["", "parse_address"]
     , ["", "ref_counted_ptr"]
     , ["", "sockaddr_utils"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/container", "flat_hash_map"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
-    , ["@", "absl", "absl/hash", "hash"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/strings", "str_format"]
-    , ["@", "absl", "absl/types", "optional"]
-    , ["@", "absl", "absl/types", "variant"]
-    , ["@", "cares", "", "ares"]
     , ["third_party/address_sorting", "address_sorting"]
     ]
   }
@@ -2120,9 +2337,11 @@
   , "hdrs": ["lib/transport/bdp_estimator.h"]
   , "deps":
     [ "time"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "gpr"]
     , ["", "grpc_trace"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "percent_encoding":
@@ -2131,7 +2350,8 @@
   , "stage": ["src", "core"]
   , "srcs": ["lib/slice/percent_encoding.cc"]
   , "hdrs": ["lib/slice/percent_encoding.h"]
-  , "deps": ["bitset", "slice", ["", "gpr"]]
+  , "deps":
+    ["bitset", "slice", ["@", "absl", "absl/log", "check"], ["", "gpr"]]
   }
 , "socket_mutator":
   { "type": ["@", "rules", "CC", "library"]
@@ -2154,21 +2374,21 @@
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["histogram_view"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/debug/histogram_view.cc"]
-  , "hdrs": ["lib/debug/histogram_view.h"]
+  , "srcs": ["telemetry/histogram_view.cc"]
+  , "hdrs": ["telemetry/histogram_view.h"]
   , "deps": [["", "gpr"]]
   }
 , "stats_data":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["stats_data"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/debug/stats_data.cc"]
-  , "hdrs": ["lib/debug/stats_data.h"]
+  , "srcs": ["telemetry/stats_data.cc"]
+  , "hdrs": ["telemetry/stats_data.h"]
   , "deps":
     [ "histogram_view"
     , "per_cpu"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr_platform"]
     ]
   }
 , "per_cpu":
@@ -2177,7 +2397,7 @@
   , "stage": ["src", "core"]
   , "srcs": ["lib/gprpp/per_cpu.cc"]
   , "hdrs": ["lib/gprpp/per_cpu.h"]
-  , "deps": ["useful", ["", "exec_ctx"], ["", "gpr"]]
+  , "deps": ["useful", ["", "gpr"]]
   }
 , "event_log":
   { "type": ["@", "rules", "CC", "library"]
@@ -2187,10 +2407,11 @@
   , "hdrs": ["lib/debug/event_log.h"]
   , "deps":
     [ "per_cpu"
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "span"]
+    , ["", "gpr"]
     ]
   }
 , "load_file":
@@ -2201,11 +2422,11 @@
   , "hdrs": ["lib/gprpp/load_file.h"]
   , "deps":
     [ "slice"
-    , ["", "gpr"]
     , ["@", "absl", "absl/cleanup", "cleanup"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
     ]
   }
 , "http2_errors":
@@ -2222,14 +2443,6 @@
   , "hdrs": ["lib/surface/channel_stack_type.h"]
   , "deps": [["", "gpr_platform"]]
   }
-, "channel_stack_trace":
-  { "type": ["@", "rules", "CC", "library"]
-  , "name": ["channel_stack_trace"]
-  , "stage": ["src", "core"]
-  , "srcs": ["lib/channel/channel_stack_trace.cc"]
-  , "hdrs": ["lib/channel/channel_stack_trace.h"]
-  , "deps": [["", "gpr_platform"], ["", "grpc_trace"]]
-  }
 , "channel_init":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["channel_init"]
@@ -2240,16 +2453,31 @@
     [ "call_filters"
     , "channel_args"
     , "channel_fwd"
-    , "channel_stack_trace"
     , "channel_stack_type"
+    , "interception_chain"
+    , "unique_type_name"
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_stack_builder"]
     , ["", "debug_location"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
     , ["", "grpc_trace"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
+    ]
+  }
+, "server_interface":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["server_interface"]
+  , "stage": ["src", "core"]
+  , "hdrs": ["server/server_interface.h"]
+  , "deps":
+    [ "channel_args"
+    , ["", "channelz"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr_platform"]
     ]
   }
 , "single_set_ptr":
@@ -2257,7 +2485,7 @@
   , "name": ["single_set_ptr"]
   , "stage": ["src", "core"]
   , "hdrs": ["lib/gprpp/single_set_ptr.h"]
-  , "deps": [["", "gpr"]]
+  , "deps": [["@", "absl", "absl/log", "check"], ["", "gpr"]]
   }
 , "grpc_service_config":
   { "type": ["@", "rules", "CC", "library"]
@@ -2270,15 +2498,16 @@
   , "deps":
     [ "arena"
     , "chunked_vector"
+    , "down_cast"
     , "ref_counted"
     , "service_config_parser"
     , "slice_refcount"
     , "unique_type_name"
     , "useful"
-    , ["", "gpr_platform"]
-    , ["", "legacy_context"]
-    , ["", "ref_counted_ptr"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr_platform"]
+    , ["", "ref_counted_ptr"]
     ]
   }
 , "service_config_parser":
@@ -2291,8 +2520,9 @@
     [ "channel_args"
     , "json"
     , "validation_errors"
-    , ["", "gpr"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
     ]
   }
 , "notification":
@@ -2300,7 +2530,7 @@
   , "name": ["notification"]
   , "stage": ["src", "core"]
   , "hdrs": ["lib/gprpp/notification.h"]
-  , "deps": [["", "gpr"], ["@", "absl", "absl/time", "time"]]
+  , "deps": [["@", "absl", "absl/time", "time"], ["", "gpr"]]
   }
 , "channel_args":
   { "type": ["@", "rules", "CC", "library"]
@@ -2316,16 +2546,18 @@
     , "ref_counted_string"
     , "time"
     , "useful"
-    , ["", "channel_arg_names"]
-    , ["", "debug_location"]
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
-    , ["", "ref_counted_ptr"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/meta", "type_traits"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
     , ["@", "absl", "absl/types", "variant"]
+    , ["", "channel_arg_names"]
+    , ["", "debug_location"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
+    , ["", "ref_counted_ptr"]
     ]
   }
 , "resolved_address":
@@ -2334,6 +2566,203 @@
   , "stage": ["src", "core"]
   , "hdrs": ["lib/iomgr/resolved_address.h"]
   , "deps": ["iomgr_port", ["", "gpr_platform"]]
+  }
+, "client_channel_internal_header":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["client_channel_internal_header"]
+  , "stage": ["src", "core"]
+  , "hdrs": ["client_channel/client_channel_internal.h"]
+  , "deps":
+    [ "arena"
+    , "call_destination"
+    , "down_cast"
+    , "grpc_service_config"
+    , "lb_policy"
+    , "unique_type_name"
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["", "call_tracer"]
+    , ["", "gpr"]
+    ]
+  }
+, "subchannel_connector":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["subchannel_connector"]
+  , "stage": ["src", "core"]
+  , "hdrs": ["client_channel/connector.h"]
+  , "deps":
+    [ "channel_args"
+    , "closure"
+    , "error"
+    , "iomgr_fwd"
+    , "resolved_address"
+    , "time"
+    , ["", "channelz"]
+    , ["", "gpr_platform"]
+    , ["", "grpc_base"]
+    , ["", "iomgr"]
+    , ["", "orphanable"]
+    , ["", "ref_counted_ptr"]
+    ]
+  }
+, "subchannel_pool_interface":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["subchannel_pool_interface"]
+  , "stage": ["src", "core"]
+  , "srcs": ["client_channel/subchannel_pool_interface.cc"]
+  , "hdrs": ["client_channel/subchannel_pool_interface.h"]
+  , "deps":
+    [ "channel_args"
+    , "ref_counted"
+    , "resolved_address"
+    , "useful"
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr_platform"]
+    , ["", "grpc_trace"]
+    , ["", "ref_counted_ptr"]
+    , ["", "sockaddr_utils"]
+    ]
+  }
+, "config_selector":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["config_selector"]
+  , "stage": ["src", "core"]
+  , "hdrs": ["client_channel/config_selector.h"]
+  , "deps":
+    [ "arena"
+    , "channel_args"
+    , "channel_fwd"
+    , "client_channel_internal_header"
+    , "grpc_service_config"
+    , "interception_chain"
+    , "metadata_batch"
+    , "ref_counted"
+    , "slice"
+    , "unique_type_name"
+    , "useful"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr_public_hdrs"]
+    , ["", "grpc_public_hdrs"]
+    , ["", "ref_counted_ptr"]
+    ]
+  }
+, "client_channel_service_config":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["client_channel_service_config"]
+  , "stage": ["src", "core"]
+  , "srcs": ["client_channel/client_channel_service_config.cc"]
+  , "hdrs": ["client_channel/client_channel_service_config.h"]
+  , "deps":
+    [ "channel_args"
+    , "json"
+    , "json_args"
+    , "json_object_loader"
+    , "lb_policy"
+    , "lb_policy_registry"
+    , "service_config_parser"
+    , "time"
+    , "validation_errors"
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "config"]
+    , ["", "gpr_platform"]
+    , ["", "ref_counted_ptr"]
+    ]
+  }
+, "retry_service_config":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["retry_service_config"]
+  , "stage": ["src", "core"]
+  , "srcs": ["client_channel/retry_service_config.cc"]
+  , "hdrs": ["client_channel/retry_service_config.h"]
+  , "deps":
+    [ "channel_args"
+    , "json"
+    , "json_args"
+    , "json_channel_args"
+    , "json_object_loader"
+    , "service_config_parser"
+    , "time"
+    , "validation_errors"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "channel_arg_names"]
+    , ["", "config"]
+    , ["", "gpr_public_hdrs"]
+    , ["", "grpc_base"]
+    , ["", "grpc_public_hdrs"]
+    ]
+  }
+, "retry_throttle":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["retry_throttle"]
+  , "stage": ["src", "core"]
+  , "srcs": ["client_channel/retry_throttle.cc"]
+  , "hdrs": ["client_channel/retry_throttle.h"]
+  , "deps":
+    [ "gpr_atm"
+    , "ref_counted"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["", "gpr"]
+    , ["", "ref_counted_ptr"]
+    ]
+  }
+, "client_channel_backup_poller":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["client_channel_backup_poller"]
+  , "stage": ["src", "core"]
+  , "srcs": ["client_channel/backup_poller.cc"]
+  , "hdrs": ["client_channel/backup_poller.h"]
+  , "deps":
+    [ "closure"
+    , "error"
+    , "iomgr_fwd"
+    , "pollset_set"
+    , "time"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["", "config_vars"]
+    , ["", "gpr"]
+    , ["", "gpr_platform"]
+    , ["", "iomgr"]
+    , ["", "iomgr_timer"]
+    ]
+  }
+, "service_config_channel_arg_filter":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["service_config_channel_arg_filter"]
+  , "stage": ["src", "core"]
+  , "srcs": ["service_config/service_config_channel_arg_filter.cc"]
+  , "deps":
+    [ "arena"
+    , "arena_promise"
+    , "channel_args"
+    , "channel_fwd"
+    , "channel_stack_type"
+    , "context"
+    , "grpc_message_size_filter"
+    , "grpc_service_config"
+    , "metadata_batch"
+    , "service_config_parser"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "channel_arg_names"]
+    , ["", "config"]
+    , ["", "gpr_platform"]
+    , ["", "gpr_public_hdrs"]
+    , ["", "grpc_base"]
+    , ["", "grpc_service_config_impl"]
+    , ["", "ref_counted_ptr"]
+    ]
   }
 , "lb_policy":
   { "type": ["@", "rules", "CC", "library"]
@@ -2348,10 +2777,18 @@
     , "error"
     , "grpc_backend_metric_data"
     , "iomgr_fwd"
+    , "metrics"
     , "pollset_set"
     , "ref_counted"
     , "resolved_address"
     , "subchannel_interface"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/container", "inlined_vector"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
     , ["", "event_engine_base_hdrs"]
@@ -2362,12 +2799,6 @@
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
-    , ["@", "absl", "absl/types", "variant"]
     ]
   }
 , "lb_policy_factory":
@@ -2378,11 +2809,11 @@
   , "deps":
     [ "json"
     , "lb_policy"
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "gpr_platform"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "lb_policy_registry":
@@ -2395,13 +2826,30 @@
     [ "json"
     , "lb_policy"
     , "lb_policy_factory"
-    , ["", "gpr"]
-    , ["", "orphanable"]
-    , ["", "ref_counted_ptr"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
+    , ["", "orphanable"]
+    , ["", "ref_counted_ptr"]
+    ]
+  }
+, "lb_metadata":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["lb_metadata"]
+  , "stage": ["src", "core"]
+  , "srcs": ["client_channel/lb_metadata.cc"]
+  , "hdrs": ["client_channel/lb_metadata.h"]
+  , "deps":
+    [ "event_engine_common"
+    , "lb_policy"
+    , "metadata_batch"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "subchannel_interface":
@@ -2412,10 +2860,10 @@
   , "deps":
     [ "dual_ref_counted"
     , "iomgr_fwd"
+    , ["@", "absl", "absl/status", "status"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr_platform"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/status", "status"]
     ]
   }
 , "delegating_helper":
@@ -2428,48 +2876,93 @@
     , "lb_policy"
     , "resolved_address"
     , "subchannel_interface"
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "debug_location"]
     , ["", "event_engine_base_hdrs"]
     , ["", "gpr_platform"]
     , ["", "grpc_security_base"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/status", "status"]
+    ]
+  }
+, "backend_metric_parser":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["backend_metric_parser"]
+  , "stage": ["src", "core"]
+  , "srcs": ["load_balancing/backend_metric_parser.cc"]
+  , "hdrs": ["load_balancing/backend_metric_parser.h"]
+  , "deps":
+    [ "grpc_backend_metric_data"
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr_platform"]
+    , ["src/core/ext/upb-gen", "upb-gen-lib"]
+    , ["third_party/upb", "base"]
+    , ["third_party/upb", "mem"]
+    , ["third_party/upb", "message"]
     ]
   }
 , "proxy_mapper":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["proxy_mapper"]
   , "stage": ["src", "core"]
-  , "hdrs": ["lib/handshaker/proxy_mapper.h"]
+  , "hdrs": ["handshaker/proxy_mapper.h"]
   , "deps":
     [ "channel_args"
     , "resolved_address"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr_platform"]
     ]
   }
 , "proxy_mapper_registry":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["proxy_mapper_registry"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/handshaker/proxy_mapper_registry.cc"]
-  , "hdrs": ["lib/handshaker/proxy_mapper_registry.h"]
+  , "srcs": ["handshaker/proxy_mapper_registry.cc"]
+  , "hdrs": ["handshaker/proxy_mapper_registry.h"]
   , "deps":
     [ "channel_args"
     , "proxy_mapper"
     , "resolved_address"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr_platform"]
+    ]
+  }
+, "http_proxy_mapper":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["http_proxy_mapper"]
+  , "stage": ["src", "core"]
+  , "srcs": ["handshaker/http_connect/http_proxy_mapper.cc"]
+  , "hdrs": ["handshaker/http_connect/http_proxy_mapper.h"]
+  , "deps":
+    [ "channel_args"
+    , "env"
+    , "experiments"
+    , "proxy_mapper"
+    , "resolved_address"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "channel_arg_names"]
+    , ["", "config"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "http_connect_handshaker"]
+    , ["", "iomgr"]
+    , ["", "parse_address"]
+    , ["", "sockaddr_utils"]
+    , ["", "uri_parser"]
     ]
   }
 , "grpc_server_config_selector":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["grpc_server_config_selector"]
   , "stage": ["src", "core"]
-  , "hdrs": ["ext/filters/server_config_selector/server_config_selector.h"]
+  , "hdrs": ["server/server_config_selector.h"]
   , "deps":
     [ "dual_ref_counted"
     , "grpc_service_config"
@@ -2477,40 +2970,39 @@
     , "ref_counted"
     , "service_config_parser"
     , "useful"
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "gpr_platform"]
     , ["", "grpc_base"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "grpc_server_config_selector_filter":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["grpc_server_config_selector_filter"]
   , "stage": ["src", "core"]
-  , "srcs":
-    ["ext/filters/server_config_selector/server_config_selector_filter.cc"]
-  , "hdrs":
-    ["ext/filters/server_config_selector/server_config_selector_filter.h"]
+  , "srcs": ["server/server_config_selector_filter.cc"]
+  , "hdrs": ["server/server_config_selector_filter.h"]
   , "deps":
     [ "arena"
     , "arena_promise"
     , "channel_args"
     , "channel_fwd"
     , "context"
+    , "event_engine_context"
     , "grpc_server_config_selector"
     , "grpc_service_config"
     , "metadata_batch"
     , "status_helper"
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "legacy_context"]
-    , ["", "promise"]
-    , ["", "ref_counted_ptr"]
     , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "promise"]
+    , ["", "ref_counted_ptr"]
     ]
   }
 , "sorted_pack":
@@ -2544,10 +3036,11 @@
     , "json_args"
     , "ref_counted"
     , "validation_errors"
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "alts_util"]
     , ["", "gpr"]
+    , ["", "grpc_core_credentials_header"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "certificate_provider_registry":
@@ -2560,8 +3053,10 @@
     ["lib/security/certificate_provider/certificate_provider_registry.h"]
   , "deps":
     [ "certificate_provider_factory"
-    , ["", "gpr"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
     ]
   }
 , "grpc_audit_logging":
@@ -2577,14 +3072,15 @@
     , "lib/security/authorization/stdout_logger.h"
     ]
   , "deps":
-    [ ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["@", "absl", "absl/base", "core_headers"]
+    [ ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/time", "time"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
     ]
   }
 , "grpc_authorization_base":
@@ -2607,12 +3103,18 @@
     , "channel_args"
     , "channel_fwd"
     , "dual_ref_counted"
+    , "endpoint_info_handshaker"
     , "load_file"
     , "metadata_batch"
     , "ref_counted"
     , "resolved_address"
     , "slice"
     , "useful"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
     , ["", "gpr"]
     , ["", "grpc_base"]
@@ -2623,10 +3125,6 @@
     , ["", "promise"]
     , ["", "ref_counted_ptr"]
     , ["", "uri_parser"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_crl_provider":
@@ -2638,9 +3136,6 @@
   , "deps":
     [ "default_event_engine"
     , "directory_reader"
-    , ["", "exec_ctx"]
-    , ["", "gpr"]
-    , ["", "grpc_base"]
     , ["@", "absl", "absl/base", "core_headers"]
     , ["@", "absl", "absl/container", "flat_hash_map"]
     , ["@", "absl", "absl/status", "status"]
@@ -2650,6 +3145,9 @@
     , ["@", "absl", "absl/types", "span"]
     , ["@", "ssl", "", "crypto"]
     , ["@", "ssl", "", "ssl"]
+    , ["", "exec_ctx"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
     ]
   }
 , "grpc_fake_credentials":
@@ -2675,22 +3173,27 @@
     , "slice"
     , "unique_type_name"
     , "useful"
-    , ["", "channel_arg_names"]
-    , ["", "debug_location"]
-    , ["", "exec_ctx"]
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "grpc_security_base"]
-    , ["", "handshaker"]
-    , ["", "promise"]
-    , ["", "ref_counted_ptr"]
-    , ["", "tsi_base"]
-    , ["", "tsi_fake_credentials"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "channel_arg_names"]
+    , ["", "debug_location"]
+    , ["", "exec_ctx"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
+    , ["", "grpc_security_base"]
+    , ["", "handshaker"]
+    , ["", "iomgr"]
+    , ["", "promise"]
+    , ["", "ref_counted_ptr"]
+    , ["", "resource_quota_api"]
+    , ["", "tsi_base"]
+    , ["", "tsi_fake_credentials"]
     ]
   }
 , "grpc_insecure_credentials":
@@ -2713,17 +3216,20 @@
     , "iomgr_fwd"
     , "tsi_local_credentials"
     , "unique_type_name"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
     , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
     , ["", "grpc_security_base"]
     , ["", "handshaker"]
+    , ["", "iomgr"]
     , ["", "promise"]
     , ["", "ref_counted_ptr"]
     , ["", "tsi_base"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "tsi_local_credentials":
@@ -2733,7 +3239,8 @@
   , "srcs": ["tsi/local_transport_security.cc"]
   , "hdrs": ["tsi/local_transport_security.h"]
   , "deps":
-    [ ["", "event_engine_base_hdrs"]
+    [ ["@", "absl", "absl/log", "log"]
+    , ["", "event_engine_base_hdrs"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
     , ["", "tsi_base"]
@@ -2762,23 +3269,27 @@
     , "tsi_local_credentials"
     , "unique_type_name"
     , "useful"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
     , ["", "grpc_base"]
     , ["", "grpc_client_channel"]
+    , ["", "grpc_core_credentials_header"]
     , ["", "grpc_security_base"]
     , ["", "handshaker"]
+    , ["", "iomgr"]
     , ["", "parse_address"]
     , ["", "promise"]
     , ["", "ref_counted_ptr"]
     , ["", "sockaddr_utils"]
     , ["", "tsi_base"]
     , ["", "uri_parser"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_ssl_credentials":
@@ -2801,23 +3312,27 @@
     , "iomgr_fwd"
     , "unique_type_name"
     , "useful"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
     , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
     , ["", "grpc_security_base"]
     , ["", "grpc_trace"]
     , ["", "handshaker"]
+    , ["", "iomgr"]
     , ["", "promise"]
     , ["", "ref_counted_ptr"]
     , ["", "tsi_base"]
     , ["", "tsi_ssl_credentials"]
     , ["", "tsi_ssl_session_cache"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/strings", "str_format"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_google_default_credentials":
@@ -2852,23 +3367,27 @@
     , "time"
     , "unique_type_name"
     , "useful"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "alts_util"]
     , ["", "channel_arg_names"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
     , ["", "grpc_alts_credentials"]
     , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
     , ["", "grpc_jwt_credentials"]
     , ["", "grpc_public_hdrs"]
     , ["", "grpc_security_base"]
     , ["", "grpc_trace"]
     , ["", "httpcli"]
+    , ["", "iomgr"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "uri_parser"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "strerror":
@@ -2877,7 +3396,7 @@
   , "stage": ["src", "core"]
   , "srcs": ["lib/gprpp/strerror.cc"]
   , "hdrs": ["lib/gprpp/strerror.h"]
-  , "deps": [["", "gpr_platform"], ["@", "absl", "absl/strings", "str_format"]]
+  , "deps": [["@", "absl", "absl/strings", "str_format"], ["", "gpr_platform"]]
   }
 , "grpc_tls_credentials":
   { "type": ["@", "rules", "CC", "library"]
@@ -2913,30 +3432,34 @@
     , "status_helper"
     , "unique_type_name"
     , "useful"
-    , ["", "channel_arg_names"]
-    , ["", "debug_location"]
-    , ["", "exec_ctx"]
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "grpc_credentials_util"]
-    , ["", "grpc_public_hdrs"]
-    , ["", "grpc_security_base"]
-    , ["", "grpc_trace"]
-    , ["", "handshaker"]
-    , ["", "promise"]
-    , ["", "ref_counted_ptr"]
-    , ["", "tsi_base"]
-    , ["", "tsi_ssl_credentials"]
-    , ["", "tsi_ssl_session_cache"]
     , ["@", "absl", "absl/base", "core_headers"]
     , ["@", "absl", "absl/container", "inlined_vector"]
     , ["@", "absl", "absl/functional", "bind_front"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
     , ["@", "ssl", "", "crypto"]
     , ["@", "ssl", "", "ssl"]
+    , ["", "channel_arg_names"]
+    , ["", "debug_location"]
+    , ["", "exec_ctx"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
+    , ["", "grpc_credentials_util"]
+    , ["", "grpc_public_hdrs"]
+    , ["", "grpc_security_base"]
+    , ["", "grpc_trace"]
+    , ["", "handshaker"]
+    , ["", "iomgr"]
+    , ["", "promise"]
+    , ["", "ref_counted_ptr"]
+    , ["", "tsi_base"]
+    , ["", "tsi_ssl_credentials"]
+    , ["", "tsi_ssl_session_cache"]
     ]
   }
 , "grpc_iam_credentials":
@@ -2951,17 +3474,96 @@
     , "slice"
     , "unique_type_name"
     , "useful"
-    , ["", "exec_ctx"]
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "grpc_security_base"]
-    , ["", "grpc_trace"]
-    , ["", "promise"]
-    , ["", "ref_counted_ptr"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "exec_ctx"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
+    , ["", "grpc_security_base"]
+    , ["", "grpc_trace"]
+    , ["", "promise"]
+    , ["", "ref_counted_ptr"]
+    ]
+  }
+, "token_fetcher_credentials":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["token_fetcher_credentials"]
+  , "stage": ["src", "core"]
+  , "srcs":
+    ["lib/security/credentials/token_fetcher/token_fetcher_credentials.cc"]
+  , "hdrs":
+    ["lib/security/credentials/token_fetcher/token_fetcher_credentials.h"]
+  , "deps":
+    [ "arena_promise"
+    , "context"
+    , "default_event_engine"
+    , "metadata"
+    , "poll"
+    , "pollset_set"
+    , "ref_counted"
+    , "time"
+    , "useful"
+    , ["@", "absl", "absl/container", "flat_hash_set"]
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/types", "variant"]
+    , ["", "backoff"]
+    , ["", "gpr"]
+    , ["", "grpc_security_base"]
+    , ["", "grpc_trace"]
+    , ["", "httpcli"]
+    , ["", "iomgr"]
+    , ["", "orphanable"]
+    , ["", "promise"]
+    , ["", "ref_counted_ptr"]
+    ]
+  }
+, "gcp_service_account_identity_credentials":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["gcp_service_account_identity_credentials"]
+  , "stage": ["src", "core"]
+  , "srcs":
+    [ "lib/security/credentials/gcp_service_account_identity/gcp_service_account_identity_credentials.cc"
+    ]
+  , "hdrs":
+    [ "lib/security/credentials/gcp_service_account_identity/gcp_service_account_identity_credentials.h"
+    ]
+  , "deps":
+    [ "activity"
+    , "arena_promise"
+    , "closure"
+    , "error"
+    , "json"
+    , "json_args"
+    , "json_object_loader"
+    , "json_reader"
+    , "metadata"
+    , "pollset_set"
+    , "ref_counted"
+    , "slice"
+    , "status_conversion"
+    , "status_helper"
+    , "time"
+    , "token_fetcher_credentials"
+    , "unique_type_name"
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
+    , ["", "grpc_security_base"]
+    , ["", "httpcli"]
+    , ["", "iomgr"]
+    , ["", "orphanable"]
+    , ["", "promise"]
+    , ["", "ref_counted_ptr"]
+    , ["", "uri_parser"]
     ]
   }
 , "grpc_oauth2_credentials":
@@ -2989,23 +3591,28 @@
     , "slice_refcount"
     , "status_helper"
     , "time"
+    , "token_fetcher_credentials"
     , "unique_type_name"
     , "useful"
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "grpc_credentials_util"]
-    , ["", "grpc_security_base"]
-    , ["", "grpc_trace"]
-    , ["", "httpcli"]
-    , ["", "orphanable"]
-    , ["", "promise"]
-    , ["", "ref_counted_ptr"]
-    , ["", "uri_parser"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
+    , ["", "grpc_credentials_util"]
+    , ["", "grpc_security_base"]
+    , ["", "grpc_trace"]
+    , ["", "httpcli"]
+    , ["", "iomgr"]
+    , ["", "orphanable"]
+    , ["", "promise"]
+    , ["", "ref_counted_ptr"]
+    , ["", "uri_parser"]
     ]
   }
 , "grpc_external_account_credentials":
@@ -3041,14 +3648,9 @@
     , "slice_refcount"
     , "status_helper"
     , "time"
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "grpc_credentials_util"]
-    , ["", "grpc_security_base"]
-    , ["", "httpcli"]
-    , ["", "orphanable"]
-    , ["", "ref_counted_ptr"]
-    , ["", "uri_parser"]
+    , "token_fetcher_credentials"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
@@ -3056,14 +3658,24 @@
     , ["@", "absl", "absl/time", "time"]
     , ["@", "absl", "absl/types", "optional"]
     , ["@", "ssl", "", "crypto"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
+    , ["", "grpc_credentials_util"]
+    , ["", "grpc_security_base"]
+    , ["", "httpcli"]
+    , ["", "iomgr"]
+    , ["", "orphanable"]
+    , ["", "ref_counted_ptr"]
+    , ["", "uri_parser"]
     ]
   }
 , "httpcli_ssl_credentials":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["httpcli_ssl_credentials"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/http/httpcli_security_connector.cc"]
-  , "hdrs": ["lib/http/httpcli_ssl_credentials.h"]
+  , "srcs": ["util/http_client/httpcli_security_connector.cc"]
+  , "hdrs": ["util/http_client/httpcli_ssl_credentials.h"]
   , "deps":
     [ "arena_promise"
     , "channel_args"
@@ -3071,20 +3683,23 @@
     , "error"
     , "iomgr_fwd"
     , "unique_type_name"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
     , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
     , ["", "grpc_security_base"]
     , ["", "handshaker"]
+    , ["", "iomgr"]
     , ["", "promise"]
     , ["", "ref_counted_ptr"]
     , ["", "tsi_base"]
     , ["", "tsi_ssl_credentials"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "tsi_ssl_types":
@@ -3092,7 +3707,7 @@
   , "name": ["tsi_ssl_types"]
   , "stage": ["src", "core"]
   , "hdrs": ["tsi/ssl_types.h"]
-  , "deps": [["", "gpr_platform"], ["@", "ssl", "", "ssl"]]
+  , "deps": [["@", "ssl", "", "ssl"], ["", "gpr_platform"]]
   }
 , "grpc_matchers":
   { "type": ["@", "rules", "CC", "library"]
@@ -3101,13 +3716,13 @@
   , "srcs": ["lib/matchers/matchers.cc"]
   , "hdrs": ["lib/matchers/matchers.h"]
   , "deps":
-    [ ["", "gpr"]
-    , ["@", "absl", "absl/status", "status"]
+    [ ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
     , ["@", "re2", "", "re2"]
+    , ["", "gpr"]
     ]
   }
 , "grpc_rbac_engine":
@@ -3129,56 +3744,58 @@
     , "grpc_authorization_base"
     , "grpc_matchers"
     , "resolved_address"
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "parse_address"]
-    , ["", "sockaddr_utils"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "parse_address"]
+    , ["", "sockaddr_utils"]
     ]
   }
 , "json":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["json"]
   , "stage": ["src", "core"]
-  , "hdrs": ["lib/json/json.h"]
+  , "hdrs": ["util/json/json.h"]
   , "deps": [["", "gpr"]]
   }
 , "json_reader":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["json_reader"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/json/json_reader.cc"]
-  , "hdrs": ["lib/json/json_reader.h"]
+  , "srcs": ["util/json/json_reader.cc"]
+  , "hdrs": ["util/json/json_reader.h"]
   , "deps":
     [ "json"
     , "match"
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "variant"]
+    , ["", "gpr"]
     ]
   }
 , "json_writer":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["json_writer"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/json/json_writer.cc"]
-  , "hdrs": ["lib/json/json_writer.h"]
-  , "deps": ["json", ["", "gpr"], ["@", "absl", "absl/strings", "strings"]]
+  , "srcs": ["util/json/json_writer.cc"]
+  , "hdrs": ["util/json/json_writer.h"]
+  , "deps": ["json", ["@", "absl", "absl/strings", "strings"], ["", "gpr"]]
   }
 , "json_util":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["json_util"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/json/json_util.cc"]
-  , "hdrs": ["lib/json/json_util.h"]
+  , "srcs": ["util/json/json_util.cc"]
+  , "hdrs": ["util/json/json_util.h"]
   , "deps":
     [ "error"
     , "json"
@@ -3187,49 +3804,49 @@
     , "no_destruct"
     , "time"
     , "validation_errors"
-    , ["", "gpr"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
     ]
   }
 , "json_args":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["json_args"]
   , "stage": ["src", "core"]
-  , "hdrs": ["lib/json/json_args.h"]
-  , "deps": [["", "gpr"], ["@", "absl", "absl/strings", "strings"]]
+  , "hdrs": ["util/json/json_args.h"]
+  , "deps": [["@", "absl", "absl/strings", "strings"], ["", "gpr"]]
   }
 , "json_object_loader":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["json_object_loader"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/json/json_object_loader.cc"]
-  , "hdrs": ["lib/json/json_object_loader.h"]
+  , "srcs": ["util/json/json_object_loader.cc"]
+  , "hdrs": ["util/json/json_object_loader.h"]
   , "deps":
     [ "json"
     , "json_args"
     , "no_destruct"
     , "time"
     , "validation_errors"
-    , ["", "gpr"]
-    , ["", "ref_counted_ptr"]
     , ["@", "absl", "absl/meta", "type_traits"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
+    , ["", "ref_counted_ptr"]
     ]
   }
 , "json_channel_args":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["json_channel_args"]
   , "stage": ["src", "core"]
-  , "hdrs": ["lib/json/json_channel_args.h"]
+  , "hdrs": ["util/json/json_channel_args.h"]
   , "deps":
     [ "channel_args"
     , "json_args"
-    , ["", "gpr"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
     ]
   }
 , "idle_filter_state":
@@ -3244,16 +3861,11 @@
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["grpc_channel_idle_filter"]
   , "stage": ["src", "core"]
-  , "srcs":
-    [ "ext/filters/channel_idle/channel_idle_filter.cc"
-    , "ext/filters/channel_idle/legacy_channel_idle_filter.cc"
-    ]
-  , "hdrs":
-    [ "ext/filters/channel_idle/channel_idle_filter.h"
-    , "ext/filters/channel_idle/legacy_channel_idle_filter.h"
-    ]
+  , "srcs": ["ext/filters/channel_idle/legacy_channel_idle_filter.cc"]
+  , "hdrs": ["ext/filters/channel_idle/legacy_channel_idle_filter.h"]
   , "deps":
     [ "activity"
+    , "arena"
     , "arena_promise"
     , "channel_args"
     , "channel_fwd"
@@ -3275,6 +3887,12 @@
     , "status_helper"
     , "time"
     , "try_seq"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/meta", "type_traits"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
     , ["", "config"]
     , ["", "debug_location"]
@@ -3285,41 +3903,6 @@
     , ["", "orphanable"]
     , ["", "promise"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/meta", "type_traits"]
-    , ["@", "absl", "absl/random", "random"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/types", "optional"]
-    ]
-  }
-, "grpc_deadline_filter":
-  { "type": ["@", "rules", "CC", "library"]
-  , "name": ["grpc_deadline_filter"]
-  , "stage": ["src", "core"]
-  , "srcs": ["ext/filters/deadline/deadline_filter.cc"]
-  , "hdrs": ["ext/filters/deadline/deadline_filter.h"]
-  , "deps":
-    [ "arena"
-    , "arena_promise"
-    , "channel_fwd"
-    , "channel_stack_type"
-    , "closure"
-    , "context"
-    , "error"
-    , "metadata_batch"
-    , "status_helper"
-    , "time"
-    , ["", "channel_arg_names"]
-    , ["", "config"]
-    , ["", "debug_location"]
-    , ["", "exec_ctx"]
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "grpc_public_hdrs"]
-    , ["", "iomgr_timer"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_client_authority_filter":
@@ -3335,15 +3918,15 @@
     , "channel_stack_type"
     , "metadata_batch"
     , "slice"
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
     , ["", "config"]
     , ["", "gpr_platform"]
     , ["", "grpc_base"]
     , ["", "grpc_security_base"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_message_size_filter":
@@ -3360,7 +3943,6 @@
     , "channel_fwd"
     , "channel_stack_type"
     , "context"
-    , "grpc_deadline_filter"
     , "grpc_service_config"
     , "json"
     , "json_args"
@@ -3373,17 +3955,17 @@
     , "slice"
     , "slice_buffer"
     , "validation_errors"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
     , ["", "config"]
     , ["", "gpr"]
     , ["", "grpc_base"]
     , ["", "grpc_public_hdrs"]
     , ["", "grpc_trace"]
-    , ["", "legacy_context"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "str_format"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_fault_injection_filter":
@@ -3413,19 +3995,19 @@
     , "time"
     , "try_seq"
     , "validation_errors"
-    , ["", "config"]
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "grpc_public_hdrs"]
-    , ["", "grpc_trace"]
-    , ["", "legacy_context"]
     , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/meta", "type_traits"]
     , ["@", "absl", "absl/random", "random"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "config"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_public_hdrs"]
+    , ["", "grpc_trace"]
     ]
   }
 , "grpc_rbac_filter":
@@ -3457,16 +4039,15 @@
     , "metadata_batch"
     , "service_config_parser"
     , "validation_errors"
-    , ["", "config"]
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "grpc_security_base"]
-    , ["", "legacy_context"]
-    , ["", "promise"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "config"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_security_base"]
+    , ["", "promise"]
     ]
   }
 , "grpc_stateful_session_filter":
@@ -3501,14 +4082,54 @@
     , "time"
     , "unique_type_name"
     , "validation_errors"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "config"]
     , ["", "gpr"]
     , ["", "grpc_base"]
     , ["", "grpc_trace"]
-    , ["", "legacy_context"]
+    ]
+  }
+, "gcp_authentication_filter":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["gcp_authentication_filter"]
+  , "stage": ["src", "core"]
+  , "srcs":
+    [ "ext/filters/gcp_authentication/gcp_authentication_filter.cc"
+    , "ext/filters/gcp_authentication/gcp_authentication_service_config_parser.cc"
+    ]
+  , "hdrs":
+    [ "ext/filters/gcp_authentication/gcp_authentication_filter.h"
+    , "ext/filters/gcp_authentication/gcp_authentication_service_config_parser.h"
+    ]
+  , "deps":
+    [ "arena"
+    , "channel_args"
+    , "channel_fwd"
+    , "context"
+    , "gcp_service_account_identity_credentials"
+    , "grpc_resolver_xds_attributes"
+    , "grpc_service_config"
+    , "json"
+    , "json_args"
+    , "json_object_loader"
+    , "lru_cache"
+    , "service_config_parser"
+    , "validation_errors"
+    , "xds_config"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "config"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_security_base"]
+    , ["", "grpc_trace"]
+    , ["", "ref_counted_ptr"]
     ]
   }
 , "grpc_lb_policy_grpclb":
@@ -3560,8 +4181,23 @@
     , "time"
     , "useful"
     , "validation_errors"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/container", "inlined_vector"]
+    , ["@", "absl", "absl/functional", "function_ref"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "globals"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
     , ["", "backoff"]
+    , ["", "channel"]
     , ["", "channel_arg_names"]
+    , ["", "channel_create"]
+    , ["", "channelz"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
@@ -3575,22 +4211,14 @@
     , ["", "grpc_resolver_fake"]
     , ["", "grpc_security_base"]
     , ["", "grpc_trace"]
+    , ["", "lb_child_policy_handler"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "sockaddr_utils"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/container", "inlined_vector"]
-    , ["@", "absl", "absl/functional", "function_ref"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "str_format"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
-    , ["@", "absl", "absl/types", "variant"]
+    , ["src/core/ext/upb-gen", "upb-gen-lib"]
     , ["third_party/upb", "base"]
     , ["third_party/upb", "mem"]
-    , ["src/core/ext/upb-gen", "upb-gen-lib"]
     ]
   }
 , "random_early_detection":
@@ -3600,9 +4228,9 @@
   , "srcs": ["lib/backoff/random_early_detection.cc"]
   , "hdrs": ["lib/backoff/random_early_detection.h"]
   , "deps":
-    [ ["", "gpr_platform"]
-    , ["@", "absl", "absl/random", "bit_gen_ref"]
+    [ ["@", "absl", "absl/random", "bit_gen_ref"]
     , ["@", "absl", "absl/random", "distributions"]
+    , ["", "gpr_platform"]
     ]
   }
 , "grpc_backend_metric_data":
@@ -3610,19 +4238,21 @@
   , "name": ["grpc_backend_metric_data"]
   , "stage": ["src", "core"]
   , "hdrs": ["load_balancing/backend_metric_data.h"]
-  , "deps": [["", "gpr_platform"], ["@", "absl", "absl/strings", "strings"]]
+  , "deps": [["@", "absl", "absl/strings", "strings"], ["", "gpr_platform"]]
   }
 , "grpc_backend_metric_provider":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["grpc_backend_metric_provider"]
   , "stage": ["src", "core"]
   , "hdrs": ["ext/filters/backend_metrics/backend_metric_provider.h"]
+  , "deps": ["arena"]
   }
 , "grpc_lb_policy_rls":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["grpc_lb_policy_rls"]
   , "stage": ["src", "core"]
   , "srcs": ["load_balancing/rls/rls.cc"]
+  , "hdrs": ["load_balancing/rls/rls.h"]
   , "deps":
     [ "channel_args"
     , "closure"
@@ -3639,14 +4269,31 @@
     , "lb_policy"
     , "lb_policy_factory"
     , "lb_policy_registry"
+    , "match"
+    , "metrics"
     , "pollset_set"
     , "slice"
     , "slice_refcount"
     , "status_helper"
     , "time"
+    , "upb_utils"
+    , "uuid_v4"
     , "validation_errors"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/hash", "hash"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "backoff"]
+    , ["", "channel"]
     , ["", "channel_arg_names"]
+    , ["", "channel_create"]
+    , ["", "channelz"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
@@ -3659,92 +4306,359 @@
     , ["", "grpc_security_base"]
     , ["", "grpc_service_config_impl"]
     , ["", "grpc_trace"]
+    , ["", "lb_child_policy_handler"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/hash", "hash"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "str_format"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
+    , ["src/core/ext/upb-gen", "upb-gen-lib"]
     , ["third_party/upb", "base"]
     , ["third_party/upb", "mem"]
-    , ["src/core/ext/upb-gen", "upb-gen-lib"]
+    ]
+  }
+, "lru_cache":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["lru_cache"]
+  , "stage": ["src", "core"]
+  , "hdrs": ["util/lru_cache.h"]
+  , "deps":
+    [ ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "grpc_public_hdrs"]
     ]
   }
 , "upb_utils":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["upb_utils"]
   , "stage": ["src", "core"]
-  , "hdrs": ["ext/xds/upb_utils.h"]
+  , "hdrs": ["util/upb_utils.h"]
   , "deps":
-    [ ["", "gpr_platform"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["third_party/upb", "base"]
-    ]
+    [["@", "absl", "absl/strings", "strings"], ["third_party/upb", "base"]]
   }
 , "xds_enabled_server":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["xds_enabled_server"]
   , "stage": ["src", "core"]
-  , "hdrs": ["ext/xds/xds_enabled_server.h"]
+  , "hdrs": ["xds/grpc/xds_enabled_server.h"]
+  }
+, "xds_certificate_provider":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_certificate_provider"]
+  , "stage": ["src", "core"]
+  , "srcs": ["xds/grpc/xds_certificate_provider.cc"]
+  , "hdrs": ["xds/grpc/xds_certificate_provider.h"]
+  , "deps":
+    [ "channel_args"
+    , "error"
+    , "grpc_matchers"
+    , "grpc_tls_credentials"
+    , "unique_type_name"
+    , "useful"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/functional", "bind_front"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "ref_counted_ptr"]
+    , ["", "tsi_ssl_credentials"]
+    ]
+  }
+, "xds_certificate_provider_store":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_certificate_provider_store"]
+  , "stage": ["src", "core"]
+  , "srcs": ["xds/grpc/certificate_provider_store.cc"]
+  , "hdrs": ["xds/grpc/certificate_provider_store.h"]
+  , "deps":
+    [ "certificate_provider_factory"
+    , "certificate_provider_registry"
+    , "grpc_tls_credentials"
+    , "json"
+    , "json_args"
+    , "json_object_loader"
+    , "unique_type_name"
+    , "useful"
+    , "validation_errors"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["", "config"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "orphanable"]
+    , ["", "ref_counted_ptr"]
+    ]
+  }
+, "xds_credentials":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_credentials"]
+  , "stage": ["src", "core"]
+  , "srcs": ["lib/security/credentials/xds/xds_credentials.cc"]
+  , "hdrs": ["lib/security/credentials/xds/xds_credentials.h"]
+  , "deps":
+    [ "channel_args"
+    , "grpc_lb_xds_channel_args"
+    , "grpc_matchers"
+    , "grpc_tls_credentials"
+    , "unique_type_name"
+    , "useful"
+    , "xds_certificate_provider"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "channel_arg_names"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
+    , ["", "grpc_credentials_util"]
+    , ["", "grpc_security_base"]
+    , ["", "ref_counted_ptr"]
+    ]
+  }
+, "xds_file_watcher_certificate_provider_factory":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_file_watcher_certificate_provider_factory"]
+  , "stage": ["src", "core"]
+  , "srcs": ["xds/grpc/file_watcher_certificate_provider_factory.cc"]
+  , "hdrs": ["xds/grpc/file_watcher_certificate_provider_factory.h"]
+  , "deps":
+    [ "certificate_provider_factory"
+    , "grpc_tls_credentials"
+    , "json"
+    , "json_args"
+    , "json_object_loader"
+    , "time"
+    , "validation_errors"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["", "config"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "ref_counted_ptr"]
+    ]
+  }
+, "xds_common_types":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_common_types"]
+  , "stage": ["src", "core"]
+  , "srcs": ["xds/grpc/xds_common_types.cc"]
+  , "hdrs": ["xds/grpc/xds_common_types.h"]
+  , "deps":
+    [ "grpc_matchers"
+    , "json"
+    , "match"
+    , "validation_errors"
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "variant"]
+    ]
+  }
+, "xds_http_filter":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_http_filter"]
+  , "stage": ["src", "core"]
+  , "hdrs": ["xds/grpc/xds_http_filter.h"]
+  , "deps":
+    [ "channel_args"
+    , "channel_fwd"
+    , "interception_chain"
+    , "json"
+    , "json_writer"
+    , "validation_errors"
+    , "xds_common_types"
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "xds_client"]
+    , ["third_party/upb", "reflection"]
+    ]
+  }
+, "xds_route_config":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_route_config"]
+  , "stage": ["src", "core"]
+  , "srcs": ["xds/grpc/xds_route_config.cc"]
+  , "hdrs": ["xds/grpc/xds_route_config.h"]
+  , "deps":
+    [ "grpc_matchers"
+    , "match"
+    , "time"
+    , "xds_http_filter"
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
+    , ["@", "re2", "", "re2"]
+    , ["", "grpc_base"]
+    , ["", "xds_client"]
+    ]
+  }
+, "xds_listener":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_listener"]
+  , "stage": ["src", "core"]
+  , "srcs": ["xds/grpc/xds_listener.cc"]
+  , "hdrs": ["xds/grpc/xds_listener.h"]
+  , "deps":
+    [ "match"
+    , "resolved_address"
+    , "time"
+    , "xds_common_types"
+    , "xds_http_filter"
+    , "xds_route_config"
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
+    , ["", "sockaddr_utils"]
+    , ["", "xds_client"]
+    ]
+  }
+, "xds_health_status":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_health_status"]
+  , "stage": ["src", "core"]
+  , "srcs": ["xds/grpc/xds_health_status.cc"]
+  , "hdrs": ["xds/grpc/xds_health_status.h"]
+  , "deps":
+    [ ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "span"]
+    , ["", "endpoint_addresses"]
+    , ["src/core/ext/upb-gen", "upb-gen-lib"]
+    ]
+  }
+, "xds_server_grpc":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_server_grpc"]
+  , "stage": ["src", "core"]
+  , "srcs": ["xds/grpc/xds_server_grpc.cc"]
+  , "hdrs": ["xds/grpc/xds_server_grpc.h"]
+  , "deps":
+    [ "channel_creds_registry"
+    , "json"
+    , "json_args"
+    , "json_object_loader"
+    , "json_reader"
+    , "json_writer"
+    , "validation_errors"
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["", "config"]
+    , ["", "ref_counted_ptr"]
+    , ["", "xds_client"]
+    ]
+  }
+, "xds_metadata":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_metadata"]
+  , "stage": ["src", "core"]
+  , "srcs": ["xds/grpc/xds_metadata.cc"]
+  , "hdrs": ["xds/grpc/xds_metadata.h"]
+  , "deps":
+    [ "down_cast"
+    , "json"
+    , "json_writer"
+    , "validation_errors"
+    , ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/strings", "strings"]
+    ]
+  }
+, "xds_cluster":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_cluster"]
+  , "stage": ["src", "core"]
+  , "srcs": ["xds/grpc/xds_cluster.cc"]
+  , "hdrs": ["xds/grpc/xds_cluster.h"]
+  , "deps":
+    [ "grpc_outlier_detection_header"
+    , "json"
+    , "json_writer"
+    , "match"
+    , "time"
+    , "xds_common_types"
+    , "xds_health_status"
+    , "xds_metadata"
+    , "xds_server_grpc"
+    , ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
+    , ["", "xds_client"]
+    ]
+  }
+, "xds_endpoint":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["xds_endpoint"]
+  , "stage": ["src", "core"]
+  , "srcs": ["xds/grpc/xds_endpoint.cc"]
+  , "hdrs": ["xds/grpc/xds_endpoint.h"]
+  , "deps":
+    [ "ref_counted"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["", "endpoint_addresses"]
+    , ["", "gpr"]
+    , ["", "ref_counted_ptr"]
+    , ["", "xds_client"]
+    ]
   }
 , "grpc_xds_client":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["grpc_xds_client"]
   , "stage": ["src", "core"]
   , "srcs":
-    [ "ext/xds/certificate_provider_store.cc"
-    , "ext/xds/file_watcher_certificate_provider_factory.cc"
-    , "ext/xds/xds_audit_logger_registry.cc"
-    , "ext/xds/xds_bootstrap_grpc.cc"
-    , "ext/xds/xds_certificate_provider.cc"
-    , "ext/xds/xds_client_grpc.cc"
-    , "ext/xds/xds_cluster.cc"
-    , "ext/xds/xds_cluster_specifier_plugin.cc"
-    , "ext/xds/xds_common_types.cc"
-    , "ext/xds/xds_endpoint.cc"
-    , "ext/xds/xds_health_status.cc"
-    , "ext/xds/xds_http_fault_filter.cc"
-    , "ext/xds/xds_http_filters.cc"
-    , "ext/xds/xds_http_rbac_filter.cc"
-    , "ext/xds/xds_http_stateful_session_filter.cc"
-    , "ext/xds/xds_lb_policy_registry.cc"
-    , "ext/xds/xds_listener.cc"
-    , "ext/xds/xds_route_config.cc"
-    , "ext/xds/xds_routing.cc"
-    , "ext/xds/xds_transport_grpc.cc"
-    , "lib/security/credentials/xds/xds_credentials.cc"
+    [ "xds/grpc/xds_audit_logger_registry.cc"
+    , "xds/grpc/xds_bootstrap_grpc.cc"
+    , "xds/grpc/xds_client_grpc.cc"
+    , "xds/grpc/xds_cluster_parser.cc"
+    , "xds/grpc/xds_cluster_specifier_plugin.cc"
+    , "xds/grpc/xds_common_types_parser.cc"
+    , "xds/grpc/xds_endpoint_parser.cc"
+    , "xds/grpc/xds_http_fault_filter.cc"
+    , "xds/grpc/xds_http_filter_registry.cc"
+    , "xds/grpc/xds_http_gcp_authn_filter.cc"
+    , "xds/grpc/xds_http_rbac_filter.cc"
+    , "xds/grpc/xds_http_stateful_session_filter.cc"
+    , "xds/grpc/xds_lb_policy_registry.cc"
+    , "xds/grpc/xds_listener_parser.cc"
+    , "xds/grpc/xds_metadata_parser.cc"
+    , "xds/grpc/xds_route_config_parser.cc"
+    , "xds/grpc/xds_routing.cc"
+    , "xds/grpc/xds_transport_grpc.cc"
     ]
   , "hdrs":
-    [ "ext/xds/certificate_provider_store.h"
-    , "ext/xds/file_watcher_certificate_provider_factory.h"
-    , "ext/xds/xds_audit_logger_registry.h"
-    , "ext/xds/xds_bootstrap_grpc.h"
-    , "ext/xds/xds_certificate_provider.h"
-    , "ext/xds/xds_client_grpc.h"
-    , "ext/xds/xds_cluster.h"
-    , "ext/xds/xds_cluster_specifier_plugin.h"
-    , "ext/xds/xds_common_types.h"
-    , "ext/xds/xds_endpoint.h"
-    , "ext/xds/xds_health_status.h"
-    , "ext/xds/xds_http_fault_filter.h"
-    , "ext/xds/xds_http_filters.h"
-    , "ext/xds/xds_http_rbac_filter.h"
-    , "ext/xds/xds_http_stateful_session_filter.h"
-    , "ext/xds/xds_lb_policy_registry.h"
-    , "ext/xds/xds_listener.h"
-    , "ext/xds/xds_route_config.h"
-    , "ext/xds/xds_routing.h"
-    , "ext/xds/xds_transport_grpc.h"
-    , "lib/security/credentials/xds/xds_credentials.h"
+    [ "xds/grpc/xds_audit_logger_registry.h"
+    , "xds/grpc/xds_bootstrap_grpc.h"
+    , "xds/grpc/xds_client_grpc.h"
+    , "xds/grpc/xds_cluster_parser.h"
+    , "xds/grpc/xds_cluster_specifier_plugin.h"
+    , "xds/grpc/xds_common_types_parser.h"
+    , "xds/grpc/xds_endpoint_parser.h"
+    , "xds/grpc/xds_http_fault_filter.h"
+    , "xds/grpc/xds_http_filter_registry.h"
+    , "xds/grpc/xds_http_gcp_authn_filter.h"
+    , "xds/grpc/xds_http_rbac_filter.h"
+    , "xds/grpc/xds_http_stateful_session_filter.h"
+    , "xds/grpc/xds_lb_policy_registry.h"
+    , "xds/grpc/xds_listener_parser.h"
+    , "xds/grpc/xds_metadata_parser.h"
+    , "xds/grpc/xds_route_config_parser.h"
+    , "xds/grpc/xds_routing.h"
+    , "xds/grpc/xds_transport_grpc.h"
     ]
   , "deps":
     [ "certificate_provider_factory"
     , "certificate_provider_registry"
     , "channel_args"
+    , "channel_args_endpoint_config"
     , "channel_creds_registry"
     , "channel_fwd"
     , "closure"
@@ -3753,6 +4667,7 @@
     , "env"
     , "error"
     , "error_utils"
+    , "gcp_authentication_filter"
     , "grpc_audit_logging"
     , "grpc_fake_credentials"
     , "grpc_fault_injection_filter"
@@ -3766,6 +4681,7 @@
     , "grpc_tls_credentials"
     , "grpc_transport_chttp2_client_connector"
     , "init_internally"
+    , "interception_chain"
     , "iomgr_fwd"
     , "json"
     , "json_args"
@@ -3777,6 +4693,7 @@
     , "load_file"
     , "match"
     , "metadata_batch"
+    , "metrics"
     , "pollset_set"
     , "ref_counted"
     , "resolved_address"
@@ -3789,33 +4706,24 @@
     , "upb_utils"
     , "useful"
     , "validation_errors"
-    , ["", "channel_arg_names"]
-    , ["", "config"]
-    , ["", "debug_location"]
-    , ["", "endpoint_addresses"]
-    , ["", "exec_ctx"]
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "grpc_client_channel"]
-    , ["", "grpc_credentials_util"]
-    , ["", "grpc_public_hdrs"]
-    , ["", "grpc_security_base"]
-    , ["", "grpc_trace"]
-    , ["", "iomgr_timer"]
-    , ["", "orphanable"]
-    , ["", "parse_address"]
-    , ["", "ref_counted_ptr"]
-    , ["", "sockaddr_utils"]
-    , ["", "tsi_ssl_credentials"]
-    , ["", "uri_parser"]
-    , ["", "work_serializer"]
-    , ["", "xds_client"]
-    , ["@", "protobuf", "", "libprotobuf"]
-    , ["src/core/ext/upb-gen", "upb-gen-lib"]
-    , ["src/core/ext/upbdefs-gen", "upbdefs-gen-lib"]
+    , "xds_certificate_provider"
+    , "xds_certificate_provider_store"
+    , "xds_cluster"
+    , "xds_common_types"
+    , "xds_credentials"
+    , "xds_endpoint"
+    , "xds_file_watcher_certificate_provider_factory"
+    , "xds_health_status"
+    , "xds_http_filter"
+    , "xds_listener"
+    , "xds_metadata"
+    , "xds_route_config"
+    , "xds_server_grpc"
     , ["@", "absl", "absl/base", "core_headers"]
     , ["@", "absl", "absl/cleanup", "cleanup"]
     , ["@", "absl", "absl/functional", "bind_front"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/memory", "memory"]
     , ["@", "absl", "absl/random", "random"]
     , ["@", "absl", "absl/status", "status"]
@@ -3826,23 +4734,49 @@
     , ["@", "absl", "absl/types", "optional"]
     , ["@", "absl", "absl/types", "span"]
     , ["@", "absl", "absl/types", "variant"]
+    , ["@", "protobuf", "", "libprotobuf"]
     , ["@", "re2", "", "re2"]
-    , ["third_party/upb", "message"]
-    , ["third_party/upb", "json"]
-    , ["third_party/upb", "reflection"]
-    , ["third_party/upb", "text"]
-    , ["third_party/upb", "base"]
-    , ["third_party/upb", "mem"]
+    , ["", "channel"]
+    , ["", "channel_arg_names"]
+    , ["", "channel_create"]
+    , ["", "config"]
+    , ["", "debug_location"]
+    , ["", "endpoint_addresses"]
+    , ["", "exec_ctx"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_client_channel"]
+    , ["", "grpc_core_credentials_header"]
+    , ["", "grpc_credentials_util"]
+    , ["", "grpc_public_hdrs"]
+    , ["", "grpc_security_base"]
+    , ["", "grpc_trace"]
+    , ["", "iomgr"]
+    , ["", "iomgr_timer"]
+    , ["", "orphanable"]
+    , ["", "parse_address"]
+    , ["", "ref_counted_ptr"]
+    , ["", "sockaddr_utils"]
+    , ["", "tsi_ssl_credentials"]
+    , ["", "uri_parser"]
+    , ["", "work_serializer"]
+    , ["", "xds_client"]
     , ["src/core/ext/upb-gen", "upb-gen-lib"]
     , ["src/core/ext/upbdefs-gen", "upbdefs-gen-lib"]
+    , ["third_party/upb", "base"]
+    , ["third_party/upb", "json"]
+    , ["third_party/upb", "mem"]
+    , ["third_party/upb", "message"]
+    , ["third_party/upb", "reflection"]
+    , ["third_party/upb", "text"]
     ]
   }
 , "grpc_xds_channel_stack_modifier":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["grpc_xds_channel_stack_modifier"]
   , "stage": ["src", "core"]
-  , "srcs": ["ext/xds/xds_channel_stack_modifier.cc"]
-  , "hdrs": ["ext/xds/xds_channel_stack_modifier.h"]
+  , "srcs": ["server/xds_channel_stack_modifier.cc"]
+  , "hdrs": ["server/xds_channel_stack_modifier.h"]
   , "deps":
     [ "channel_args"
     , "channel_fwd"
@@ -3850,19 +4784,19 @@
     , "channel_stack_type"
     , "ref_counted"
     , "useful"
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "channel_stack_builder"]
     , ["", "config"]
     , ["", "gpr_platform"]
     , ["", "grpc_base"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "grpc_xds_server_config_fetcher":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["grpc_xds_server_config_fetcher"]
   , "stage": ["src", "core"]
-  , "srcs": ["ext/xds/xds_server_config_fetcher.cc"]
+  , "srcs": ["server/xds_server_config_fetcher.cc"]
   , "deps":
     [ "channel_args"
     , "channel_args_preconditioning"
@@ -3880,26 +4814,38 @@
     , "resolved_address"
     , "slice_refcount"
     , "unique_type_name"
-    , ["", "config"]
-    , ["", "debug_location"]
-    , ["", "exec_ctx"]
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "grpc_public_hdrs"]
-    , ["", "grpc_security_base"]
-    , ["", "grpc_service_config_impl"]
-    , ["", "grpc_trace"]
-    , ["", "parse_address"]
-    , ["", "ref_counted_ptr"]
-    , ["", "sockaddr_utils"]
-    , ["", "uri_parser"]
-    , ["", "xds_client"]
+    , "xds_certificate_provider"
+    , "xds_certificate_provider_store"
+    , "xds_common_types"
+    , "xds_credentials"
+    , "xds_http_filter"
+    , "xds_listener"
+    , "xds_route_config"
     , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
     , ["@", "absl", "absl/types", "variant"]
+    , ["", "config"]
+    , ["", "debug_location"]
+    , ["", "exec_ctx"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
+    , ["", "grpc_public_hdrs"]
+    , ["", "grpc_security_base"]
+    , ["", "grpc_service_config_impl"]
+    , ["", "grpc_trace"]
+    , ["", "iomgr"]
+    , ["", "parse_address"]
+    , ["", "ref_counted_ptr"]
+    , ["", "server"]
+    , ["", "sockaddr_utils"]
+    , ["", "uri_parser"]
+    , ["", "xds_client"]
     ]
   }
 , "channel_creds_registry_init":
@@ -3917,12 +4863,13 @@
     , "json_object_loader"
     , "time"
     , "validation_errors"
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "config"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
+    , ["", "grpc_core_credentials_header"]
     , ["", "grpc_security_base"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "grpc_lb_policy_cds":
@@ -3949,7 +4896,18 @@
     , "pollset_set"
     , "time"
     , "unique_type_name"
+    , "xds_cluster"
+    , "xds_common_types"
+    , "xds_config"
     , "xds_dependency_manager"
+    , "xds_health_status"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "gpr"]
@@ -3960,11 +4918,6 @@
     , ["", "ref_counted_ptr"]
     , ["", "work_serializer"]
     , ["", "xds_client"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
-    , ["@", "absl", "absl/types", "variant"]
     ]
   }
 , "grpc_lb_xds_channel_args":
@@ -3981,10 +4934,12 @@
   , "srcs": ["load_balancing/xds/xds_cluster_impl.cc"]
   , "deps":
     [ "channel_args"
+    , "client_channel_internal_header"
     , "connectivity_state"
     , "delegating_helper"
     , "grpc_backend_metric_data"
     , "grpc_lb_xds_channel_args"
+    , "grpc_resolver_xds_attributes"
     , "grpc_xds_client"
     , "json"
     , "json_args"
@@ -3992,12 +4947,25 @@
     , "lb_policy"
     , "lb_policy_factory"
     , "lb_policy_registry"
+    , "match"
     , "pollset_set"
     , "ref_counted"
+    , "ref_counted_string"
     , "resolved_address"
     , "subchannel_interface"
     , "validation_errors"
-    , "xds_dependency_manager"
+    , "xds_config"
+    , "xds_credentials"
+    , "xds_endpoint"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
+    , ["", "call_tracer"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
@@ -4005,15 +4973,10 @@
     , ["", "grpc_base"]
     , ["", "grpc_client_channel"]
     , ["", "grpc_trace"]
+    , ["", "lb_child_policy_handler"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "xds_client"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
-    , ["@", "absl", "absl/types", "variant"]
     ]
   }
 , "grpc_lb_policy_xds_cluster_manager":
@@ -4023,6 +4986,7 @@
   , "srcs": ["load_balancing/xds/xds_cluster_manager.cc"]
   , "deps":
     [ "channel_args"
+    , "client_channel_internal_header"
     , "connectivity_state"
     , "delegating_helper"
     , "grpc_resolver_xds_attributes"
@@ -4035,6 +4999,11 @@
     , "pollset_set"
     , "time"
     , "validation_errors"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
@@ -4044,13 +5013,10 @@
     , ["", "grpc_base"]
     , ["", "grpc_client_channel"]
     , ["", "grpc_trace"]
+    , ["", "lb_child_policy_handler"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_lb_policy_xds_wrr_locality":
@@ -4070,7 +5036,12 @@
     , "lb_policy_factory"
     , "lb_policy_registry"
     , "pollset_set"
+    , "ref_counted_string"
     , "validation_errors"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
@@ -4080,9 +5051,6 @@
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "xds_client"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "grpc_lb_address_filtering":
@@ -4096,12 +5064,12 @@
     , "ref_counted"
     , "ref_counted_string"
     , "resolved_address"
-    , ["", "endpoint_addresses"]
-    , ["", "gpr_platform"]
-    , ["", "ref_counted_ptr"]
     , ["@", "absl", "absl/functional", "function_ref"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "endpoint_addresses"]
+    , ["", "gpr_platform"]
+    , ["", "ref_counted_ptr"]
     ]
   }
 , "health_check_client":
@@ -4115,6 +5083,7 @@
     ]
   , "deps":
     [ "channel_args"
+    , "client_channel_internal_header"
     , "closure"
     , "connectivity_state"
     , "error"
@@ -4123,7 +5092,15 @@
     , "slice"
     , "subchannel_interface"
     , "unique_type_name"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
+    , ["", "channelz"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
@@ -4135,39 +5112,9 @@
     , ["", "ref_counted_ptr"]
     , ["", "sockaddr_utils"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
+    , ["src/core/ext/upb-gen", "upb-gen-lib"]
     , ["third_party/upb", "base"]
     , ["third_party/upb", "mem"]
-    , ["src/core/ext/upb-gen", "upb-gen-lib"]
-    ]
-  }
-, "grpc_lb_subchannel_list":
-  { "type": ["@", "rules", "CC", "library"]
-  , "name": ["grpc_lb_subchannel_list"]
-  , "stage": ["src", "core"]
-  , "hdrs": ["load_balancing/subchannel_list.h"]
-  , "deps":
-    [ "channel_args"
-    , "connectivity_state"
-    , "dual_ref_counted"
-    , "gpr_manual_constructor"
-    , "health_check_client"
-    , "iomgr_fwd"
-    , "lb_policy"
-    , "subchannel_interface"
-    , ["", "debug_location"]
-    , ["", "endpoint_addresses"]
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "ref_counted_ptr"]
-    , ["", "server_address"]
-    , ["", "work_serializer"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "lb_endpoint_list":
@@ -4186,6 +5133,12 @@
     , "pollset_set"
     , "resolved_address"
     , "subchannel_interface"
+    , ["@", "absl", "absl/functional", "function_ref"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
@@ -4194,10 +5147,6 @@
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/functional", "function_ref"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_lb_policy_pick_first":
@@ -4210,18 +5159,27 @@
     [ "channel_args"
     , "connectivity_state"
     , "experiments"
+    , "grpc_outlier_detection_header"
     , "health_check_client"
     , "iomgr_fwd"
-    , "grpc_outlier_detection_header"
     , "json"
     , "json_args"
     , "json_object_loader"
     , "lb_policy"
     , "lb_policy_factory"
+    , "metrics"
     , "resolved_address"
     , "subchannel_interface"
     , "time"
     , "useful"
+    , ["@", "absl", "absl/algorithm", "container"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
     , ["", "config"]
     , ["", "debug_location"]
@@ -4234,12 +5192,6 @@
     , ["", "ref_counted_ptr"]
     , ["", "sockaddr_utils"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/algorithm", "container"]
-    , ["@", "absl", "absl/random", "random"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "down_cast":
@@ -4247,7 +5199,19 @@
   , "name": ["down_cast"]
   , "stage": ["src", "core"]
   , "hdrs": ["lib/gprpp/down_cast.h"]
-  , "deps": [["", "gpr"], ["@", "absl", "absl/base", "config"]]
+  , "deps":
+    [ ["@", "absl", "absl/base", "config"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["", "gpr"]
+    ]
+  }
+, "glob":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["glob"]
+  , "stage": ["src", "core"]
+  , "srcs": ["lib/gprpp/glob.cc"]
+  , "hdrs": ["lib/gprpp/glob.h"]
+  , "deps": [["@", "absl", "absl/strings", "strings"]]
   }
 , "status_conversion":
   { "type": ["@", "rules", "CC", "library"]
@@ -4270,9 +5234,9 @@
     , "status_conversion"
     , "status_helper"
     , "time"
+    , ["@", "absl", "absl/status", "status"]
     , ["", "gpr_platform"]
     , ["", "grpc_public_hdrs"]
-    , ["@", "absl", "absl/status", "status"]
     ]
   }
 , "connectivity_state":
@@ -4284,17 +5248,17 @@
   , "deps":
     [ "closure"
     , "error"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
-    , ["", "grpc_public_hdrs"]
     , ["", "gpr_platform"]
+    , ["", "grpc_public_hdrs"]
     , ["", "grpc_trace"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "work_serializer"]
-    , ["", "grpc_public_hdrs"]
-    , ["@", "absl", "absl/status", "status"]
     ]
   }
 , "xxhash_inline":
@@ -4312,11 +5276,12 @@
   , "hdrs": ["load_balancing/ring_hash/ring_hash.h"]
   , "deps":
     [ "channel_args"
+    , "client_channel_internal_header"
     , "closure"
-    , "error"
-    , "grpc_lb_policy_pick_first"
     , "connectivity_state"
     , "delegating_helper"
+    , "error"
+    , "grpc_lb_policy_pick_first"
     , "grpc_service_config"
     , "json"
     , "json_args"
@@ -4331,6 +5296,14 @@
     , "unique_type_name"
     , "validation_errors"
     , "xxhash_inline"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/container", "inlined_vector"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
     , ["", "config"]
     , ["", "debug_location"]
@@ -4344,12 +5317,6 @@
     , ["", "ref_counted_ptr"]
     , ["", "sockaddr_utils"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/container", "inlined_vector"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     , ["third_party/xxhash", "xxhash"]
     ]
   }
@@ -4361,13 +5328,18 @@
   , "deps":
     [ "channel_args"
     , "connectivity_state"
-    , "experiments"
-    , "grpc_lb_subchannel_list"
     , "json"
     , "lb_endpoint_list"
     , "lb_policy"
     , "lb_policy_factory"
-    , "subchannel_interface"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/meta", "type_traits"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
@@ -4376,14 +5348,7 @@
     , ["", "grpc_trace"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
-    , ["", "server_address"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/meta", "type_traits"]
-    , ["@", "absl", "absl/random", "random"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "static_stride_scheduler":
@@ -4393,10 +5358,11 @@
   , "srcs": ["load_balancing/weighted_round_robin/static_stride_scheduler.cc"]
   , "hdrs": ["load_balancing/weighted_round_robin/static_stride_scheduler.h"]
   , "deps":
-    [ ["", "gpr"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
+    [ ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/types", "optional"]
     , ["@", "absl", "absl/types", "span"]
+    , ["", "gpr"]
     ]
   }
 , "grpc_lb_policy_weighted_round_robin":
@@ -4409,13 +5375,14 @@
     , "connectivity_state"
     , "experiments"
     , "grpc_backend_metric_data"
-    , "grpc_lb_subchannel_list"
+    , "grpc_lb_policy_weighted_target"
     , "json"
     , "json_args"
     , "json_object_loader"
     , "lb_endpoint_list"
     , "lb_policy"
     , "lb_policy_factory"
+    , "metrics"
     , "ref_counted"
     , "resolved_address"
     , "static_stride_scheduler"
@@ -4423,6 +5390,16 @@
     , "subchannel_interface"
     , "time"
     , "validation_errors"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/meta", "type_traits"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
@@ -4431,20 +5408,11 @@
     , ["", "grpc_base"]
     , ["", "grpc_client_channel"]
     , ["", "grpc_trace"]
+    , ["", "oob_backend_metric"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
-    , ["", "server_address"]
-    , ["", "sockaddr_utils"]
     , ["", "stats"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/meta", "type_traits"]
-    , ["@", "absl", "absl/random", "random"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
-    , ["@", "absl", "absl/types", "variant"]
     ]
   }
 , "grpc_outlier_detection_header":
@@ -4458,9 +5426,9 @@
     , "json_object_loader"
     , "time"
     , "validation_errors"
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "gpr_platform"]
     , ["", "server_address"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_lb_policy_outlier_detection":
@@ -4486,6 +5454,15 @@
     , "subchannel_interface"
     , "unique_type_name"
     , "validation_errors"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/meta", "type_traits"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "variant"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
@@ -4493,17 +5470,11 @@
     , ["", "grpc_base"]
     , ["", "grpc_client_channel"]
     , ["", "grpc_trace"]
+    , ["", "lb_child_policy_handler"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "sockaddr_utils"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/meta", "type_traits"]
-    , ["@", "absl", "absl/random", "random"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "variant"]
     ]
   }
 , "grpc_lb_policy_priority":
@@ -4526,6 +5497,12 @@
     , "ref_counted_string"
     , "time"
     , "validation_errors"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
     , ["", "config"]
     , ["", "debug_location"]
@@ -4535,13 +5512,10 @@
     , ["", "grpc_base"]
     , ["", "grpc_client_channel"]
     , ["", "grpc_trace"]
+    , ["", "lb_child_policy_handler"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_lb_policy_weighted_target":
@@ -4549,6 +5523,7 @@
   , "name": ["grpc_lb_policy_weighted_target"]
   , "stage": ["src", "core"]
   , "srcs": ["load_balancing/weighted_target/weighted_target.cc"]
+  , "hdrs": ["load_balancing/weighted_target/weighted_target.h"]
   , "deps":
     [ "channel_args"
     , "connectivity_state"
@@ -4563,6 +5538,14 @@
     , "pollset_set"
     , "time"
     , "validation_errors"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
@@ -4571,15 +5554,10 @@
     , ["", "grpc_base"]
     , ["", "grpc_client_channel"]
     , ["", "grpc_trace"]
+    , ["", "lb_child_policy_handler"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/random", "random"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_lb_policy_xds_override_host":
@@ -4590,6 +5568,7 @@
   , "hdrs": ["load_balancing/xds/xds_override_host.h"]
   , "deps":
     [ "channel_args"
+    , "client_channel_internal_header"
     , "closure"
     , "connectivity_state"
     , "delegating_helper"
@@ -4610,7 +5589,17 @@
     , "resolved_address"
     , "subchannel_interface"
     , "validation_errors"
-    , "xds_dependency_manager"
+    , "xds_config"
+    , "xds_health_status"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/functional", "function_ref"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
@@ -4619,18 +5608,13 @@
     , ["", "grpc_base"]
     , ["", "grpc_client_channel"]
     , ["", "grpc_trace"]
+    , ["", "lb_child_policy_handler"]
     , ["", "orphanable"]
     , ["", "parse_address"]
     , ["", "ref_counted_ptr"]
     , ["", "server_address"]
     , ["", "sockaddr_utils"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
-    , ["@", "absl", "absl/types", "variant"]
     ]
   }
 , "lb_server_load_reporting_filter":
@@ -4645,6 +5629,7 @@
     ]
   , "deps":
     [ "arena_promise"
+    , "call_finalization"
     , "channel_args"
     , "channel_fwd"
     , "channel_stack_type"
@@ -4654,6 +5639,15 @@
     , "resolved_address"
     , "seq"
     , "slice"
+    , ["@", "absl", "absl/container", "vector"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "opencensus-stats", "", ""]
+    , ["@", "opencensus-tags", "", ""]
     , ["", "channel_arg_names"]
     , ["", "config"]
     , ["", "gpr"]
@@ -4664,14 +5658,6 @@
     , ["", "parse_address"]
     , ["", "promise"]
     , ["", "uri_parser"]
-    , ["@", "absl", "absl/container", "vector"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "str_format"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
-    , ["@", "opencensus-stats", "", ""]
-    , ["@", "opencensus-tags", "", ""]
     ]
   }
 , "grpc_backend_metric_filter":
@@ -4692,19 +5678,19 @@
     , "map"
     , "metadata_batch"
     , "slice"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
     , ["", "config"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
     , ["", "grpc_base"]
     , ["", "grpc_trace"]
-    , ["", "legacy_context"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
+    , ["src/core/ext/upb-gen", "upb-gen-lib"]
     , ["third_party/upb", "base"]
     , ["third_party/upb", "mem"]
-    , ["src/core/ext/upb-gen", "upb-gen-lib"]
     ]
   }
 , "polling_resolver":
@@ -4718,6 +5704,12 @@
     , "grpc_service_config"
     , "iomgr_fwd"
     , "time"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "backoff"]
     , ["", "debug_location"]
     , ["", "endpoint_addresses"]
@@ -4730,10 +5722,6 @@
     , ["", "ref_counted_ptr"]
     , ["", "uri_parser"]
     , ["", "work_serializer"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "service_config_helper":
@@ -4749,10 +5737,11 @@
     , "json_reader"
     , "json_writer"
     , "status_helper"
-    , ["", "gpr_platform"]
-    , ["", "grpc_base"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr_platform"]
+    , ["", "grpc_base"]
+    , ["", "iomgr"]
     ]
   }
 , "grpc_resolver_dns_event_engine":
@@ -4771,6 +5760,14 @@
     , "service_config_helper"
     , "time"
     , "validation_errors"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/cleanup", "cleanup"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "backoff"]
     , ["", "channel_arg_names"]
     , ["", "debug_location"]
@@ -4783,15 +5780,10 @@
     , ["", "grpc_resolver"]
     , ["", "grpc_service_config_impl"]
     , ["", "grpc_trace"]
+    , ["", "iomgr"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "uri_parser"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/cleanup", "cleanup"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_resolver_dns_plugin":
@@ -4804,12 +5796,13 @@
     [ "experiments"
     , "grpc_resolver_dns_event_engine"
     , "grpc_resolver_dns_native"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "config"]
     , ["", "config_vars"]
     , ["", "gpr"]
     , ["", "grpc_resolver"]
     , ["", "grpc_resolver_dns_ares"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "grpc_resolver_dns_native":
@@ -4823,6 +5816,12 @@
     , "polling_resolver"
     , "resolved_address"
     , "time"
+    , ["@", "absl", "absl/functional", "bind_front"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "backoff"]
     , ["", "channel_arg_names"]
     , ["", "config"]
@@ -4832,14 +5831,10 @@
     , ["", "grpc_base"]
     , ["", "grpc_resolver"]
     , ["", "grpc_trace"]
+    , ["", "iomgr"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "uri_parser"]
-    , ["@", "absl", "absl/functional", "bind_front"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_resolver_sockaddr":
@@ -4851,6 +5846,9 @@
     [ "channel_args"
     , "iomgr_port"
     , "resolved_address"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "config"]
     , ["", "endpoint_addresses"]
     , ["", "gpr"]
@@ -4858,8 +5856,6 @@
     , ["", "orphanable"]
     , ["", "parse_address"]
     , ["", "uri_parser"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "grpc_resolver_binder":
@@ -4873,15 +5869,16 @@
     , "iomgr_port"
     , "resolved_address"
     , "status_helper"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "config"]
     , ["", "endpoint_addresses"]
     , ["", "gpr"]
     , ["", "grpc_resolver"]
     , ["", "orphanable"]
     , ["", "uri_parser"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "grpc_resolver_xds_attributes":
@@ -4892,17 +5889,29 @@
   , "deps":
     [ "grpc_service_config"
     , "unique_type_name"
-    , ["", "gpr_platform"]
+    , "xds_route_config"
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr_platform"]
     ]
   }
-, "grpc_resolver_xds_trace":
+, "xds_config":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["grpc_resolver_xds_trace"]
+  , "name": ["xds_config"]
   , "stage": ["src", "core"]
-  , "srcs": ["resolver/xds/xds_resolver_trace.cc"]
-  , "hdrs": ["resolver/xds/xds_resolver_trace.h"]
-  , "deps": [["", "gpr_platform"], ["", "grpc_trace"]]
+  , "srcs": ["resolver/xds/xds_config.cc"]
+  , "hdrs": ["resolver/xds/xds_config.h"]
+  , "deps":
+    [ "match"
+    , "ref_counted"
+    , "xds_cluster"
+    , "xds_endpoint"
+    , "xds_listener"
+    , "xds_route_config"
+    , ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "variant"]
+    ]
   }
 , "xds_dependency_manager":
   { "type": ["@", "rules", "CC", "library"]
@@ -4912,17 +5921,23 @@
   , "hdrs": ["resolver/xds/xds_dependency_manager.h"]
   , "deps":
     [ "grpc_lb_xds_channel_args"
-    , "grpc_resolver_xds_trace"
     , "grpc_xds_client"
     , "match"
     , "ref_counted"
+    , "xds_cluster"
+    , "xds_config"
+    , "xds_endpoint"
+    , "xds_listener"
+    , "xds_route_config"
+    , ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/container", "flat_hash_set"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "config"]
     , ["", "gpr"]
     , ["", "grpc_resolver"]
     , ["", "grpc_resolver_fake"]
-    , ["@", "absl", "absl/container", "flat_hash_map"]
-    , ["@", "absl", "absl/container", "flat_hash_set"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "grpc_resolver_xds":
@@ -4935,11 +5950,12 @@
     , "arena_promise"
     , "channel_args"
     , "channel_fwd"
+    , "client_channel_internal_header"
+    , "config_selector"
     , "context"
     , "dual_ref_counted"
     , "grpc_lb_policy_ring_hash"
     , "grpc_resolver_xds_attributes"
-    , "grpc_resolver_xds_trace"
     , "grpc_service_config"
     , "grpc_xds_client"
     , "iomgr_fwd"
@@ -4949,25 +5965,14 @@
     , "ref_counted"
     , "slice"
     , "time"
+    , "xds_config"
     , "xds_dependency_manager"
+    , "xds_http_filter"
+    , "xds_listener"
+    , "xds_route_config"
     , "xxhash_inline"
-    , ["", "channel_arg_names"]
-    , ["", "config"]
-    , ["", "debug_location"]
-    , ["", "endpoint_addresses"]
-    , ["", "gpr"]
-    , ["", "grpc_base"]
-    , ["", "grpc_client_channel"]
-    , ["", "grpc_public_hdrs"]
-    , ["", "grpc_resolver"]
-    , ["", "grpc_service_config_impl"]
-    , ["", "grpc_trace"]
-    , ["", "legacy_context"]
-    , ["", "orphanable"]
-    , ["", "ref_counted_ptr"]
-    , ["", "uri_parser"]
-    , ["", "work_serializer"]
-    , ["", "xds_client"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/meta", "type_traits"]
     , ["@", "absl", "absl/random", "random"]
     , ["@", "absl", "absl/status", "status"]
@@ -4977,6 +5982,21 @@
     , ["@", "absl", "absl/types", "optional"]
     , ["@", "absl", "absl/types", "variant"]
     , ["@", "re2", "", "re2"]
+    , ["", "channel_arg_names"]
+    , ["", "config"]
+    , ["", "debug_location"]
+    , ["", "endpoint_addresses"]
+    , ["", "gpr"]
+    , ["", "grpc_base"]
+    , ["", "grpc_public_hdrs"]
+    , ["", "grpc_resolver"]
+    , ["", "grpc_service_config_impl"]
+    , ["", "grpc_trace"]
+    , ["", "orphanable"]
+    , ["", "ref_counted_ptr"]
+    , ["", "uri_parser"]
+    , ["", "work_serializer"]
+    , ["", "xds_client"]
     ]
   }
 , "grpc_resolver_c2p":
@@ -4993,20 +6013,23 @@
     , "json_writer"
     , "resource_quota"
     , "time"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "alts_util"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "gpr"]
     , ["", "grpc_base"]
     , ["", "grpc_resolver"]
+    , ["", "iomgr"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "uri_parser"]
     , ["", "work_serializer"]
     , ["", "xds_client"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "hpack_constants":
@@ -5022,7 +6045,8 @@
   , "stage": ["src", "core"]
   , "srcs": ["ext/transport/chttp2/transport/hpack_encoder_table.cc"]
   , "hdrs": ["ext/transport/chttp2/transport/hpack_encoder_table.h"]
-  , "deps": ["hpack_constants", ["", "gpr"]]
+  , "deps":
+    ["hpack_constants", ["@", "absl", "absl/log", "check"], ["", "gpr"]]
   }
 , "chttp2_flow_control":
   { "type": ["@", "rules", "CC", "library"]
@@ -5037,13 +6061,15 @@
     , "memory_quota"
     , "time"
     , "useful"
-    , ["", "gpr"]
-    , ["", "grpc_trace"]
     , ["@", "absl", "absl/functional", "function_ref"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
+    , ["", "grpc_trace"]
     ]
   }
 , "ping_abuse_policy":
@@ -5055,10 +6081,10 @@
   , "deps":
     [ "channel_args"
     , "time"
-    , ["", "channel_arg_names"]
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "channel_arg_names"]
+    , ["", "gpr_platform"]
     ]
   }
 , "ping_callbacks":
@@ -5069,17 +6095,18 @@
   , "hdrs": ["ext/transport/chttp2/transport/ping_callbacks.h"]
   , "deps":
     [ "time"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "gpr"]
-    , ["", "gpr_platform"]
-    , ["", "grpc_trace"]
     , ["@", "absl", "absl/container", "flat_hash_map"]
     , ["@", "absl", "absl/functional", "any_invocable"]
     , ["@", "absl", "absl/hash", "hash"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/meta", "type_traits"]
     , ["@", "absl", "absl/random", "bit_gen_ref"]
     , ["@", "absl", "absl/random", "distributions"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "gpr"]
+    , ["", "gpr_platform"]
+    , ["", "grpc_trace"]
     ]
   }
 , "write_size_policy":
@@ -5088,7 +6115,12 @@
   , "stage": ["src", "core"]
   , "srcs": ["ext/transport/chttp2/transport/write_size_policy.cc"]
   , "hdrs": ["ext/transport/chttp2/transport/write_size_policy.h"]
-  , "deps": ["time", ["", "gpr"], ["", "gpr_platform"]]
+  , "deps":
+    [ "time"
+    , ["@", "absl", "absl/log", "check"]
+    , ["", "gpr"]
+    , ["", "gpr_platform"]
+    ]
   }
 , "ping_rate_policy":
   { "type": ["@", "rules", "CC", "library"]
@@ -5101,20 +6133,12 @@
     , "experiments"
     , "match"
     , "time"
-    , ["", "channel_arg_names"]
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
     , ["@", "absl", "absl/types", "variant"]
+    , ["", "channel_arg_names"]
+    , ["", "gpr_platform"]
     ]
-  }
-, "max_concurrent_streams_policy":
-  { "type": ["@", "rules", "CC", "library"]
-  , "name": ["max_concurrent_streams_policy"]
-  , "stage": ["src", "core"]
-  , "srcs": ["ext/transport/chttp2/transport/max_concurrent_streams_policy.cc"]
-  , "hdrs": ["ext/transport/chttp2/transport/max_concurrent_streams_policy.h"]
-  , "deps": [["", "gpr"], ["", "gpr_platform"]]
   }
 , "huffsyms":
   { "type": ["@", "rules", "CC", "library"]
@@ -5141,11 +6165,11 @@
   , "deps":
     [ "http2_errors"
     , "useful"
-    , ["", "chttp2_frame"]
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/functional", "function_ref"]
     , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "chttp2_frame"]
+    , ["", "gpr_platform"]
     ]
   }
 , "grpc_transport_chttp2_alpn":
@@ -5154,7 +6178,7 @@
   , "stage": ["src", "core"]
   , "srcs": ["ext/transport/chttp2/alpn/alpn.cc"]
   , "hdrs": ["ext/transport/chttp2/alpn/alpn.h"]
-  , "deps": ["useful", ["", "gpr"]]
+  , "deps": ["useful", ["@", "absl", "absl/log", "check"], ["", "gpr"]]
   }
 , "grpc_transport_chttp2_client_connector":
   { "type": ["@", "rules", "CC", "library"]
@@ -5174,10 +6198,21 @@
     , "handshaker_registry"
     , "resolved_address"
     , "status_helper"
+    , "subchannel_connector"
     , "tcp_connect_handshaker"
     , "time"
     , "unique_type_name"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "channel"]
     , ["", "channel_arg_names"]
+    , ["", "channel_create"]
+    , ["", "channelz"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
@@ -5190,14 +6225,10 @@
     , ["", "grpc_trace"]
     , ["", "grpc_transport_chttp2"]
     , ["", "handshaker"]
+    , ["", "iomgr"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
     , ["", "sockaddr_utils"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "str_format"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_transport_chttp2_server":
@@ -5210,8 +6241,11 @@
     [ "channel_args"
     , "channel_args_endpoint_config"
     , "closure"
+    , "connection_quota"
     , "error"
     , "error_utils"
+    , "event_engine_extensions"
+    , "event_engine_query_extensions"
     , "grpc_insecure_credentials"
     , "handshaker_registry"
     , "iomgr_fwd"
@@ -5222,7 +6256,16 @@
     , "status_helper"
     , "time"
     , "unique_type_name"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "channel_arg_names"]
+    , ["", "channelz"]
     , ["", "chttp2_legacy_frame"]
     , ["", "config"]
     , ["", "debug_location"]
@@ -5233,16 +6276,12 @@
     , ["", "grpc_trace"]
     , ["", "grpc_transport_chttp2"]
     , ["", "handshaker"]
+    , ["", "iomgr"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
+    , ["", "server"]
     , ["", "sockaddr_utils"]
     , ["", "uri_parser"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "str_format"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_transport_inproc":
@@ -5250,8 +6289,7 @@
   , "name": ["grpc_transport_inproc"]
   , "stage": ["src", "core"]
   , "srcs":
-    [ "ext/transport/inproc/inproc_plugin.cc"
-    , "ext/transport/inproc/inproc_transport.cc"
+    [ "ext/transport/inproc/inproc_transport.cc"
     , "ext/transport/inproc/legacy_inproc_transport.cc"
     ]
   , "hdrs":
@@ -5266,15 +6304,26 @@
     , "closure"
     , "connectivity_state"
     , "error"
+    , "event_engine_context"
     , "experiments"
     , "iomgr_fwd"
+    , "metadata"
     , "metadata_batch"
     , "slice"
     , "slice_buffer"
     , "status_helper"
     , "time"
     , "try_seq"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "channel"]
     , ["", "channel_arg_names"]
+    , ["", "channel_create"]
+    , ["", "channelz"]
     , ["", "config"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
@@ -5282,12 +6331,10 @@
     , ["", "grpc_base"]
     , ["", "grpc_public_hdrs"]
     , ["", "grpc_trace"]
+    , ["", "iomgr"]
     , ["", "promise"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
+    , ["", "server"]
     ]
   }
 , "chaotic_good_frame":
@@ -5307,15 +6354,16 @@
     , "slice"
     , "slice_buffer"
     , "status_helper"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/random", "bit_gen_ref"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/types", "variant"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
     , ["", "grpc_base"]
     , ["", "hpack_encoder"]
     , ["", "hpack_parser"]
-    , ["@", "absl", "absl/random", "bit_gen_ref"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/types", "variant"]
     ]
   }
 , "chaotic_good_settings_metadata":
@@ -5327,9 +6375,9 @@
   , "deps":
     [ "arena"
     , "metadata_batch"
-    , ["", "gpr"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
     ]
   }
 , "chaotic_good_frame_header":
@@ -5340,38 +6388,42 @@
   , "hdrs": ["ext/transport/chaotic_good/frame_header.h"]
   , "deps":
     [ "bitset"
-    , ["", "gpr"]
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
+    , ["", "gpr_platform"]
     ]
   }
 , "gcp_metadata_query":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["gcp_metadata_query"]
   , "stage": ["src", "core"]
-  , "srcs": ["ext/gcp/metadata_query.cc"]
-  , "hdrs": ["ext/gcp/metadata_query.h"]
+  , "srcs": ["util/gcp_metadata_query.cc"]
+  , "hdrs": ["util/gcp_metadata_query.h"]
   , "deps":
     [ "closure"
     , "error"
     , "status_helper"
     , "time"
-    , ["", "gpr"]
-    , ["", "gpr_platform"]
-    , ["", "grpc_base"]
-    , ["", "grpc_security_base"]
-    , ["", "grpc_trace"]
-    , ["", "httpcli"]
-    , ["", "orphanable"]
-    , ["", "ref_counted_ptr"]
-    , ["", "uri_parser"]
     , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/strings", "str_format"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr"]
+    , ["", "gpr_platform"]
+    , ["", "grpc_base"]
+    , ["", "grpc_core_credentials_header"]
+    , ["", "grpc_security_base"]
+    , ["", "grpc_trace"]
+    , ["", "httpcli"]
+    , ["", "iomgr"]
+    , ["", "orphanable"]
+    , ["", "ref_counted_ptr"]
+    , ["", "uri_parser"]
     ]
   }
 , "logging_sink":
@@ -5381,9 +6433,9 @@
   , "hdrs": ["ext/filters/logging/logging_sink.h"]
   , "deps":
     [ "time"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/numeric", "int128"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr_platform"]
     ]
   }
 , "logging_filter":
@@ -5408,6 +6460,14 @@
     , "slice"
     , "slice_buffer"
     , "time"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/numeric", "int128"]
+    , ["@", "absl", "absl/random", "distributions"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["", "call_tracer"]
     , ["", "channel_arg_names"]
     , ["", "config"]
     , ["", "gpr"]
@@ -5416,14 +6476,7 @@
     , ["", "grpc_client_channel"]
     , ["", "grpc_public_hdrs"]
     , ["", "grpc_resolver"]
-    , ["", "legacy_context"]
     , ["", "uri_parser"]
-    , ["@", "absl", "absl/numeric", "int128"]
-    , ["@", "absl", "absl/random", "distributions"]
-    , ["@", "absl", "absl/random", "random"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "grpc_promise_endpoint":
@@ -5434,26 +6487,29 @@
   , "hdrs": ["lib/transport/promise_endpoint.h"]
   , "deps":
     [ "activity"
+    , "cancel_callback"
     , "event_engine_common"
+    , "event_engine_extensions"
+    , "event_engine_query_extensions"
     , "if"
     , "map"
     , "poll"
     , "slice"
     , "slice_buffer"
-    , ["", "event_engine_base_hdrs"]
-    , ["", "exec_ctx"]
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/status", "status"]
     , ["@", "absl", "absl/status", "statusor"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "event_engine_base_hdrs"]
+    , ["", "exec_ctx"]
+    , ["", "gpr"]
     ]
   }
 , "chaotic_good_transport":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["chaotic_good_transport"]
   , "stage": ["src", "core"]
-  , "srcs": ["ext/transport/chaotic_good/chaotic_good_transport.cc"]
   , "hdrs": ["ext/transport/chaotic_good/chaotic_good_transport.h"]
   , "deps":
     [ "chaotic_good_frame"
@@ -5463,11 +6519,12 @@
     , "if"
     , "try_join"
     , "try_seq"
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/random", "random"]
     , ["", "gpr_platform"]
     , ["", "grpc_trace"]
     , ["", "hpack_encoder"]
     , ["", "promise"]
-    , ["@", "absl", "absl/random", "random"]
     ]
   }
 , "chaotic_good_client_transport":
@@ -5502,6 +6559,16 @@
     , "slice_buffer"
     , "try_join"
     , "try_seq"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/random", "bit_gen_ref"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
@@ -5510,14 +6577,6 @@
     , ["", "hpack_parser"]
     , ["", "promise"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/container", "flat_hash_map"]
-    , ["@", "absl", "absl/random", "random"]
-    , ["@", "absl", "absl/random", "bit_gen_ref"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/types", "optional"]
-    , ["@", "absl", "absl/types", "variant"]
     ]
   }
 , "chaotic_good_server_transport":
@@ -5535,6 +6594,7 @@
     , "chaotic_good_transport"
     , "context"
     , "default_event_engine"
+    , "event_engine_context"
     , "event_engine_wakeup_scheduler"
     , "for_each"
     , "grpc_promise_endpoint"
@@ -5554,6 +6614,17 @@
     , "switch"
     , "try_join"
     , "try_seq"
+    , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/random", "bit_gen_ref"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "variant"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
@@ -5561,15 +6632,6 @@
     , ["", "hpack_encoder"]
     , ["", "hpack_parser"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/base", "core_headers"]
-    , ["@", "absl", "absl/container", "flat_hash_map"]
-    , ["@", "absl", "absl/functional", "any_invocable"]
-    , ["@", "absl", "absl/random", "random"]
-    , ["@", "absl", "absl/random", "bit_gen_ref"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
-    , ["@", "absl", "absl/types", "optional"]
-    , ["@", "absl", "absl/types", "variant"]
     ]
   }
 , "call_final_info":
@@ -5580,6 +6642,22 @@
   , "hdrs": ["lib/transport/call_final_info.h"]
   , "deps": [["", "gpr"], ["", "grpc_public_hdrs"]]
   }
+, "call_finalization":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["call_finalization"]
+  , "stage": ["src", "core"]
+  , "hdrs": ["lib/channel/call_finalization.h"]
+  , "deps": ["arena", "call_final_info", "context", ["", "gpr_platform"]]
+  }
+, "call_state":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["call_state"]
+  , "stage": ["src", "core"]
+  , "srcs": ["lib/transport/call_state.cc"]
+  , "hdrs": ["lib/transport/call_state.h"]
+  , "deps":
+    ["activity", "poll", "status_flag", ["", "gpr"], ["", "grpc_trace"]]
+  }
 , "call_filters":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["call_filters"]
@@ -5588,30 +6666,38 @@
   , "hdrs": ["lib/transport/call_filters.h"]
   , "deps":
     [ "call_final_info"
+    , "call_state"
+    , "dump_args"
+    , "if"
+    , "latch"
+    , "map"
     , "message"
     , "metadata"
     , "ref_counted"
+    , "seq"
     , "status_flag"
+    , "try_seq"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
     , ["", "gpr"]
     , ["", "promise"]
     , ["", "ref_counted_ptr"]
     ]
   }
-, "call_factory":
+, "interception_chain":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["call_factory"]
+  , "name": ["interception_chain"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/transport/call_factory.cc"]
-  , "hdrs": ["lib/transport/call_factory.h"]
+  , "srcs": ["lib/transport/interception_chain.cc"]
+  , "hdrs": ["lib/transport/interception_chain.h"]
   , "deps":
-    [ "arena"
-    , "call_size_estimator"
+    [ "call_destination"
+    , "call_filters"
     , "call_spine"
-    , "channel_args"
+    , "match"
+    , "metadata"
     , "ref_counted"
-    , "resource_quota"
     , ["", "gpr_platform"]
-    , ["", "stats"]
     ]
   }
 , "call_destination":
@@ -5630,10 +6716,10 @@
   , "deps":
     [ "slice"
     , "time"
-    , ["", "gpr_platform"]
     , ["@", "absl", "absl/functional", "function_ref"]
     , ["@", "absl", "absl/meta", "type_traits"]
     , ["@", "absl", "absl/strings", "strings"]
+    , ["", "gpr_platform"]
     ]
   }
 , "metadata":
@@ -5653,9 +6739,9 @@
   , "deps":
     [ "arena"
     , "slice_buffer"
+    , ["@", "absl", "absl/strings", "strings"]
     , ["", "gpr_platform"]
     , ["", "grpc_public_hdrs"]
-    , ["@", "absl", "absl/strings", "strings"]
     ]
   }
 , "call_spine":
@@ -5666,6 +6752,10 @@
   , "hdrs": ["lib/transport/call_spine.h"]
   , "deps":
     [ "1999"
+    , "call_arena_allocator"
+    , "call_filters"
+    , "dual_ref_counted"
+    , "event_engine_context"
     , "for_each"
     , "if"
     , "latch"
@@ -5676,7 +6766,26 @@
     , "promise_status"
     , "status_flag"
     , "try_seq"
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/log", "check"]
     , ["", "gpr"]
+    , ["", "promise"]
+    ]
+  }
+, "direct_channel":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["direct_channel"]
+  , "stage": ["src", "core"]
+  , "srcs": ["client_channel/direct_channel.cc"]
+  , "hdrs": ["client_channel/direct_channel.h"]
+  , "deps":
+    [ "channel_stack_type"
+    , "event_engine_context"
+    , "interception_chain"
+    , ["", "channel"]
+    , ["", "config"]
+    , ["", "grpc_base"]
+    , ["", "orphanable"]
     ]
   }
 , "metadata_batch":
@@ -5692,7 +6801,7 @@
   , "deps":
     [ "arena"
     , "chunked_vector"
-    , "compression_internal"
+    , "compression"
     , "experiments"
     , "if_list"
     , "metadata_compression_traits"
@@ -5703,14 +6812,17 @@
     , "time"
     , "timeout_encoding"
     , "type_list"
-    , ["", "gpr"]
-    , ["", "grpc_public_hdrs"]
+    , ["@", "absl", "absl/base", "no_destructor"]
+    , ["@", "absl", "absl/container", "flat_hash_set"]
     , ["@", "absl", "absl/container", "inlined_vector"]
     , ["@", "absl", "absl/functional", "function_ref"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/meta", "type_traits"]
-    , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
+    , ["", "grpc_public_hdrs"]
     ]
   }
 , "timeout_encoding":
@@ -5722,38 +6834,44 @@
   , "deps":
     [ "slice"
     , "time"
-    , ["", "gpr"]
     , ["@", "absl", "absl/base", "core_headers"]
+    , ["@", "absl", "absl/log", "check"]
     , ["@", "absl", "absl/types", "optional"]
+    , ["", "gpr"]
     ]
   }
-, "call_size_estimator":
+, "call_arena_allocator":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["call_size_estimator"]
+  , "name": ["call_arena_allocator"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/transport/call_size_estimator.cc"]
-  , "hdrs": ["lib/transport/call_size_estimator.h"]
-  , "deps": [["", "gpr_platform"]]
+  , "srcs": ["lib/transport/call_arena_allocator.cc"]
+  , "hdrs": ["lib/transport/call_arena_allocator.h"]
+  , "deps": ["arena", "memory_quota", "ref_counted", ["", "gpr_platform"]]
   }
-, "compression_internal":
+, "compression":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["compression_internal"]
+  , "name": ["compression"]
   , "stage": ["src", "core"]
-  , "srcs": ["lib/compression/compression_internal.cc"]
+  , "srcs":
+    [ "lib/compression/compression.cc"
+    , "lib/compression/compression_internal.cc"
+    ]
   , "hdrs": ["lib/compression/compression_internal.h"]
   , "deps":
     [ "bitset"
     , "channel_args"
     , "ref_counted_string"
     , "slice"
+    , "useful"
+    , ["@", "absl", "absl/container", "inlined_vector"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/strings", "str_format"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
     , ["", "gpr"]
     , ["", "grpc_public_hdrs"]
     , ["", "grpc_trace"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/container", "inlined_vector"]
-    , ["@", "absl", "absl/strings", "strings"]
-    , ["@", "absl", "absl/strings", "str_format"]
-    , ["@", "absl", "absl/types", "optional"]
     ]
   }
 , "chaotic_good_server":
@@ -5777,6 +6895,9 @@
     , "error"
     , "error_utils"
     , "event_engine_common"
+    , "event_engine_context"
+    , "event_engine_extensions"
+    , "event_engine_query_extensions"
     , "event_engine_tcp_socket_utils"
     , "event_engine_wakeup_scheduler"
     , "grpc_promise_endpoint"
@@ -5795,19 +6916,24 @@
     , "status_helper"
     , "time"
     , "try_seq"
+    , ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/random", "bit_gen_ref"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["", "channelz"]
     , ["", "gpr"]
     , ["", "gpr_platform"]
     , ["", "grpc_base"]
     , ["", "handshaker"]
     , ["", "hpack_encoder"]
     , ["", "hpack_parser"]
+    , ["", "iomgr"]
     , ["", "orphanable"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/container", "flat_hash_map"]
-    , ["@", "absl", "absl/random", "random"]
-    , ["@", "absl", "absl/random", "bit_gen_ref"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
+    , ["", "server"]
     ]
   }
 , "chaotic_good_connector":
@@ -5830,6 +6956,9 @@
     , "default_event_engine"
     , "error"
     , "error_utils"
+    , "event_engine_context"
+    , "event_engine_extensions"
+    , "event_engine_query_extensions"
     , "event_engine_tcp_socket_utils"
     , "event_engine_wakeup_scheduler"
     , "grpc_promise_endpoint"
@@ -5843,9 +6972,19 @@
     , "sleep"
     , "slice"
     , "slice_buffer"
+    , "subchannel_connector"
     , "time"
     , "try_seq"
     , "wait_for_callback"
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/log", "log"]
+    , ["@", "absl", "absl/random", "bit_gen_ref"]
+    , ["@", "absl", "absl/random", "random"]
+    , ["@", "absl", "absl/status", "status"]
+    , ["@", "absl", "absl/status", "statusor"]
+    , ["", "channel"]
+    , ["", "channel_create"]
+    , ["", "config"]
     , ["", "debug_location"]
     , ["", "exec_ctx"]
     , ["", "gpr"]
@@ -5855,11 +6994,31 @@
     , ["", "handshaker"]
     , ["", "hpack_encoder"]
     , ["", "hpack_parser"]
+    , ["", "iomgr"]
     , ["", "ref_counted_ptr"]
-    , ["@", "absl", "absl/random", "random"]
-    , ["@", "absl", "absl/random", "bit_gen_ref"]
-    , ["@", "absl", "absl/status", "status"]
-    , ["@", "absl", "absl/status", "statusor"]
+    ]
+  }
+, "metrics":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["metrics"]
+  , "stage": ["src", "core"]
+  , "srcs": ["telemetry/metrics.cc"]
+  , "hdrs": ["telemetry/metrics.h"]
+  , "deps":
+    [ "arena"
+    , "channel_args"
+    , "no_destruct"
+    , "slice"
+    , "time"
+    , ["@", "absl", "absl/container", "flat_hash_map"]
+    , ["@", "absl", "absl/functional", "any_invocable"]
+    , ["@", "absl", "absl/functional", "function_ref"]
+    , ["@", "absl", "absl/log", "check"]
+    , ["@", "absl", "absl/strings", "strings"]
+    , ["@", "absl", "absl/types", "optional"]
+    , ["@", "absl", "absl/types", "span"]
+    , ["", "call_tracer"]
+    , ["", "gpr"]
     ]
   }
 }

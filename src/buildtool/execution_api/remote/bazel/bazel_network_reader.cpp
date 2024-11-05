@@ -16,6 +16,9 @@
 
 #include <algorithm>
 
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/common/bazel_digest_factory.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
 #include "src/buildtool/execution_api/common/message_limits.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
@@ -27,10 +30,10 @@
 BazelNetworkReader::BazelNetworkReader(
     std::string instance_name,
     gsl::not_null<BazelCasClient const*> const& cas,
-    HashFunction hash_function) noexcept
+    gsl::not_null<HashFunction const*> const& hash_function) noexcept
     : instance_name_{std::move(instance_name)},
       cas_{*cas},
-      hash_function_{hash_function} {}
+      hash_function_{*hash_function} {}
 
 BazelNetworkReader::BazelNetworkReader(
     BazelNetworkReader&& other,
@@ -38,11 +41,13 @@ BazelNetworkReader::BazelNetworkReader(
     : instance_name_{other.instance_name_},
       cas_{other.cas_},
       hash_function_{other.hash_function_} {
-    if (Compatibility::IsCompatible() and request_remote_tree) {
+    if (not IsNativeProtocol() and request_remote_tree) {
         // Query full tree from remote CAS. Note that this is currently not
         // supported by Buildbarn revision c3c06bbe2a.
-        auto full_tree = cas_.GetTree(
-            instance_name_, *request_remote_tree, kMaxBatchTransferSize);
+        auto full_tree =
+            cas_.GetTree(instance_name_,
+                         ArtifactDigestFactory::ToBazel(*request_remote_tree),
+                         kMaxBatchTransferSize);
         auxiliary_map_ = MakeAuxiliaryMap(std::move(full_tree));
     }
 }
@@ -67,14 +72,14 @@ auto BazelNetworkReader::ReadDirectory(ArtifactDigest const& digest)
 
 auto BazelNetworkReader::ReadGitTree(ArtifactDigest const& digest)
     const noexcept -> std::optional<GitRepo::tree_entries_t> {
-    ExpectsAudit(hash_function_.GetType() == HashFunction::Type::GitSHA1);
+    ExpectsAudit(IsNativeProtocol());
 
     auto read_blob = ReadSingleBlob(digest);
     if (not read_blob) {
         Logger::Log(LogLevel::Debug, "Tree {} not found in CAS", digest.hash());
         return std::nullopt;
     }
-    auto check_symlinks = [this](std::vector<bazel_re::Digest> const& ids) {
+    auto check_symlinks = [this](std::vector<ArtifactDigest> const& ids) {
         size_t const size = ids.size();
         size_t count = 0;
         for (auto blobs : ReadIncrementally(ids)) {
@@ -122,7 +127,8 @@ auto BazelNetworkReader::DumpRawTree(Artifact::ObjectInfo const& info,
 auto BazelNetworkReader::DumpBlob(Artifact::ObjectInfo const& info,
                                   DumpCallback const& dumper) const noexcept
     -> bool {
-    auto reader = cas_.IncrementalReadSingleBlob(instance_name_, info.digest);
+    auto reader = cas_.IncrementalReadSingleBlob(
+        instance_name_, ArtifactDigestFactory::ToBazel(info.digest));
     auto data = reader.Next();
     while (data and not data->empty()) {
         try {
@@ -137,16 +143,20 @@ auto BazelNetworkReader::DumpBlob(Artifact::ObjectInfo const& info,
     return data.has_value();
 }
 
+auto BazelNetworkReader::IsNativeProtocol() const noexcept -> bool {
+    return ProtocolTraits::IsNative(hash_function_.GetType());
+}
+
 auto BazelNetworkReader::MakeAuxiliaryMap(
     std::vector<bazel_re::Directory>&& full_tree) const noexcept
     -> std::optional<DirectoryMap> {
-    ExpectsAudit(hash_function_.GetType() == HashFunction::Type::PlainSHA256);
+    ExpectsAudit(not IsNativeProtocol());
 
     DirectoryMap result;
     result.reserve(full_tree.size());
     for (auto& dir : full_tree) {
         try {
-            result.emplace(ArtifactDigest::Create<ObjectType::File>(
+            result.emplace(ArtifactDigestFactory::HashDataAs<ObjectType::File>(
                                hash_function_, dir.SerializeAsString()),
                            std::move(dir));
         } catch (...) {
@@ -159,16 +169,22 @@ auto BazelNetworkReader::MakeAuxiliaryMap(
 auto BazelNetworkReader::ReadSingleBlob(bazel_re::Digest const& digest)
     const noexcept -> std::optional<ArtifactBlob> {
     auto blob = cas_.ReadSingleBlob(instance_name_, digest);
-    if (blob and Validate(*blob)) {
-        return ArtifactBlob{
-            ArtifactDigest{blob->digest}, blob->data, blob->is_exec};
+    if (not blob) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    auto hash_info = Validate(*blob);
+    if (not hash_info) {
+        return std::nullopt;
+    }
+    return ArtifactBlob{
+        ArtifactDigest{*std::move(hash_info), blob->data->size()},
+        blob->data,
+        blob->is_exec};
 }
 
 auto BazelNetworkReader::ReadSingleBlob(ArtifactDigest const& digest)
     const noexcept -> std::optional<ArtifactBlob> {
-    return ReadSingleBlob(static_cast<bazel_re::Digest>(digest));
+    return ReadSingleBlob(ArtifactDigestFactory::ToBazel(digest));
 }
 
 auto BazelNetworkReader::ReadIncrementally(
@@ -180,7 +196,7 @@ auto BazelNetworkReader::ReadIncrementally(
                    digests.end(),
                    std::back_inserter(bazel_digests),
                    [](ArtifactDigest const& d) {
-                       return static_cast<bazel_re::Digest>(d);
+                       return ArtifactDigestFactory::ToBazel(d);
                    });
     return ReadIncrementally(std::move(bazel_digests));
 }
@@ -193,44 +209,47 @@ auto BazelNetworkReader::ReadIncrementally(
 auto BazelNetworkReader::BatchReadBlobs(
     std::vector<bazel_re::Digest> const& blobs) const noexcept
     -> std::vector<ArtifactBlob> {
-    std::vector<BazelBlob> result =
+    std::vector<BazelBlob> const result =
         cas_.BatchReadBlobs(instance_name_, blobs.begin(), blobs.end());
-
-    auto it = std::remove_if(
-        result.begin(), result.end(), [this](BazelBlob const& blob) {
-            return not Validate(blob);
-        });
-    result.erase(it, result.end());
 
     std::vector<ArtifactBlob> artifacts;
     artifacts.reserve(result.size());
-    std::transform(result.begin(),
-                   result.end(),
-                   std::back_inserter(artifacts),
-                   [](BazelBlob const& blob) {
-                       return ArtifactBlob{ArtifactDigest{blob.digest},
-                                           blob.data,
-                                           blob.is_exec};
-                   });
+    for (auto const& blob : result) {
+        if (auto hash_info = Validate(blob)) {
+            artifacts.emplace_back(
+                ArtifactDigest{*std::move(hash_info), blob.data->size()},
+                blob.data,
+                blob.is_exec);
+        }
+    }
     return artifacts;
 }
 
 auto BazelNetworkReader::Validate(BazelBlob const& blob) const noexcept
-    -> bool {
-    ArtifactDigest const rehashed_digest =
-        NativeSupport::IsTree(blob.digest.hash())
-            ? ArtifactDigest::Create<ObjectType::Tree>(hash_function_,
-                                                       *blob.data)
-            : ArtifactDigest::Create<ObjectType::File>(hash_function_,
-                                                       *blob.data);
-    if (rehashed_digest == ArtifactDigest{blob.digest}) {
-        return true;
+    -> std::optional<HashInfo> {
+    // validate digest
+    auto requested_hash_info =
+        BazelDigestFactory::ToHashInfo(hash_function_.GetType(), blob.digest);
+    if (not requested_hash_info) {
+        Logger::Log(LogLevel::Warning,
+                    "BazelNetworkReader: {}",
+                    std::move(requested_hash_info).error());
+        return std::nullopt;
     }
-    Logger::Log(LogLevel::Warning,
-                "Requested {}, but received {}",
-                ArtifactDigest{blob.digest}.hash(),
-                rehashed_digest.hash());
-    return false;
+
+    // rehash data
+    auto rehashed_info = HashInfo::HashData(
+        hash_function_, *blob.data, requested_hash_info->IsTree());
+
+    // ensure rehashed data produce the same hash
+    if (*requested_hash_info != rehashed_info) {
+        Logger::Log(LogLevel::Warning,
+                    "Requested {}, but received {}",
+                    requested_hash_info->Hash(),
+                    rehashed_info.Hash());
+        return std::nullopt;
+    }
+    return rehashed_info;
 }
 
 namespace {
@@ -259,7 +278,7 @@ namespace {
 }
 }  // namespace
 
-BazelNetworkReader::IncrementalReader::iterator::iterator(
+BazelNetworkReader::IncrementalReader::Iterator::Iterator(
     BazelNetworkReader const& owner,
     std::vector<bazel_re::Digest>::const_iterator begin,
     std::vector<bazel_re::Digest>::const_iterator end) noexcept
@@ -267,7 +286,7 @@ BazelNetworkReader::IncrementalReader::iterator::iterator(
     current_ = FindCurrentIterator(begin_, end_);
 }
 
-auto BazelNetworkReader::IncrementalReader::iterator::operator*() const noexcept
+auto BazelNetworkReader::IncrementalReader::Iterator::operator*() const noexcept
     -> value_type {
     if (begin_ != current_) {
         if (std::distance(begin_, current_) > 1) {
@@ -281,8 +300,8 @@ auto BazelNetworkReader::IncrementalReader::iterator::operator*() const noexcept
     return {};
 }
 
-auto BazelNetworkReader::IncrementalReader::iterator::operator++() noexcept
-    -> iterator& {
+auto BazelNetworkReader::IncrementalReader::Iterator::operator++() noexcept
+    -> Iterator& {
     begin_ = current_;
     current_ = FindCurrentIterator(begin_, end_);
     return *this;

@@ -95,9 +95,8 @@ TEST_CASE("Lookup and iteration", "[linked_map]") {
 class CopyCounter {
   public:
     CopyCounter() : count_{std::make_shared<std::size_t>()} {}
-    CopyCounter(CopyCounter const& other) {
+    CopyCounter(CopyCounter const& other) : count_{other.count_} {
         ++(*other.count_);
-        count_ = other.count_;
     }
     CopyCounter(CopyCounter&&) = default;
     ~CopyCounter() = default;
@@ -113,7 +112,7 @@ class CopyCounter {
 
   private:
     // all copies of this object share the same counter
-    std::shared_ptr<std::size_t> count_{};
+    std::shared_ptr<std::size_t> count_;
 };
 
 TEST_CASE("Zero copies", "[linked_map]") {
@@ -218,7 +217,7 @@ class CustomContainer {
     [[nodiscard]] auto Map() & noexcept -> linked_map_t& { return map_; }
 
   private:
-    linked_map_t map_{};
+    linked_map_t map_;
 };
 
 TEST_CASE("Custom NextPtr", "[linked_map]") {

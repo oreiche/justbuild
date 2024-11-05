@@ -56,7 +56,9 @@ class Action {
                  1.0,
                  std::map<std::string, std::string>{}) {}
 
-    [[nodiscard]] auto Id() const noexcept -> ActionIdentifier { return id_; }
+    [[nodiscard]] auto Id() const noexcept -> ActionIdentifier const& {
+        return id_;
+    }
 
     [[nodiscard]] auto Command() && noexcept -> std::vector<std::string> {
         return std::move(command_);
@@ -67,10 +69,12 @@ class Action {
         return command_;
     }
 
-    [[nodiscard]] auto Cwd() const -> std::string { return cwd_; }
+    [[nodiscard]] auto Cwd() const noexcept -> std::string const& {
+        return cwd_;
+    }
 
     [[nodiscard]] auto Env() const& noexcept
-        -> std::map<std::string, std::string> {
+        -> std::map<std::string, std::string> const& {
         return env_;
     }
 
@@ -78,15 +82,20 @@ class Action {
         return std::move(env_);
     }
 
-    [[nodiscard]] auto IsTreeAction() const -> bool { return is_tree_; }
-    [[nodiscard]] auto MayFail() const -> std::optional<std::string> {
+    [[nodiscard]] auto IsTreeAction() const noexcept -> bool {
+        return is_tree_;
+    }
+    [[nodiscard]] auto MayFail() const noexcept
+        -> std::optional<std::string> const& {
         return may_fail_;
     }
-    [[nodiscard]] auto NoCache() const -> bool { return no_cache_; }
-    [[nodiscard]] auto TimeoutScale() const -> double { return timeout_scale_; }
+    [[nodiscard]] auto NoCache() const noexcept -> bool { return no_cache_; }
+    [[nodiscard]] auto TimeoutScale() const noexcept -> double {
+        return timeout_scale_;
+    }
 
     [[nodiscard]] auto ExecutionProperties() const& noexcept
-        -> std::map<std::string, std::string> {
+        -> std::map<std::string, std::string> const& {
         return execution_properties_;
     }
 
@@ -95,23 +104,24 @@ class Action {
         return std::move(execution_properties_);
     }
 
-    [[nodiscard]] static auto CreateTreeAction(ActionIdentifier const& id)
-        -> Action {
+    [[nodiscard]] static auto CreateTreeAction(
+        ActionIdentifier const& id) noexcept -> Action {
         return Action{id};
     }
 
   private:
-    ActionIdentifier id_{};
-    std::vector<std::string> command_{};
-    std::string cwd_{};
-    std::map<std::string, std::string> env_{};
+    ActionIdentifier id_;
+    std::vector<std::string> command_;
+    std::string cwd_;
+    std::map<std::string, std::string> env_;
     bool is_tree_{};
-    std::optional<std::string> may_fail_{};
+    std::optional<std::string> may_fail_;
     bool no_cache_{};
     double timeout_scale_{};
-    std::map<std::string, std::string> execution_properties_{};
+    std::map<std::string, std::string> execution_properties_;
 
-    explicit Action(ActionIdentifier id) : id_{std::move(id)}, is_tree_{true} {}
+    explicit Action(ActionIdentifier id) noexcept
+        : id_{std::move(id)}, is_tree_{true} {}
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_COMMON_ACTION_HPP

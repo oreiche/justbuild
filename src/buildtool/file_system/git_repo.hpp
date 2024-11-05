@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "gsl/gsl"
-#include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/file_system/git_cas.hpp"
 #include "src/buildtool/file_system/git_types.hpp"
 #include "src/buildtool/storage/config.hpp"
@@ -33,6 +33,7 @@
 extern "C" {
 struct git_repository;
 struct git_config;
+struct git_strarray;
 }
 
 /// \brief Git repository logic.
@@ -43,12 +44,11 @@ class GitRepo {
   public:
     // Stores the data for defining a single Git tree entry, which consists of
     // a name (flat basename) and an object type (file/executable/tree).
-    struct tree_entry_t {
-        tree_entry_t(std::string n, ObjectType t)
-            : name{std::move(n)}, type{t} {}
+    struct TreeEntry {
+        TreeEntry(std::string n, ObjectType t) : name{std::move(n)}, type{t} {}
         std::string name;
         ObjectType type;
-        [[nodiscard]] auto operator==(tree_entry_t const& other) const noexcept
+        [[nodiscard]] auto operator==(TreeEntry const& other) const noexcept
             -> bool {
             return name == other.name and type == other.type;
         }
@@ -58,11 +58,11 @@ class GitRepo {
     // Note that sharding by id is used as this format enables a more efficient
     // internal implementation for creating trees.
     using tree_entries_t =
-        std::unordered_map<std::string, std::vector<tree_entry_t>>;
+        std::unordered_map<std::string, std::vector<TreeEntry>>;
 
     // Stores the info of an object read by its path.
     struct TreeEntryInfo {
-        std::string id{};
+        std::string id;
         ObjectType type;
         // if type is symlink, read it in advance
         std::optional<std::string> symlink_content{std::nullopt};
@@ -71,7 +71,7 @@ class GitRepo {
     // Checks whether a list of symlinks given by their hashes are
     // non-upwards, based on content read from an actual backend.
     using SymlinksCheckFunc =
-        std::function<bool(std::vector<bazel_re::Digest> const&)>;
+        std::function<bool(std::vector<ArtifactDigest> const&)>;
 
     GitRepo() = delete;  // no default ctor
     ~GitRepo() noexcept = default;
@@ -378,13 +378,19 @@ class GitRepo {
         std::filesystem::path const& dir,
         anon_logger_ptr const& logger) noexcept -> std::optional<std::string>;
 
-    /// \brief Helper function to allocate and populate the char** pointer of a
-    /// git_strarray from a vector of standard strings. User MUST use
-    /// git_strarray_dispose to deallocate the inner pointer when the strarray
-    /// is not needed anymore!
-    static void PopulateStrarray(
-        git_strarray* array,
-        std::vector<std::string> const& string_list) noexcept;
+    class GitStrArray final {
+      public:
+        void AddEntry(std::string entry) {
+            char* const entry_ptr =
+                entries_.emplace_back(std::move(entry)).data();
+            entry_pointers_.push_back(entry_ptr);
+        }
+        [[nodiscard]] auto Get() & noexcept -> git_strarray;
+
+      private:
+        std::vector<std::string> entries_;
+        std::vector<char*> entry_pointers_;
+    };
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_FILE_SYSTEM_GIT_REPO_HPP

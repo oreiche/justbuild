@@ -19,6 +19,7 @@
 #include <cerrno>  // for errno
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>   // for std::fopen
 #include <cstdlib>  // std::exit, std::getenv
 #include <cstring>
@@ -51,7 +52,7 @@
 #include "src/utils/cpp/path.hpp"
 
 namespace detail {
-static inline consteval auto BitWidth(int max_val) -> int {
+static consteval auto BitWidth(int max_val) -> int {
     constexpr int kBitsPerByte = 8;
     int i = sizeof(max_val) * kBitsPerByte;
     while ((i-- > 0) and (((max_val >> i) & 0x01) == 0x00)) {  // NOLINT
@@ -78,9 +79,9 @@ class FileSystemManager {
         auto operator=(DirectoryAnchor const&) -> DirectoryAnchor& = delete;
         auto operator=(DirectoryAnchor&&) -> DirectoryAnchor& = delete;
         ~DirectoryAnchor() noexcept {
-            if (not kRestorePath.empty()) {
+            if (not restore_path_.empty()) {
                 try {
-                    std::filesystem::current_path(kRestorePath);
+                    std::filesystem::current_path(restore_path_);
                 } catch (std::exception const& e) {
                     Logger::Log(LogLevel::Error, e.what());
                 }
@@ -88,14 +89,14 @@ class FileSystemManager {
         }
         [[nodiscard]] auto GetRestorePath() const noexcept
             -> std::filesystem::path const& {
-            return kRestorePath;
+            return restore_path_;
         }
 
       private:
-        std::filesystem::path const kRestorePath{};
+        std::filesystem::path const restore_path_;
 
         DirectoryAnchor()
-            : kRestorePath{FileSystemManager::GetCurrentDirectory()} {}
+            : restore_path_{FileSystemManager::GetCurrentDirectory()} {}
         DirectoryAnchor(DirectoryAnchor&&) = default;
     };
 
@@ -702,7 +703,7 @@ class FileSystemManager {
             std::ifstream file_reader(file.string(), std::ios::binary);
             if (file_reader.is_open()) {
                 auto ssize = gsl::narrow<std::streamsize>(chunk.size());
-                do {
+                while (file_reader.good()) {
                     file_reader.read(chunk.data(), ssize);
                     auto count = file_reader.gcount();
                     if (count == ssize) {
@@ -712,7 +713,7 @@ class FileSystemManager {
                         content +=
                             chunk.substr(0, gsl::narrow<std::size_t>(count));
                     }
-                } while (file_reader.good());
+                }
                 file_reader.close();
                 return content;
             }
@@ -984,7 +985,7 @@ class FileSystemManager {
     }
 
   private:
-    enum class CreationStatus { Created, Exists, Failed };
+    enum class CreationStatus : std::uint8_t { Created, Exists, Failed };
 
     static constexpr std::size_t kChunkSize{256};
 
@@ -1165,10 +1166,10 @@ class FileSystemManager {
         std::filesystem::file_status const& status) noexcept -> bool {
         try {
             namespace fs = std::filesystem;
-            static constexpr auto exec_flags = fs::perms::owner_exec bitor
+            static constexpr auto kExecFlags = fs::perms::owner_exec bitor
                                                fs::perms::group_exec bitor
                                                fs::perms::others_exec;
-            auto exec_perms = status.permissions() bitand exec_flags;
+            auto exec_perms = status.permissions() bitand kExecFlags;
             return exec_perms != fs::perms::none;
         } catch (std::exception const& e) {
             Logger::Log(LogLevel::Error,
@@ -1184,14 +1185,14 @@ class FileSystemManager {
     /// Non-zero return values indicate errors, which can be decoded using
     /// \ref ErrorToString.
     class LowLevel {
-        static constexpr ssize_t kDefaultChunkSize = 1024 * 32;
+        static constexpr std::size_t kDefaultChunkSize = 1024UL * 32;
         static constexpr int kWriteFlags =
             O_WRONLY | O_CREAT | O_TRUNC;           // NOLINT
         static constexpr int kWritePerms =          // 644
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;  // NOLINT
 
       public:
-        template <ssize_t kChunkSize = kDefaultChunkSize>
+        template <std::size_t kChunkSize = kDefaultChunkSize>
         [[nodiscard]] static auto CopyFile(char const* src,
                                            char const* dst,
                                            bool skip_existing) noexcept -> int {
@@ -1237,18 +1238,19 @@ class FileSystemManager {
             return 0;
         }
 
-        template <ssize_t kChunkSize = kDefaultChunkSize>
+        template <std::size_t kChunkSize = kDefaultChunkSize>
         [[nodiscard]] static auto WriteFile(char const* content,
-                                            ssize_t size,
+                                            std::size_t size,
                                             char const* file) noexcept -> int {
             auto out = FdOpener{file, kWriteFlags, kWritePerms};
             if (out.fd == -1) {
                 return PackError(ERROR_OPEN_OUTPUT, errno);
             }
-            ssize_t pos{};
+            std::size_t pos = 0;
             while (pos < size) {
                 auto const write_len = std::min(kChunkSize, size - pos);
-                auto len = write(out.fd, content + pos, write_len);  // NOLINT
+                auto const len =
+                    write(out.fd, content + pos, write_len);  // NOLINT
                 if (len < 0) {
                     return PackError(ERROR_WRITE_OUTPUT, errno);
                 }
@@ -1287,7 +1289,7 @@ class FileSystemManager {
         }
 
       private:
-        enum ErrorCodes {
+        enum ErrorCodes : std::uint8_t {
             ERROR_READ_INPUT,    // read() input file failed
             ERROR_OPEN_INPUT,    // open() input file failed
             ERROR_OPEN_OUTPUT,   // open() output file failed

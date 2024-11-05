@@ -104,6 +104,16 @@ auto GetResolvedTreeIDFile(StorageConfig const& storage_config,
            tree_hash;
 }
 
+auto GetRehashIDFile(StorageConfig const& storage_config,
+                     HashFunction::Type target_hash_type,
+                     std::string const& hash,
+                     bool from_git,
+                     std::size_t generation) noexcept -> std::filesystem::path {
+    return storage_config.GenerationCacheRoot(generation) /
+           fmt::format("to-{}", ToString(target_hash_type)) /
+           (from_git ? "from-git" : "from-cas") / hash;
+}
+
 auto WriteTreeIDFile(std::filesystem::path const& tree_id_file,
                      std::string const& tree_id) noexcept -> bool {
     // needs to be done safely, so use the rename trick
@@ -127,8 +137,7 @@ auto AddToCAS(Storage const& storage, std::string const& data) noexcept
     // get file CAS instance
     auto const& cas = storage.CAS();
     // write to cas
-    auto digest = cas.StoreBlob(data);
-    if (digest) {
+    if (auto digest = cas.StoreBlob(data)) {
         return cas.BlobPath(*digest, /*is_executable=*/false);
     }
     return std::nullopt;

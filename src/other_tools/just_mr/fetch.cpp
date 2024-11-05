@@ -22,12 +22,17 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/remote/retry_config.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
 #include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
 #include "src/buildtool/execution_api/local/context.hpp"
+#include "src/buildtool/execution_api/local/local_api.hpp"
+#include "src/buildtool/execution_api/remote/bazel/bazel_api.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/execution_api/remote/context.hpp"
+#include "src/buildtool/execution_api/serve/mr_local_api.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/main/retry.hpp"
@@ -35,6 +40,7 @@
 #include "src/buildtool/multithreading/task_system.hpp"
 #include "src/buildtool/serve_api/remote/config.hpp"
 #include "src/buildtool/serve_api/remote/serve_api.hpp"
+#include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress_reporter.hpp"
@@ -46,6 +52,8 @@
 #include "src/other_tools/ops_maps/git_tree_fetch_map.hpp"
 #include "src/other_tools/ops_maps/import_to_git_map.hpp"
 #include "src/other_tools/utils/parse_archive.hpp"
+#include "src/other_tools/utils/parse_git_tree.hpp"
+#include "src/utils/cpp/file_locking.hpp"
 
 auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                     MultiRepoCommonArguments const& common_args,
@@ -53,8 +61,8 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                     MultiRepoFetchArguments const& fetch_args,
                     MultiRepoRemoteAuthArguments const& auth_args,
                     RetryArguments const& retry_args,
-                    StorageConfig const& storage_config,
-                    Storage const& storage,
+                    StorageConfig const& native_storage_config,
+                    Storage const& native_storage,
                     std::string multi_repository_tool_name) -> int {
     // provide report
     Logger::Log(LogLevel::Info, "Performing repositories fetch");
@@ -272,107 +280,17 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                     // explicitly told to fetch absent archives
                     if (not pragma_absent_value or common_args.fetch_absent) {
                         // enforce mandatory fields
-                        auto repo_desc_hash = (*resolved_repo_desc)->At("id");
-                        if (not repo_desc_hash) {
+                        auto tree_info =
+                            ParseGitTree(*resolved_repo_desc, repo_name);
+                        if (not tree_info) {
                             Logger::Log(
                                 LogLevel::Error,
-                                "Config: Mandatory field \"id\" is missing");
+                                fmt::format("Config: {}",
+                                            std::move(tree_info).error()));
                             return kExitFetchError;
                         }
-                        if (not repo_desc_hash->get()->IsString()) {
-                            Logger::Log(
-                                LogLevel::Error,
-                                fmt::format("Config: Unsupported value {} for "
-                                            "mandatory field \"id\"",
-                                            repo_desc_hash->get()->ToString()));
-                            return kExitFetchError;
-                        }
-                        auto repo_desc_cmd = (*resolved_repo_desc)->At("cmd");
-                        if (not repo_desc_cmd) {
-                            Logger::Log(
-                                LogLevel::Error,
-                                "Config: Mandatory field \"cmd\" is missing");
-                            return kExitFetchError;
-                        }
-                        if (not repo_desc_cmd->get()->IsList()) {
-                            Logger::Log(
-                                LogLevel::Error,
-                                fmt::format("Config: Unsupported value {} for "
-                                            "mandatory field \"cmd\"",
-                                            repo_desc_cmd->get()->ToString()));
-                            return kExitFetchError;
-                        }
-                        std::vector<std::string> cmd{};
-                        for (auto const& token : repo_desc_cmd->get()->List()) {
-                            if (token.IsNotNull() and token->IsString()) {
-                                cmd.emplace_back(token->String());
-                            }
-                            else {
-                                Logger::Log(
-                                    LogLevel::Error,
-                                    fmt::format("Config: Unsupported entry {} "
-                                                "in mandatory field \"cmd\"",
-                                                token->ToString()));
-                                return kExitFetchError;
-                            }
-                        }
-                        std::map<std::string, std::string> env{};
-                        auto repo_desc_env =
-                            (*resolved_repo_desc)
-                                ->Get("env", Expression::none_t{});
-                        if (repo_desc_env.IsNotNull() and
-                            repo_desc_env->IsMap()) {
-                            for (auto const& envar :
-                                 repo_desc_env->Map().Items()) {
-                                if (envar.second.IsNotNull() and
-                                    envar.second->IsString()) {
-                                    env.insert(
-                                        {envar.first, envar.second->String()});
-                                }
-                                else {
-                                    Logger::Log(
-                                        LogLevel::Error,
-                                        fmt::format(
-                                            "Config: Unsupported value {} for "
-                                            "key {} in optional field \"envs\"",
-                                            envar.second->ToString(),
-                                            nlohmann::json(envar.first)
-                                                .dump()));
-                                    return kExitFetchError;
-                                }
-                            }
-                        }
-                        std::vector<std::string> inherit_env{};
-                        auto repo_desc_inherit_env =
-                            (*resolved_repo_desc)
-                                ->Get("inherit env", Expression::none_t{});
-                        if (repo_desc_inherit_env.IsNotNull() and
-                            repo_desc_inherit_env->IsList()) {
-                            for (auto const& envvar :
-                                 repo_desc_inherit_env->List()) {
-                                if (envvar->IsString()) {
-                                    inherit_env.emplace_back(envvar->String());
-                                }
-                                else {
-                                    Logger::Log(
-                                        LogLevel::Error,
-                                        fmt::format("Config: Not a variable "
-                                                    "name in the specification "
-                                                    "of \"inherit env\": {}",
-                                                    envvar->ToString()));
-                                    return kExitFetchError;
-                                }
-                            }
-                        }
-                        // populate struct
-                        GitTreeInfo tree_info = {
-                            .hash = repo_desc_hash->get()->String(),
-                            .env_vars = std::move(env),
-                            .inherit_env = std::move(inherit_env),
-                            .command = std::move(cmd),
-                            .origin = repo_name};
                         // add to list
-                        git_trees_to_fetch.emplace_back(std::move(tree_info));
+                        git_trees_to_fetch.emplace_back(*std::move(tree_info));
                     }
                 } break;
                 default:
@@ -411,52 +329,116 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
         return kExitConfigError;
     }
 
-    // pack the local context instances to be passed to ApiBundle
-    LocalContext const local_context{.exec_config = &*local_exec_config,
-                                     .storage_config = &storage_config,
-                                     .storage = &storage};
+    // pack the native local context and create api
+    LocalContext const native_local_context{
+        .exec_config = &*local_exec_config,
+        .storage_config = &native_storage_config,
+        .storage = &native_storage};
+    IExecutionApi::Ptr const native_local_api =
+        std::make_shared<LocalApi>(&native_local_context);
+
+    // pack the compatible local context, if needed
+    std::unique_ptr<StorageConfig> compat_storage_config = nullptr;
+    std::unique_ptr<Storage> compat_storage = nullptr;
+    std::unique_ptr<LocalContext> compat_local_context = nullptr;
+    std::optional<LockFile> compat_lock = std::nullopt;
+    IExecutionApi::Ptr compat_local_api = nullptr;
+    if (common_args.compatible) {
+        auto config = StorageConfig::Builder{}
+                          .SetBuildRoot(native_storage_config.build_root)
+                          .SetHashType(HashFunction::Type::PlainSHA256)
+                          .Build();
+        if (not config) {
+            Logger::Log(LogLevel::Error, config.error());
+            return kExitConfigError;
+        }
+        compat_storage_config =
+            std::make_unique<StorageConfig>(*std::move(config));
+        compat_storage = std::make_unique<Storage>(
+            Storage::Create(compat_storage_config.get()));
+        compat_local_context = std::make_unique<LocalContext>(
+            LocalContext{.exec_config = &*local_exec_config,
+                         .storage_config = compat_storage_config.get(),
+                         .storage = compat_storage.get()});
+        // if a compatible storage is created, one must get a lock for it the
+        // same way as done for the native one
+        compat_lock = GarbageCollector::SharedLock(*compat_storage_config);
+        if (not compat_lock) {
+            Logger::Log(LogLevel::Error,
+                        "Failed to acquire compatible storage gc lock");
+            return kExitConfigError;
+        }
+        compat_local_api = std::make_shared<LocalApi>(&*compat_local_context);
+    }
+
+    // setup the overall local api, aware of compatibility
+    IExecutionApi::Ptr mr_local_api = std::make_shared<MRLocalApi>(
+        &native_local_context,
+        &*native_local_api,
+        common_args.compatible ? &*compat_local_context : nullptr,
+        common_args.compatible ? &*compat_local_api : nullptr);
 
     // setup authentication config
-    auto auth_config = JustMR::Utils::CreateAuthConfig(auth_args);
+    auto const auth_config = JustMR::Utils::CreateAuthConfig(auth_args);
     if (not auth_config) {
         return kExitConfigError;
     }
 
     // setup the retry config
-    auto retry_config = CreateRetryConfig(retry_args);
+    auto const retry_config = CreateRetryConfig(retry_args);
     if (not retry_config) {
         return kExitConfigError;
     }
 
     // setup remote execution config
-    auto remote_exec_config = JustMR::Utils::CreateRemoteExecutionConfig(
+    auto const remote_exec_config = JustMR::Utils::CreateRemoteExecutionConfig(
         common_args.remote_execution_address, common_args.remote_serve_address);
     if (not remote_exec_config) {
         return kExitConfigError;
     }
 
-    // pack the remote context instances to be passed to ApiBundle
+    // create the remote api
+    auto const hash_fct =
+        compat_local_context != nullptr
+            ? compat_local_context->storage_config->hash_function
+            : native_local_context.storage_config->hash_function;
+    IExecutionApi::Ptr remote_api = nullptr;
+    if (auto const address = remote_exec_config->remote_address) {
+        ExecutionConfiguration config;
+        config.skip_cache_lookup = false;
+        remote_api = std::make_shared<BazelApi>("remote-execution",
+                                                address->host,
+                                                address->port,
+                                                &*auth_config,
+                                                &*retry_config,
+                                                config,
+                                                &hash_fct);
+    }
+    bool const has_remote_api = remote_api != nullptr;
+
+    // pack the remote context
     RemoteContext const remote_context{.auth = &*auth_config,
                                        .retry_config = &*retry_config,
                                        .exec_config = &*remote_exec_config};
 
-    // setup the APIs for archive fetches; only happens if in native mode
-    auto const apis = ApiBundle::Create(&local_context,
-                                        &remote_context,
-                                        /*repo_config=*/nullptr);
-
-    bool const has_remote_api =
-        apis.local != apis.remote and not common_args.compatible;
-
-    // setup the API for serving roots
+    // setup the api for serving roots
     auto serve_config =
         JustMR::Utils::CreateServeConfig(common_args.remote_serve_address);
     if (not serve_config) {
         return kExitConfigError;
     }
+    auto const apis =
+        ApiBundle{.hash_function = hash_fct,
+                  .local = mr_local_api,
+                  .remote = has_remote_api ? remote_api : mr_local_api};
+    auto serve = ServeApi::Create(
+        *serve_config,
+        compat_local_context != nullptr
+            ? &*compat_local_context
+            : &native_local_context,  // defines the client's hash_function
+        &remote_context,
+        &apis /*unused*/);
 
-    auto serve =
-        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
     // check configuration of the serve endpoint provided
     if (serve) {
         // if we have a remote endpoint explicitly given by the user, it must
@@ -491,23 +473,25 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
     auto crit_git_op_ptr = std::make_shared<CriticalGitOpGuard>();
     auto critical_git_op_map = CreateCriticalGitOpMap(crit_git_op_ptr);
 
-    auto content_cas_map =
-        CreateContentCASMap(common_args.just_mr_paths,
-                            common_args.alternative_mirrors,
-                            common_args.ca_info,
-                            &critical_git_op_map,
-                            serve ? &*serve : nullptr,
-                            &storage_config,
-                            &storage,
-                            &(*apis.local),
-                            has_remote_api ? &*apis.remote : nullptr,
-                            &progress,
-                            common_args.jobs);
+    auto content_cas_map = CreateContentCASMap(
+        common_args.just_mr_paths,
+        common_args.alternative_mirrors,
+        common_args.ca_info,
+        &critical_git_op_map,
+        serve ? &*serve : nullptr,
+        &native_storage_config,
+        compat_storage_config != nullptr ? &*compat_storage_config : nullptr,
+        &native_storage,
+        compat_storage != nullptr ? &*compat_storage : nullptr,
+        &(*apis.local),
+        has_remote_api ? &*apis.remote : nullptr,
+        &progress,
+        common_args.jobs);
 
     auto archive_fetch_map = CreateArchiveFetchMap(
         &content_cas_map,
         *fetch_dir,
-        &storage,
+        &native_storage,
         &(*apis.local),
         (fetch_args.backup_to_remote and has_remote_api) ? &*apis.remote
                                                          : nullptr,
@@ -518,21 +502,23 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
         CreateImportToGitMap(&critical_git_op_map,
                              common_args.git_path->string(),
                              *common_args.local_launcher,
-                             &storage_config,
+                             &native_storage_config,
                              common_args.jobs);
 
-    auto git_tree_fetch_map =
-        CreateGitTreeFetchMap(&critical_git_op_map,
-                              &import_to_git_map,
-                              common_args.git_path->string(),
-                              *common_args.local_launcher,
-                              serve ? &*serve : nullptr,
-                              &storage_config,
-                              &(*apis.local),
-                              has_remote_api ? &*apis.remote : nullptr,
-                              fetch_args.backup_to_remote,
-                              &progress,
-                              common_args.jobs);
+    auto git_tree_fetch_map = CreateGitTreeFetchMap(
+        &critical_git_op_map,
+        &import_to_git_map,
+        common_args.git_path->string(),
+        *common_args.local_launcher,
+        serve ? &*serve : nullptr,
+        &native_storage_config,
+        compat_storage_config != nullptr ? &*compat_storage_config : nullptr,
+        compat_storage != nullptr ? &*compat_storage : nullptr,
+        &(*apis.local),
+        has_remote_api ? &*apis.remote : nullptr,
+        fetch_args.backup_to_remote,
+        &progress,
+        common_args.jobs);
 
     // set up progress observer
     std::atomic<bool> done{false};

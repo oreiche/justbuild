@@ -120,7 +120,7 @@ class SystemCommand {
             if (auto const err = OpenFile(stderr_file)) {
                 if (auto retval = ForkAndExecute(
                         cmd, envp, cwd, fileno(out.get()), fileno(err.get()))) {
-                    return *retval;
+                    return retval;
                 }
             }
             else {
@@ -201,7 +201,7 @@ class SystemCommand {
         // wait for child to finish and obtain return value
         int status{};
         std::optional<int> retval{std::nullopt};
-        do {
+        while (not retval) {
             if (::waitpid(pid, &status, 0) == -1) {
                 // this should never happen
                 logger_.Emit(LogLevel::Error,
@@ -221,7 +221,7 @@ class SystemCommand {
                     LogLevel::Debug, "Child got killed by signal {}", sig);
             }
             // continue waitpid() in case we got STOPSIG from child
-        } while (not retval);
+        }
 
         return retval;
     }

@@ -15,16 +15,40 @@
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
 
 #include <filesystem>
+#include <optional>
+#include <string>
 #include <unordered_map>
 
 #include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
+#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
-#include "test/utils/blob_creator.hpp"
+#include "test/utils/hermeticity/test_hash_function_type.hpp"
+
+namespace {
+/// \brief Create a blob from the content found in file or symlink pointed to by
+/// given path.
+[[nodiscard]] inline auto CreateBlobFromPath(
+    std::filesystem::path const& fpath,
+    HashFunction hash_function) noexcept -> std::optional<ArtifactBlob> {
+    auto const type = FileSystemManager::Type(fpath, /*allow_upwards=*/true);
+    if (not type) {
+        return std::nullopt;
+    }
+    auto const content = FileSystemManager::ReadContentAtPath(fpath, *type);
+    if (not content.has_value()) {
+        return std::nullopt;
+    }
+    return ArtifactBlob{ArtifactDigestFactory::HashDataAs<ObjectType::File>(
+                            hash_function, *content),
+                        *content,
+                        IsExecutableObject(*type)};
+}
+}  // namespace
 
 TEST_CASE("Bazel internals: MessageFactory", "[execution_api]") {
     std::filesystem::path workspace{"test/buildtool/storage/data"};
@@ -38,9 +62,7 @@ TEST_CASE("Bazel internals: MessageFactory", "[execution_api]") {
     std::filesystem::path link = subdir1 / "link";
     REQUIRE(FileSystemManager::CreateSymlink("file1", link));
 
-    HashFunction const hash_function{Compatibility::IsCompatible()
-                                         ? HashFunction::Type::PlainSHA256
-                                         : HashFunction::Type::GitSHA1};
+    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
 
     // create the corresponding blobs
     auto file1_blob = CreateBlobFromPath(file1, hash_function);
@@ -54,24 +76,21 @@ TEST_CASE("Bazel internals: MessageFactory", "[execution_api]") {
     // both files are the same and should result in identical blobs
     CHECK(*file1_blob->data == *file2_blob->data);
     CHECK(file1_blob->digest.hash() == file2_blob->digest.hash());
-    CHECK(file1_blob->digest.size_bytes() == file2_blob->digest.size_bytes());
+    CHECK(file1_blob->digest.size() == file2_blob->digest.size());
 
     // create known artifacts
     auto artifact1_opt =
-        ArtifactDescription::CreateKnown(ArtifactDigest{file1_blob->digest},
-                                         ObjectType::File)
+        ArtifactDescription::CreateKnown(file1_blob->digest, ObjectType::File)
             .ToArtifact();
     auto artifact1 = DependencyGraph::ArtifactNode{std::move(artifact1_opt)};
 
     auto artifact2_opt =
-        ArtifactDescription::CreateKnown(ArtifactDigest{file2_blob->digest},
-                                         ObjectType::File)
+        ArtifactDescription::CreateKnown(file2_blob->digest, ObjectType::File)
             .ToArtifact();
     auto artifact2 = DependencyGraph::ArtifactNode{std::move(artifact2_opt)};
 
     auto artifact3_opt =
-        ArtifactDescription::CreateKnown(ArtifactDigest{link_blob->digest},
-                                         ObjectType::Symlink)
+        ArtifactDescription::CreateKnown(link_blob->digest, ObjectType::Symlink)
             .ToArtifact();
     auto artifact3 = DependencyGraph::ArtifactNode{std::move(artifact3_opt)};
 
@@ -84,16 +103,16 @@ TEST_CASE("Bazel internals: MessageFactory", "[execution_api]") {
 
     // a mapping between digests and content is needed; usually via a concrete
     // API one gets this content either locally or from the network
-    std::unordered_map<bazel_re::Digest, std::filesystem::path> fake_cas{
+    std::unordered_map<ArtifactDigest, std::filesystem::path> fake_cas{
         {file1_blob->digest, file1},
         {file2_blob->digest, file2},
         {link_blob->digest, link}};
 
     // create blobs via tree
-    BazelBlobContainer blobs{};
+    ArtifactBlobContainer blobs{};
     REQUIRE(BazelMsgFactory::CreateDirectoryDigestFromTree(
         *tree,
-        [&fake_cas](std::vector<bazel_re::Digest> const& digests,
+        [&fake_cas](std::vector<ArtifactDigest> const& digests,
                     std::vector<std::string>* targets) {
             targets->reserve(digests.size());
             for (auto const& digest : digests) {
@@ -112,7 +131,7 @@ TEST_CASE("Bazel internals: MessageFactory", "[execution_api]") {
                 }
             }
         },
-        [&blobs](BazelBlob&& blob) {
+        [&blobs](ArtifactBlob&& blob) {
             blobs.Emplace(std::move(blob));
             return true;
         }));

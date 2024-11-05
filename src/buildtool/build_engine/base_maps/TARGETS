@@ -11,10 +11,11 @@
   , "hdrs": ["directory_map.hpp"]
   , "srcs": ["directory_map.cpp"]
   , "deps":
-    [ ["src/buildtool/multithreading", "async_map_consumer"]
-    , "module_name"
-    , ["src/buildtool/file_system", "file_root"]
+    [ "module_name"
+    , ["@", "gsl", "", "gsl"]
     , ["src/buildtool/common", "config"]
+    , ["src/buildtool/file_system", "file_root"]
+    , ["src/buildtool/multithreading", "async_map_consumer"]
     ]
   , "stage": ["src", "buildtool", "build_engine", "base_maps"]
   , "private-deps": [["src/utils/cpp", "path"]]
@@ -24,12 +25,12 @@
   , "name": ["json_file_map"]
   , "hdrs": ["json_file_map.hpp"]
   , "deps":
-    [ ["@", "fmt", "", "fmt"]
-    , ["@", "json", "", "json"]
+    [ "module_name"
+    , ["@", "fmt", "", "fmt"]
     , ["@", "gsl", "", "gsl"]
+    , ["@", "json", "", "json"]
     , ["src/buildtool/common", "config"]
     , ["src/buildtool/multithreading", "async_map_consumer"]
-    , "module_name"
     ]
   , "stage": ["src", "buildtool", "build_engine", "base_maps"]
   }
@@ -39,9 +40,9 @@
   , "hdrs": ["targets_file_map.hpp"]
   , "deps":
     [ "json_file_map"
+    , "module_name"
     , ["@", "json", "", "json"]
     , ["src/buildtool/multithreading", "async_map_consumer"]
-    , "module_name"
     ]
   , "stage": ["src", "buildtool", "build_engine", "base_maps"]
   }
@@ -51,11 +52,11 @@
   , "hdrs": ["entity_name_data.hpp"]
   , "srcs": ["entity_name_data.cpp"]
   , "deps":
-    [ ["@", "json", "", "json"]
+    [ "module_name"
+    , ["@", "json", "", "json"]
     , ["src/buildtool/build_engine/expression", "expression_ptr_interface"]
     , ["src/utils/cpp", "hash_combine"]
     , ["src/utils/cpp", "hex_string"]
-    , "module_name"
     ]
   , "stage": ["src", "buildtool", "build_engine", "base_maps"]
   }
@@ -65,10 +66,10 @@
   , "hdrs": ["entity_name.hpp"]
   , "deps":
     [ "entity_name_data"
-    , ["@", "json", "", "json"]
     , ["@", "gsl", "", "gsl"]
-    , ["src/buildtool/common", "config"]
+    , ["@", "json", "", "json"]
     , ["src/buildtool/build_engine/expression", "expression"]
+    , ["src/buildtool/common", "config"]
     , ["src/utils/cpp", "hash_combine"]
     ]
   , "stage": ["src", "buildtool", "build_engine", "base_maps"]
@@ -81,16 +82,21 @@
   , "deps":
     [ "directory_map"
     , "entity_name"
-    , ["@", "json", "", "json"]
     , ["@", "gsl", "", "gsl"]
+    , ["@", "json", "", "json"]
     , ["src/buildtool/build_engine/analysed_target", "target"]
     , ["src/buildtool/build_engine/expression", "expression"]
     , ["src/buildtool/common", "config"]
+    , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/multithreading", "async_map_consumer"]
     , ["src/buildtool/multithreading", "task_system"]
     ]
   , "stage": ["src", "buildtool", "build_engine", "base_maps"]
-  , "private-deps": [["src/utils/cpp", "json"]]
+  , "private-deps":
+    [ ["src/buildtool/common", "common"]
+    , ["src/buildtool/file_system", "object_type"]
+    , ["src/utils/cpp", "json"]
+    ]
   }
 , "field_reader":
   { "type": ["@", "rules", "CC", "library"]
@@ -99,11 +105,11 @@
   , "deps":
     [ "entity_name"
     , ["@", "fmt", "", "fmt"]
-    , ["@", "json", "", "json"]
     , ["@", "gsl", "", "gsl"]
+    , ["@", "json", "", "json"]
+    , ["src/buildtool/build_engine/expression", "expression"]
     , ["src/buildtool/common", "config"]
     , ["src/buildtool/multithreading", "async_map_consumer"]
-    , ["src/buildtool/build_engine/expression", "expression"]
     ]
   , "stage": ["src", "buildtool", "build_engine", "base_maps"]
   }
@@ -112,14 +118,14 @@
   , "name": ["expression_function"]
   , "hdrs": ["expression_function.hpp"]
   , "deps":
-    [ ["src/buildtool/build_engine/expression", "expression"]
+    [ ["@", "fmt", "", "fmt"]
+    , ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/build_engine/expression", "expression"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "gsl"]
-    , ["@", "gsl", "", "gsl"]
     ]
   , "stage": ["src", "buildtool", "build_engine", "base_maps"]
-  , "private-deps": [["src/utils/cpp", "hash_combine"]]
   }
 , "expression_map":
   { "type": ["@", "rules", "CC", "library"]
@@ -127,19 +133,18 @@
   , "hdrs": ["expression_map.hpp"]
   , "srcs": ["expression_map.cpp"]
   , "deps":
-    [ "json_file_map"
-    , "entity_name"
+    [ "entity_name"
     , "expression_function"
-    , ["@", "gsl", "", "gsl"]
+    , "json_file_map"
+    , "module_name"
     , ["@", "fmt", "", "fmt"]
+    , ["@", "gsl", "", "gsl"]
     , ["@", "json", "", "json"]
     , ["src/buildtool/common", "config"]
     , ["src/buildtool/multithreading", "async_map_consumer"]
-    , "module_name"
     ]
   , "stage": ["src", "buildtool", "build_engine", "base_maps"]
-  , "private-deps":
-    ["field_reader", ["src/buildtool/build_engine/expression", "expression"]]
+  , "private-deps": ["field_reader"]
   }
 , "user_rule":
   { "type": ["@", "rules", "CC", "library"]
@@ -148,8 +153,8 @@
   , "deps":
     [ "entity_name"
     , "expression_function"
-    , ["@", "gsl", "", "gsl"]
     , ["@", "fmt", "", "fmt"]
+    , ["@", "gsl", "", "gsl"]
     , ["src/buildtool/build_engine/expression", "expression"]
     , ["src/utils/cpp", "concepts"]
     , ["src/utils/cpp", "gsl"]
@@ -162,19 +167,18 @@
   , "hdrs": ["rule_map.hpp"]
   , "srcs": ["rule_map.cpp"]
   , "deps":
-    [ "json_file_map"
-    , "entity_name"
-    , "user_rule"
+    [ "entity_name"
     , "expression_map"
-    , ["@", "gsl", "", "gsl"]
+    , "json_file_map"
+    , "module_name"
+    , "user_rule"
     , ["@", "fmt", "", "fmt"]
+    , ["@", "gsl", "", "gsl"]
     , ["@", "json", "", "json"]
     , ["src/buildtool/common", "config"]
     , ["src/buildtool/multithreading", "async_map_consumer"]
-    , "module_name"
     ]
   , "stage": ["src", "buildtool", "build_engine", "base_maps"]
-  , "private-deps":
-    ["field_reader", ["src/buildtool/build_engine/expression", "expression"]]
+  , "private-deps": ["field_reader"]
   }
 }

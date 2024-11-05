@@ -13,8 +13,9 @@
   , "stage": ["execution_api"]
   , "deps":
     [ ["./", "bazel", "TESTS"]
-    , ["./", "local", "TESTS"]
+    , ["./", "common", "TESTS"]
     , ["./", "execution_service", "TESTS"]
+    , ["./", "local", "TESTS"]
     ]
   }
 }

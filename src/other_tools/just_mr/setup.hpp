@@ -34,9 +34,10 @@
     MultiRepoJustSubCmdsArguments const& just_cmd_args,
     MultiRepoRemoteAuthArguments const& auth_args,
     RetryArguments const& retry_args,
-    StorageConfig const& storage_config,
-    Storage const& storage,
+    StorageConfig const& native_storage_config,
+    Storage const& native_storage,
     bool interactive,
-    std::string multi_repo_tool_name) -> std::optional<std::filesystem::path>;
+    std::string const& multi_repo_tool_name)
+    -> std::optional<std::filesystem::path>;
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_JUST_MR_SETUP_HPP

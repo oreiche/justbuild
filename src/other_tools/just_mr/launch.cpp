@@ -44,7 +44,7 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
               StorageConfig const& storage_config,
               Storage const& storage,
               bool forward_build_root,
-              std::string multi_repo_tool_name) -> int {
+              std::string const& multi_repo_tool_name) -> int {
     // check if subcmd_name can be taken from additional args
     auto additional_args_offset = 0U;
     auto subcommand = just_cmd_args.subcmd_name;
@@ -89,7 +89,7 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
                                             storage_config,
                                             storage,
                                             /*interactive=*/false,
-                                            std::move(multi_repo_tool_name));
+                                            multi_repo_tool_name);
             if (not mr_config_path) {
                 Logger::Log(LogLevel::Error,
                             "Failed to setup config for calling \"{} {}\"",
@@ -138,13 +138,13 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
     if (log_args.log_limit and *log_args.log_limit != kDefaultLogLevel) {
         cmd.emplace_back("--log-limit");
         cmd.emplace_back(
-            std::to_string(static_cast<std::underlying_type<LogLevel>::type>(
+            std::to_string(static_cast<std::underlying_type_t<LogLevel>>(
                 *log_args.log_limit)));
     }
     if (log_args.restrict_stderr_log_limit) {
         cmd.emplace_back("--restrict-stderr-log-limit");
         cmd.emplace_back(
-            std::to_string(static_cast<std::underlying_type<LogLevel>::type>(
+            std::to_string(static_cast<std::underlying_type_t<LogLevel>>(
                 *log_args.restrict_stderr_log_limit)));
     }
     if (log_args.plain_log) {

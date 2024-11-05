@@ -22,9 +22,13 @@
 #error "Non-unix is not supported yet"
 #endif
 
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/file_system/git_repo.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/utils/cpp/expected.hpp"
 #include "src/utils/cpp/hex_string.hpp"
 
 extern "C" {
@@ -47,8 +51,8 @@ void archive_entry_cleanup(archive_entry* entry) {
     }
 }
 
-// NOLINTNEXTLINE(misc-no-recursion)
-auto add_to_archive(archive* archive,
+auto add_to_archive(HashFunction::Type hash_type,
+                    archive* archive,
                     IExecutionApi const& api,
                     const Artifact::ObjectInfo& artifact,
                     const std::filesystem::path& location) -> bool {
@@ -69,7 +73,8 @@ auto add_to_archive(archive* archive,
             std::unique_ptr<archive_entry, decltype(&archive_entry_cleanup)>
                 entry{archive_entry_new(), archive_entry_cleanup};
             archive_entry_set_pathname(entry.get(), location.string().c_str());
-            archive_entry_set_size(entry.get(), payload->size());
+            archive_entry_set_size(entry.get(),
+                                   static_cast<la_int64_t>(payload->size()));
             archive_entry_set_filetype(entry.get(), AE_IFREG);
             archive_entry_set_perm(entry.get(),
                                    artifact.type == ObjectType::Executable
@@ -83,7 +88,8 @@ auto add_to_archive(archive* archive,
             std::unique_ptr<archive_entry, decltype(&archive_entry_cleanup)>
                 entry{archive_entry_new(), archive_entry_cleanup};
             archive_entry_set_pathname(entry.get(), location.string().c_str());
-            archive_entry_set_size(entry.get(), payload->size());
+            archive_entry_set_size(entry.get(),
+                                   static_cast<la_int64_t>(payload->size()));
             archive_entry_set_filetype(entry.get(), AE_IFLNK);
             archive_entry_set_symlink(entry.get(), payload->c_str());
             archive_entry_set_perm(entry.get(), kDefaultPerm);
@@ -120,15 +126,20 @@ auto add_to_archive(archive* archive,
             for (auto const& [hash, entries] : *git_tree) {
                 auto hex_hash = ToHexString(hash);
                 for (auto const& entry : entries) {
-                    tree[entry.name] = Artifact::ObjectInfo{
-                        .digest = ArtifactDigest(
-                            hex_hash, 0, entry.type == ObjectType::Tree),
-                        .type = entry.type,
-                        .failed = false};
+                    auto digest = ArtifactDigestFactory::Create(
+                        hash_type, hex_hash, 0, IsTreeObject(entry.type));
+                    if (not digest) {
+                        return false;
+                    }
+                    tree[entry.name] =
+                        Artifact::ObjectInfo{.digest = *std::move(digest),
+                                             .type = entry.type,
+                                             .failed = false};
                 }
             }
             for (auto const& [name, obj] : tree) {
-                if (not add_to_archive(archive, api, obj, location / name)) {
+                if (not add_to_archive(
+                        hash_type, archive, api, obj, location / name)) {
                     return false;
                 }
             }
@@ -141,6 +152,7 @@ auto add_to_archive(archive* archive,
 }  // namespace
 
 [[nodiscard]] auto GenerateArchive(
+    HashFunction::Type hash_type,
     IExecutionApi const& api,
     const Artifact::ObjectInfo& artifact,
     const std::optional<std::filesystem::path>& output_path) -> bool {
@@ -184,8 +196,11 @@ auto add_to_archive(archive* archive,
         }
     }
 
-    if (not add_to_archive(
-            archive.get(), api, artifact, std::filesystem::path{""})) {
+    if (not add_to_archive(hash_type,
+                           archive.get(),
+                           api,
+                           artifact,
+                           std::filesystem::path{""})) {
         return false;
     }
     if (output_path) {

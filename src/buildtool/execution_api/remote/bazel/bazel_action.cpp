@@ -16,6 +16,7 @@
 
 #include <utility>  // std::move
 
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_response.hpp"
@@ -24,7 +25,7 @@
 
 BazelAction::BazelAction(
     std::shared_ptr<BazelNetwork> network,
-    bazel_re::Digest root_digest,
+    ArtifactDigest root_digest,
     std::vector<std::string> command,
     std::string cwd,
     std::vector<std::string> output_files,
@@ -68,6 +69,22 @@ auto BazelAction::Execute(Logger const* logger) noexcept
                      action->hash());
     }
 
+    auto create_response = [](Logger const* logger,
+                              std::string const& action_hash,
+                              auto&&... args) -> IExecutionResponse::Ptr {
+        try {
+            return IExecutionResponse::Ptr{new BazelResponse{
+                action_hash, std::forward<decltype(args)>(args)...}};
+        } catch (...) {
+            if (logger != nullptr) {
+                logger->Emit(LogLevel::Error,
+                             "failed to create a response for {}",
+                             action_hash);
+            }
+        }
+        return nullptr;
+    };
+
     if (do_cache) {
         if (auto result =
                 network_->GetCachedActionResult(*action, output_files_)) {
@@ -76,8 +93,11 @@ auto BazelAction::Execute(Logger const* logger) noexcept
                     *result, output_files_, output_dirs_)
 
             ) {
-                return IExecutionResponse::Ptr{new BazelResponse{
-                    action->hash(), network_, {*result, true}}};
+                return create_response(
+                    logger,
+                    action->hash(),
+                    network_,
+                    BazelExecutionClient::ExecutionOutput{*result, true});
             }
         }
     }
@@ -100,11 +120,13 @@ auto BazelAction::Execute(Logger const* logger) noexcept
                 }
 
                 output->cached_result = true;
-                return IExecutionResponse::Ptr{new BazelResponse{
-                    action_cached->hash(), network_, std::move(*output)}};
+                return create_response(logger,
+                                       action_cached->hash(),
+                                       network_,
+                                       *std::move(output));
             }
-            return IExecutionResponse::Ptr{new BazelResponse{
-                action->hash(), network_, std::move(*output)}};
+            return create_response(
+                logger, action->hash(), network_, *std::move(output));
         }
     }
 
@@ -112,7 +134,7 @@ auto BazelAction::Execute(Logger const* logger) noexcept
 }
 
 auto BazelAction::CreateBundlesForAction(BazelBlobContainer* blobs,
-                                         bazel_re::Digest const& exec_dir,
+                                         ArtifactDigest const& exec_dir,
                                          bool do_not_cache) const noexcept
     -> std::optional<bazel_re::Digest> {
     using StoreFunc = BazelMsgFactory::ActionDigestRequest::BlobStoreFunc;
@@ -134,5 +156,10 @@ auto BazelAction::CreateBundlesForAction(BazelBlobContainer* blobs,
         .timeout = timeout_,
         .skip_action_cache = do_not_cache,
         .store_blob = std::move(store_blob)};
-    return BazelMsgFactory::CreateActionDigestFromCommandLine(request);
+    auto const action_digest =
+        BazelMsgFactory::CreateActionDigestFromCommandLine(request);
+    if (not action_digest) {
+        return std::nullopt;
+    }
+    return ArtifactDigestFactory::ToBazel(*action_digest);
 }

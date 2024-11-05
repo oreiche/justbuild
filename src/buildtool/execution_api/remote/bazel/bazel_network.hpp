@@ -39,13 +39,14 @@
 /// \brief Contains all network clients and is responsible for all network IO.
 class BazelNetwork {
   public:
-    explicit BazelNetwork(std::string instance_name,
-                          std::string const& host,
-                          Port port,
-                          gsl::not_null<Auth const*> const& auth,
-                          gsl::not_null<RetryConfig const*> const& retry_config,
-                          ExecutionConfiguration const& exec_config,
-                          HashFunction hash_function) noexcept;
+    explicit BazelNetwork(
+        std::string instance_name,
+        std::string const& host,
+        Port port,
+        gsl::not_null<Auth const*> const& auth,
+        gsl::not_null<RetryConfig const*> const& retry_config,
+        ExecutionConfiguration const& exec_config,
+        gsl::not_null<HashFunction const*> const& hash_function) noexcept;
 
     /// \brief Check if digest exists in CAS
     /// \param[in]  digest  The digest to look up
@@ -91,16 +92,16 @@ class BazelNetwork {
         -> std::optional<bazel_re::ActionResult>;
 
   private:
-    std::string const instance_name_{};
-    std::unique_ptr<BazelCasClient> cas_{};
-    std::unique_ptr<BazelAcClient> ac_{};
-    std::unique_ptr<BazelExecutionClient> exec_{};
+    std::string const instance_name_;
+    std::unique_ptr<BazelCasClient> cas_;
+    std::unique_ptr<BazelAcClient> ac_;
+    std::unique_ptr<BazelExecutionClient> exec_;
     ExecutionConfiguration exec_config_{};
-    HashFunction const hash_function_;
+    HashFunction const& hash_function_;
 
-    template <class T_Iter>
-    [[nodiscard]] auto DoUploadBlobs(T_Iter const& first,
-                                     T_Iter const& last) noexcept -> bool;
+    template <class TIter>
+    [[nodiscard]] auto DoUploadBlobs(TIter const& first,
+                                     TIter const& last) noexcept -> bool;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_BAZEL_BAZEL_NETWORK_HPP

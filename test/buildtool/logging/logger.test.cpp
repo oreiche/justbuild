@@ -27,8 +27,8 @@
 // Stores prints from test sink instances
 class TestPrints {
     struct PrintData {
-        std::atomic<int> counter{};
-        std::unordered_map<int, std::vector<std::string>> prints{};
+        std::atomic<int> counter;
+        std::unordered_map<int, std::vector<std::string>> prints;
     };
 
   public:
@@ -61,7 +61,7 @@ class LogSinkTest : public ILogSink {
         return [] { return std::make_shared<LogSinkTest>(); };
     }
 
-    LogSinkTest() noexcept { id_ = TestPrints::GetId(); }
+    LogSinkTest() noexcept : id_{TestPrints::GetId()} {}
 
     void Emit(Logger const* logger,
               LogLevel level,

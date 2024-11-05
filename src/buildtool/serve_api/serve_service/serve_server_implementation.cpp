@@ -29,20 +29,24 @@
 #include "fmt/core.h"
 #include "grpcpp/grpcpp.h"
 #include "nlohmann/json.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/common/remote/port.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/execution_api/execution_service/ac_server.hpp"
 #include "src/buildtool/execution_api/execution_service/bytestream_server.hpp"
 #include "src/buildtool/execution_api/execution_service/capabilities_server.hpp"
 #include "src/buildtool/execution_api/execution_service/cas_server.hpp"
 #include "src/buildtool/execution_api/execution_service/execution_server.hpp"
 #include "src/buildtool/execution_api/execution_service/operations_server.hpp"
+#include "src/buildtool/execution_api/local/local_api.hpp"
+#include "src/buildtool/execution_api/serve/mr_local_api.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/serve_api/serve_service/configuration.hpp"
 #include "src/buildtool/serve_api/serve_service/source_tree.hpp"
 #include "src/buildtool/serve_api/serve_service/target.hpp"
+#include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
 
 namespace {
 template <typename T>
@@ -112,14 +116,68 @@ auto ServeServerImpl::Run(
         return false;
     }
 
-    SourceTreeService sts{&serve_config, local_context, &apis};
+    auto const hash_type =
+        local_context->storage_config->hash_function.GetType();
+
+    // TargetService and ConfigurationService use the default apis, which know
+    // how to dispatch builds.
     TargetService ts{&serve_config,
                      local_context,
                      remote_context,
                      &apis,
                      serve ? &*serve : nullptr};
-    ConfigurationService cs{remote_context->exec_config};
+    ConfigurationService cs{hash_type, remote_context->exec_config};
 
+    // For the SourceTreeService we need to always have access to a native
+    // storage. In compatible mode, this requires creating a second local
+    // context, as the default one is compatible.
+    std::unique_ptr<StorageConfig> secondary_storage_config = nullptr;
+    std::unique_ptr<Storage> secondary_storage = nullptr;
+    std::unique_ptr<LocalContext> secondary_local_context = nullptr;
+    IExecutionApi::Ptr secondary_local_api = nullptr;
+    auto const is_compat = not ProtocolTraits::IsNative(hash_type);
+    if (is_compat) {
+        auto config =
+            StorageConfig::Builder{}
+                .SetBuildRoot(local_context->storage_config->build_root)
+                .SetHashType(HashFunction::Type::GitSHA1)
+                .Build();
+        if (not config) {
+            Logger::Log(LogLevel::Error, config.error());
+            return false;
+        }
+        secondary_storage_config =
+            std::make_unique<StorageConfig>(*std::move(config));
+        secondary_storage = std::make_unique<Storage>(
+            Storage::Create(&*secondary_storage_config));
+        secondary_local_context = std::make_unique<LocalContext>(
+            LocalContext{.exec_config = local_context->exec_config,
+                         .storage_config = &*secondary_storage_config,
+                         .storage = &*secondary_storage});
+        secondary_local_api =
+            std::make_shared<LocalApi>(&*secondary_local_context);
+    }
+
+    // setup the overall local api, aware of compatibility
+    IExecutionApi::Ptr mr_local_api = std::make_shared<MRLocalApi>(
+        is_compat ? &*secondary_local_context : local_context,
+        is_compat ? &*secondary_local_api : &*apis.local,
+        is_compat ? &*local_context : nullptr,
+        is_compat ? &*apis.local : nullptr);
+    // setup the apis to pass to SourceTreeService
+    auto const mr_apis = ApiBundle{.hash_function = apis.hash_function,
+                                   .local = mr_local_api,
+                                   .remote = apis.remote};
+
+    SourceTreeService sts{
+        &serve_config,
+        &mr_apis,
+        is_compat ? &*secondary_local_context
+                  : local_context,             // native_context
+        is_compat ? &*local_context : nullptr  // compat_context
+    };
+
+    // set up the server
     grpc::ServerBuilder builder;
 
     builder.RegisterService(&sts);
@@ -133,8 +191,8 @@ auto ServeServerImpl::Run(
     [[maybe_unused]] ActionCacheServiceImpl ac{local_context};
     [[maybe_unused]] CASServiceImpl cas{local_context};
     [[maybe_unused]] BytestreamServiceImpl b{local_context};
-    [[maybe_unused]] CapabilitiesServiceImpl cap{};
-    [[maybe_unused]] OperarationsServiceImpl op{&es.GetOpCache()};
+    [[maybe_unused]] CapabilitiesServiceImpl cap{hash_type};
+    [[maybe_unused]] OperationsServiceImpl op{&es.GetOpCache()};
     if (with_execute) {
         builder.RegisterService(&es)
             .RegisterService(&ac)
@@ -186,11 +244,11 @@ auto ServeServerImpl::Run(
 
     auto const& info_str = nlohmann::to_string(info);
     Logger::Log(LogLevel::Info,
-                fmt::format("{}serve{} service{} started: {}",
-                            Compatibility::IsCompatible() ? "compatible " : "",
-                            with_execute ? " and execute" : "",
-                            with_execute ? "s" : "",
-                            info_str));
+                "{}serve{} service{} started: {}",
+                ProtocolTraits::IsNative(hash_type) ? "" : "compatible ",
+                with_execute ? " and execute" : "",
+                with_execute ? "s" : "",
+                info_str);
 
     if (not info_file_.empty()) {
         if (not TryWrite(info_file_, info_str)) {

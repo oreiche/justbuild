@@ -19,6 +19,8 @@
 #include "fmt/core.h"
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_common.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
@@ -46,9 +48,16 @@ namespace {
         content_list->begin(),
         content_list->end(),
         [&cas, tmp_dir](auto const& kv) {
-            auto content_path =
-                cas.BlobPath(ArtifactDigest(kv.second, 0, false),
-                             /*is_executable=*/false);
+            auto const digest =
+                ArtifactDigestFactory::Create(cas.GetHashFunction().GetType(),
+                                              kv.second,
+                                              0,
+                                              /*is_tree=*/false);
+            if (not digest) {
+                return false;
+            }
+            auto content_path = cas.BlobPath(*digest,
+                                             /*is_executable=*/false);
             if (content_path) {
                 return FileSystemManager::CreateFileHardlink(
                            *content_path,       // from: cas_path/content_id
@@ -65,15 +74,15 @@ namespace {
 /// the setter on success.
 void ImportFromCASAndSetRoot(
     DistdirInfo const& key,
-    StorageConfig const& storage_config,
-    Storage const& storage,
+    StorageConfig const& native_storage_config,
+    Storage const& native_storage,
     std::filesystem::path const& distdir_tree_id_file,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     gsl::not_null<TaskSystem*> const& ts,
     DistdirGitMap::SetterPtr const& setter,
     DistdirGitMap::LoggerPtr const& logger) {
     // create the links to CAS
-    auto tmp_dir = storage_config.CreateTypedTmpDir("distdir");
+    auto tmp_dir = native_storage_config.CreateTypedTmpDir("distdir");
     if (not tmp_dir) {
         (*logger)(fmt::format("Failed to create tmp path for "
                               "distdir target {}",
@@ -82,7 +91,7 @@ void ImportFromCASAndSetRoot(
         return;
     }
     // link content from CAS into tmp dir
-    if (not LinkToCAS(storage, key.content_list, tmp_dir->GetPath())) {
+    if (not LinkToCAS(native_storage, key.content_list, tmp_dir->GetPath())) {
         (*logger)(fmt::format("Failed to create links to CAS content!",
                               key.content_id),
                   /*fatal=*/true);
@@ -95,7 +104,7 @@ void ImportFromCASAndSetRoot(
         {std::move(c_info)},
         [tmp_dir,  // keep tmp_dir alive
          distdir_tree_id_file,
-         git_root = storage_config.GitRoot().string(),
+         git_root = native_storage_config.GitRoot().string(),
          setter,
          logger](auto const& values) {
             // check for errors
@@ -136,8 +145,10 @@ auto CreateDistdirGitMap(
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
-    gsl::not_null<Storage const*> const& storage,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    gsl::not_null<Storage const*> const& native_storage,
+    Storage const* compat_storage,
     gsl::not_null<IExecutionApi const*> const& local_api,
     IExecutionApi const* remote_api,
     std::size_t jobs) -> DistdirGitMap {
@@ -145,16 +156,18 @@ auto CreateDistdirGitMap(
                            import_to_git_map,
                            critical_git_op_map,
                            serve,
-                           storage,
-                           storage_config,
+                           native_storage_config,
+                           compat_storage_config,
+                           native_storage,
+                           compat_storage,
                            local_api,
                            remote_api](auto ts,
                                        auto setter,
                                        auto logger,
                                        auto /* unused */,
                                        auto const& key) {
-        auto distdir_tree_id_file =
-            StorageUtils::GetDistdirTreeIDFile(*storage_config, key.content_id);
+        auto distdir_tree_id_file = StorageUtils::GetDistdirTreeIDFile(
+            *native_storage_config, key.content_id);
         if (FileSystemManager::Exists(distdir_tree_id_file)) {
             // read distdir_tree_id from file tree_id_file
             auto distdir_tree_id =
@@ -170,11 +183,11 @@ auto CreateDistdirGitMap(
             GitOpKey op_key = {
                 .params =
                     {
-                        storage_config->GitRoot(),  // target_path
-                        "",                         // git_hash
-                        std::nullopt,               // message
-                        std::nullopt,               // source_path
-                        true                        // init_bare
+                        native_storage_config->GitRoot(),  // target_path
+                        "",                                // git_hash
+                        std::nullopt,                      // message
+                        std::nullopt,                      // source_path
+                        true                               // init_bare
                     },
                 .op_type = GitOpType::ENSURE_INIT};
             critical_git_op_map->ConsumeAfterKeysReady(
@@ -184,7 +197,10 @@ auto CreateDistdirGitMap(
                  content_id = key.content_id,
                  key,
                  serve,
-                 storage_config,
+                 native_storage_config,
+                 compat_storage_config,
+                 compat_storage,
+                 local_api,
                  remote_api,
                  setter,
                  logger](auto const& values) {
@@ -208,21 +224,20 @@ auto CreateDistdirGitMap(
                             if (not *has_tree) {
                                 // try to see if serve endpoint has the
                                 // information to prepare the root itself
-                                auto serve_result =
+                                auto const serve_result =
                                     serve->RetrieveTreeFromDistdir(
                                         key.content_list,
                                         /*sync_tree=*/false);
                                 if (serve_result) {
                                     // if serve has set up the tree, it must
                                     // match what we expect
-                                    auto const& served_tree_id = *serve_result;
-                                    if (distdir_tree_id != served_tree_id) {
+                                    if (distdir_tree_id != serve_result->tree) {
                                         (*logger)(
                                             fmt::format(
                                                 "Mismatch in served root tree "
                                                 "id:\nexpected {}, but got {}",
                                                 distdir_tree_id,
-                                                served_tree_id),
+                                                serve_result->tree),
                                             /*fatal=*/true);
                                         return;
                                     }
@@ -259,7 +274,12 @@ auto CreateDistdirGitMap(
                                     if (not EnsureAbsentRootOnServe(
                                             *serve,
                                             distdir_tree_id,
-                                            storage_config->GitRoot(),
+                                            native_storage_config
+                                                ->GitRoot(), /*repo_root*/
+                                            native_storage_config,
+                                            compat_storage_config,
+                                            compat_storage,
+                                            &*local_api,
                                             remote_api,
                                             logger,
                                             true /*no_sync_is_fatal*/)) {
@@ -284,15 +304,15 @@ auto CreateDistdirGitMap(
                     }
                     else {
                         // set root as present
-                        (*setter)(
-                            std::pair(nlohmann::json::array(
-                                          {FileRoot::kGitTreeMarker,
-                                           distdir_tree_id,
-                                           storage_config->GitRoot().string()}),
-                                      /*is_cache_hit=*/true));
+                        (*setter)(std::pair(
+                            nlohmann::json::array(
+                                {FileRoot::kGitTreeMarker,
+                                 distdir_tree_id,
+                                 native_storage_config->GitRoot().string()}),
+                            /*is_cache_hit=*/true));
                     }
                 },
-                [logger, target_path = storage_config->GitRoot()](
+                [logger, target_path = native_storage_config->GitRoot()](
                     auto const& msg, bool fatal) {
                     (*logger)(fmt::format("While running critical Git op "
                                           "ENSURE_INIT for target {}:\n{}",
@@ -329,9 +349,10 @@ auto CreateDistdirGitMap(
                 return;
             }
             // get hash from raw_id
-            auto tree_id = ToHexString(tree->first);
+            auto const tree_id = ToHexString(tree->first);
             // get digest object
-            auto digest = ArtifactDigest{tree_id, 0, /*is_tree=*/true};
+            auto const digest = ArtifactDigestFactory::Create(
+                HashFunction::Type::GitSHA1, tree_id, 0, /*is_tree=*/true);
 
             // use this knowledge of the resulting tree identifier to try to set
             // up the absent root without actually checking the local status of
@@ -354,19 +375,18 @@ auto CreateDistdirGitMap(
                     }
                     // try to see if serve endpoint has the information to
                     // prepare the root itself
-                    auto serve_result =
+                    auto const serve_result =
                         serve->RetrieveTreeFromDistdir(key.content_list,
                                                        /*sync_tree=*/false);
                     if (serve_result) {
                         // if serve has set up the tree, it must match what we
                         // expect
-                        auto const& served_tree_id = *serve_result;
-                        if (tree_id != served_tree_id) {
+                        if (tree_id != serve_result->tree) {
                             (*logger)(
                                 fmt::format("Mismatch in served root tree "
                                             "id:\nexpected {}, but got {}",
                                             tree_id,
-                                            served_tree_id),
+                                            serve_result->tree),
                                 /*fatal=*/true);
                             return;
                         }
@@ -398,13 +418,17 @@ auto CreateDistdirGitMap(
                     }
                     // try to supply the serve endpoint with the tree via the
                     // remote CAS
-                    if (remote_api->IsAvailable({digest})) {
+                    if (digest and remote_api->IsAvailable({*digest})) {
                         // tell serve to set up the root from the remote CAS
                         // tree; upload can be skipped
                         if (EnsureAbsentRootOnServe(
                                 *serve,
                                 tree_id,
                                 /*repo_path=*/"",
+                                native_storage_config,
+                                /*compat_storage_config=*/nullptr,
+                                /*compat_storage=*/nullptr,
+                                /*local_api=*/nullptr,
                                 /*remote_api=*/nullptr,
                                 logger,
                                 /*no_sync_is_fatal=*/true)) {
@@ -424,10 +448,10 @@ auto CreateDistdirGitMap(
                     }
                     // check if we have the tree in local CAS; if yes, upload it
                     // to remote for the serve endpoint to find it
-                    if (local_api->IsAvailable({digest})) {
+                    if (digest and local_api->IsAvailable({*digest})) {
                         if (not local_api->RetrieveToCas(
                                 {Artifact::ObjectInfo{
-                                    .digest = digest,
+                                    .digest = *digest,
                                     .type = ObjectType::Tree}},
                                 *remote_api)) {
                             (*logger)(fmt::format("Failed to sync tree {} from "
@@ -442,6 +466,10 @@ auto CreateDistdirGitMap(
                                 *serve,
                                 tree_id,
                                 /*repo_path=*/"",
+                                native_storage_config,
+                                /*compat_storage_config=*/nullptr,
+                                /*compat_storage=*/nullptr,
+                                /*local_api=*/nullptr,
                                 /*remote_api=*/nullptr,
                                 logger,
                                 /*no_sync_is_fatal=*/true)) {
@@ -475,10 +503,10 @@ auto CreateDistdirGitMap(
 
             // if the root is not-absent, the order of checks is different;
             // first, look in the local CAS
-            if (local_api->IsAvailable({digest})) {
+            if (digest and local_api->IsAvailable({*digest})) {
                 ImportFromCASAndSetRoot(key,
-                                        *storage_config,
-                                        *storage,
+                                        *native_storage_config,
+                                        *native_storage,
                                         distdir_tree_id_file,
                                         import_to_git_map,
                                         ts,
@@ -490,18 +518,17 @@ auto CreateDistdirGitMap(
             // now ask serve endpoint if it can set up the root; as this is for
             // a present root, a corresponding remote endpoint is needed
             if (serve != nullptr and remote_api != nullptr) {
-                auto serve_result =
+                auto const serve_result =
                     serve->RetrieveTreeFromDistdir(key.content_list,
                                                    /*sync_tree=*/true);
                 if (serve_result) {
                     // if serve has set up the tree, it must match what we
                     // expect
-                    auto const& served_tree_id = *serve_result;
-                    if (tree_id != served_tree_id) {
+                    if (tree_id != serve_result->tree) {
                         (*logger)(fmt::format("Mismatch in served root tree "
                                               "id:\nexpected {}, but got {}",
                                               tree_id,
-                                              served_tree_id),
+                                              serve_result->tree),
                                   /*fatal=*/true);
                         return;
                     }
@@ -531,15 +558,15 @@ auto CreateDistdirGitMap(
                 [distdir_tree_id_file,
                  key,
                  import_to_git_map,
+                 native_storage_config,
+                 native_storage,
                  ts,
-                 storage,
-                 storage_config,
                  setter,
                  logger]([[maybe_unused]] auto const& values) {
                     // archive blobs are in CAS
                     ImportFromCASAndSetRoot(key,
-                                            *storage_config,
-                                            *storage,
+                                            *native_storage_config,
+                                            *native_storage,
                                             distdir_tree_id_file,
                                             import_to_git_map,
                                             ts,

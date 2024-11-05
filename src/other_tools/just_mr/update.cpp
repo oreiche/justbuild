@@ -38,8 +38,8 @@
 auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
                      MultiRepoCommonArguments const& common_args,
                      MultiRepoUpdateArguments const& update_args,
-                     StorageConfig const& storage_config,
-                     std::string multi_repo_tool_name) -> int {
+                     StorageConfig const& native_storage_config,
+                     std::string const& multi_repo_tool_name) -> int {
     // provide report
     Logger::Log(LogLevel::Info, "Performing repositories update");
 
@@ -193,7 +193,7 @@ auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
         }
     }
     // Create fake repo for the anonymous remotes
-    auto tmp_dir = storage_config.CreateTypedTmpDir("update");
+    auto tmp_dir = native_storage_config.CreateTypedTmpDir("update");
     if (not tmp_dir) {
         Logger::Log(LogLevel::Error, "Failed to create commit update tmp dir");
         return kExitUpdateError;
@@ -227,7 +227,7 @@ auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
     auto git_update_map = CreateGitUpdateMap(git_repo->GetGitCAS(),
                                              common_args.git_path->string(),
                                              *common_args.local_launcher,
-                                             &storage_config,
+                                             &native_storage_config,
                                              &stats,
                                              &progress,
                                              common_args.jobs);
@@ -257,7 +257,7 @@ auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
                     for (auto const& repo_name : repos_to_update_names) {
                         auto i = static_cast<std::size_t>(
                             &repo_name -
-                            &repos_to_update_names[0]);  // get index
+                            repos_to_update_names.data());  // get index
                         // we know "repository" is a map for repo_name, so
                         // field "commit" is here either overwritten or set if
                         // missing; either way, this should always work

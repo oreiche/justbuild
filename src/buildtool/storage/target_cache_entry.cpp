@@ -20,11 +20,15 @@
 #include <string>
 #include <vector>
 
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/utils/cpp/expected.hpp"
 #include "src/utils/cpp/gsl.hpp"
 
 auto TargetCacheEntry::FromTarget(
+    HashFunction::Type hash_type,
     AnalysedTargetPtr const& target,
     std::unordered_map<ArtifactDescription, Artifact::ObjectInfo> const&
         replacements) noexcept -> std::optional<TargetCacheEntry> {
@@ -42,17 +46,18 @@ auto TargetCacheEntry::FromTarget(
     if (not implied.empty()) {
         (*desc)["implied export targets"] = implied;
     }
-    return TargetCacheEntry{*desc};
+    return TargetCacheEntry{hash_type, *desc};
 }
 
-auto TargetCacheEntry::FromJson(nlohmann::json desc) noexcept
+auto TargetCacheEntry::FromJson(HashFunction::Type hash_type,
+                                nlohmann::json desc) noexcept
     -> TargetCacheEntry {
-    return TargetCacheEntry(std::move(desc));
+    return TargetCacheEntry(hash_type, std::move(desc));
 }
 
 auto TargetCacheEntry::ToResult() const noexcept
     -> std::optional<TargetResult> {
-    return TargetResult::FromJson(desc_);
+    return TargetResult::FromJson(hash_type_, desc_);
 }
 
 auto TargetCacheEntry::ToImplied() const noexcept -> std::set<std::string> {
@@ -78,9 +83,16 @@ auto TargetCacheEntry::ToImpliedIds(std::string const& entry_key_hash)
         try {
             for (auto const& x : desc_["implied export targets"]) {
                 if (x != entry_key_hash) {
-                    result.emplace_back(Artifact::ObjectInfo{
-                        .digest = ArtifactDigest{x, 0, /*is_tree=*/false},
-                        .type = ObjectType::File});
+                    auto digest = ArtifactDigestFactory::Create(
+                        hash_type_, x, 0, /*is_tree=*/false);
+                    if (not digest) {
+                        Logger::Log(
+                            LogLevel::Debug, "{}", std::move(digest).error());
+                        return std::nullopt;
+                    }
+                    result.emplace_back(
+                        Artifact::ObjectInfo{.digest = *std::move(digest),
+                                             .type = ObjectType::File});
                 }
             }
         } catch (std::exception const& ex) {
@@ -93,9 +105,10 @@ auto TargetCacheEntry::ToImpliedIds(std::string const& entry_key_hash)
     return result;
 }
 
-[[nodiscard]] auto ToObjectInfo(nlohmann::json const& json)
+[[nodiscard]] static auto ToObjectInfo(HashFunction::Type hash_type,
+                                       nlohmann::json const& json)
     -> Artifact::ObjectInfo {
-    auto const& desc = ArtifactDescription::FromJson(json);
+    auto const desc = ArtifactDescription::FromJson(hash_type, json);
     // The assumption is that all artifacts mentioned in a target cache
     // entry are KNOWN to the remote side.
     ExpectsAudit(desc and desc->IsKnown());
@@ -104,7 +117,8 @@ auto TargetCacheEntry::ToImpliedIds(std::string const& entry_key_hash)
     return *info;
 }
 
-[[nodiscard]] auto ScanArtifactMap(
+[[nodiscard]] static auto ScanArtifactMap(
+    HashFunction::Type hash_type,
     gsl::not_null<std::vector<Artifact::ObjectInfo>*> const& infos,
     nlohmann::json const& json) -> bool {
     if (not json.is_object()) {
@@ -114,11 +128,14 @@ auto TargetCacheEntry::ToImpliedIds(std::string const& entry_key_hash)
     std::transform(json.begin(),
                    json.end(),
                    std::back_inserter(*infos),
-                   [](auto const& item) { return ToObjectInfo(item); });
+                   [hash_type](auto const& item) {
+                       return ToObjectInfo(hash_type, item);
+                   });
     return true;
 }
 
-[[nodiscard]] auto ScanProvidesMap(
+[[nodiscard]] static auto ScanProvidesMap(
+    HashFunction::Type hash_type,
     gsl::not_null<std::vector<Artifact::ObjectInfo>*> const& infos,
     nlohmann::json const& json) -> bool {
     if (not json.is_object()) {
@@ -127,13 +144,13 @@ auto TargetCacheEntry::ToImpliedIds(std::string const& entry_key_hash)
     auto const& nodes = json["nodes"];
     auto const& provided_artifacts = json["provided_artifacts"];
     infos->reserve(infos->size() + provided_artifacts.size());
-    std::transform(
-        provided_artifacts.begin(),
-        provided_artifacts.end(),
-        std::back_inserter(*infos),
-        [&nodes](auto const& item) {
-            return ToObjectInfo(nodes[item.template get<std::string>()]);
-        });
+    std::transform(provided_artifacts.begin(),
+                   provided_artifacts.end(),
+                   std::back_inserter(*infos),
+                   [hash_type, &nodes](auto const& item) {
+                       return ToObjectInfo(
+                           hash_type, nodes[item.template get<std::string>()]);
+                   });
     return true;
 }
 
@@ -141,9 +158,9 @@ auto TargetCacheEntry::ToArtifacts(
     gsl::not_null<std::vector<Artifact::ObjectInfo>*> const& infos)
     const noexcept -> bool {
     try {
-        if (ScanArtifactMap(infos, desc_["artifacts"]) and
-            ScanArtifactMap(infos, desc_["runfiles"]) and
-            ScanProvidesMap(infos, desc_["provides"])) {
+        if (ScanArtifactMap(hash_type_, infos, desc_["artifacts"]) and
+            ScanArtifactMap(hash_type_, infos, desc_["runfiles"]) and
+            ScanProvidesMap(hash_type_, infos, desc_["provides"])) {
             return true;
         }
     } catch (std::exception const& ex) {

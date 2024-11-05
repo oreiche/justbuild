@@ -18,6 +18,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <numeric>  // std::iota
@@ -33,7 +34,7 @@
 
 namespace {
 
-enum class CallStatus { kNotExecuted, kExecuted };
+enum class CallStatus : std::uint8_t { kNotExecuted, kExecuted };
 
 }  // namespace
 
@@ -48,7 +49,7 @@ TEST_CASE("Basic", "[task_system]") {
     }
     SECTION("1-argument constructor") {
         std::size_t const desired_number_of_threads_in_ts =
-            GENERATE(1u, 2u, 5u, 10u, std::thread::hardware_concurrency());
+            GENERATE(1U, 2U, 5U, 10U, std::thread::hardware_concurrency());
         TaskSystem ts(desired_number_of_threads_in_ts);
         CHECK(ts.NumberOfThreads() == desired_number_of_threads_in_ts);
     }
@@ -91,10 +92,10 @@ TEST_CASE("Side effects of tasks are reflected out of ts", "[task_system]") {
     SECTION("Lambda capturing `this` inside struct") {
         std::string ext_name{};
         struct Wrapper {
-            std::string name{};
+            std::string name;
             // ts must be second, otherwise name will get destroyed before the
             // task system is finished.
-            TaskSystem ts{};
+            TaskSystem ts;
 
             explicit Wrapper(std::string n) : name{std::move(n)} {}
 

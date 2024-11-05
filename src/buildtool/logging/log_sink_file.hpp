@@ -15,6 +15,7 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_LOGGING_LOG_SINK_FILE_HPP
 #define INCLUDED_SRC_BUILDTOOL_LOGGING_LOG_SINK_FILE_HPP
 
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <functional>
@@ -39,12 +40,12 @@
 #include "src/buildtool/logging/logger.hpp"
 
 /// \brief Thread-safe map of mutexes.
-template <class T_Key>
+template <class TKey>
 class MutexMap {
   public:
     /// \brief Create mutex for key and run callback if successfully created.
     /// Callback is executed while the internal map is still held exclusively.
-    void Create(T_Key const& key, std::function<void()> const& callback) {
+    void Create(TKey const& key, std::function<void()> const& callback) {
         std::lock_guard lock(mutex_);
         if (not map_.contains(key)) {
             [[maybe_unused]] auto& mutex = map_[key];
@@ -52,19 +53,19 @@ class MutexMap {
         }
     }
     /// \brief Get mutex for key, creates mutex if key does not exist.
-    [[nodiscard]] auto Get(T_Key const& key) noexcept -> std::mutex& {
+    [[nodiscard]] auto Get(TKey const& key) noexcept -> std::mutex& {
         std::lock_guard lock(mutex_);
         return map_[key];
     }
 
   private:
-    std::mutex mutex_{};
-    std::unordered_map<T_Key, std::mutex> map_{};
+    std::mutex mutex_;
+    std::unordered_map<TKey, std::mutex> map_;
 };
 
 class LogSinkFile final : public ILogSink {
   public:
-    enum class Mode {
+    enum class Mode : std::uint8_t {
         Append,    ///< Append if log file already exists.
         Overwrite  ///< Overwrite log file with each new program instantiation.
     };
@@ -139,7 +140,7 @@ class LogSinkFile final : public ILogSink {
     }
 
   private:
-    std::string file_path_{};
+    std::string file_path_;
 
     [[nodiscard]] static auto FileMutexes() noexcept -> MutexMap<std::string>& {
         static MutexMap<std::string> instance{};

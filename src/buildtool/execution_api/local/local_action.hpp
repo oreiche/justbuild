@@ -25,6 +25,8 @@
 #include <vector>
 
 #include "gsl/gsl"
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_response.hpp"
@@ -40,7 +42,7 @@ class LocalAction final : public IExecutionAction {
 
   public:
     struct Output {
-        bazel_re::ActionResult action{};
+        bazel_re::ActionResult action;
         bool is_cached{};
     };
 
@@ -63,12 +65,12 @@ class LocalAction final : public IExecutionAction {
   private:
     Logger logger_{"LocalExecution"};
     LocalContext const& local_context_;
-    ArtifactDigest const root_digest_{};
-    std::vector<std::string> const cmdline_{};
-    std::string const cwd_{};
-    std::vector<std::string> output_files_{};
-    std::vector<std::string> output_dirs_{};
-    std::map<std::string, std::string> const env_vars_{};
+    ArtifactDigest const root_digest_;
+    std::vector<std::string> const cmdline_;
+    std::string const cwd_;
+    std::vector<std::string> output_files_;
+    std::vector<std::string> output_dirs_;
+    std::map<std::string, std::string> const env_vars_;
     std::vector<bazel_re::Platform_Property> const properties_;
     std::chrono::milliseconds timeout_{kDefaultTimeout};
     CacheFlag cache_flag_{CacheFlag::CacheOutput};
@@ -95,9 +97,9 @@ class LocalAction final : public IExecutionAction {
         std::sort(output_dirs_.begin(), output_dirs_.end());
     }
 
-    [[nodiscard]] auto CreateActionDigest(bazel_re::Digest const& exec_dir,
+    [[nodiscard]] auto CreateActionDigest(ArtifactDigest const& exec_dir,
                                           bool do_not_cache)
-        -> std::optional<bazel_re::Digest> {
+        -> std::optional<ArtifactDigest> {
         auto const env_vars = BazelMsgFactory::CreateMessageVectorFromMap<
             bazel_re::Command_EnvironmentVariable>(env_vars_);
 
@@ -115,7 +117,7 @@ class LocalAction final : public IExecutionAction {
         return BazelMsgFactory::CreateActionDigestFromCommandLine(request);
     }
 
-    [[nodiscard]] auto Run(bazel_re::Digest const& action_id) const noexcept
+    [[nodiscard]] auto Run(ArtifactDigest const& action_id) const noexcept
         -> std::optional<Output>;
 
     [[nodiscard]] auto StageInput(
@@ -152,7 +154,7 @@ class LocalAction final : public IExecutionAction {
     /// \brief Store file from path in file CAS and return pointer to digest.
     [[nodiscard]] auto DigestFromOwnedFile(
         std::filesystem::path const& file_path) const noexcept
-        -> gsl::owner<bazel_re::Digest*>;
+        -> std::optional<ArtifactDigest>;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_LOCAL_LOCAL_ACTION_HPP

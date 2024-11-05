@@ -1,0 +1,71 @@
+{ "utils":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["utils"]
+  , "hdrs": ["utils.hpp"]
+  , "srcs": ["utils.cpp"]
+  , "deps":
+    [ ["src/buildtool/common", "common"]
+    , ["src/buildtool/file_system", "object_type"]
+    , ["src/buildtool/storage", "config"]
+    , ["src/utils/cpp", "expected"]
+    ]
+  , "stage": ["src", "buildtool", "execution_api", "serve"]
+  , "private-deps":
+    [ ["@", "fmt", "", "fmt"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/storage", "fs_utils"]
+    ]
+  }
+, "mr_git_api":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["mr_git_api"]
+  , "hdrs": ["mr_git_api.hpp"]
+  , "srcs": ["mr_git_api.cpp"]
+  , "deps":
+    [ ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/common", "common"]
+    , ["src/buildtool/common", "config"]
+    , ["src/buildtool/crypto", "hash_function"]
+    , ["src/buildtool/execution_api/common", "artifact_blob_container"]
+    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/execution_engine/dag", "dag"]
+    , ["src/buildtool/storage", "config"]
+    , ["src/buildtool/storage", "storage"]
+    ]
+  , "stage": ["src", "buildtool", "execution_api", "serve"]
+  , "private-deps":
+    [ "utils"
+    , ["src/buildtool/execution_api/bazel_msg", "bazel_msg_factory"]
+    , ["src/buildtool/execution_api/git", "git"]
+    , ["src/buildtool/file_system", "object_type"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
+    , ["src/utils/cpp", "expected"]
+    ]
+  }
+, "mr_local_api":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["mr_local_api"]
+  , "hdrs": ["mr_local_api.hpp"]
+  , "srcs": ["mr_local_api.cpp"]
+  , "deps":
+    [ ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/common", "common"]
+    , ["src/buildtool/crypto", "hash_function"]
+    , ["src/buildtool/execution_api/common", "artifact_blob_container"]
+    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/execution_api/local", "context"]
+    , ["src/buildtool/execution_engine/dag", "dag"]
+    ]
+  , "stage": ["src", "buildtool", "execution_api", "serve"]
+  , "private-deps":
+    [ "utils"
+    , ["src/buildtool/common", "protocol_traits"]
+    , ["src/buildtool/execution_api/bazel_msg", "bazel_msg_factory"]
+    , ["src/buildtool/file_system", "object_type"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
+    , ["src/utils/cpp", "expected"]
+    ]
+  }
+}

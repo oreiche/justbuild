@@ -5,9 +5,9 @@
   , "srcs": ["curl_context.cpp"]
   , "stage": ["src", "other_tools", "utils"]
   , "private-deps":
-    [ ["src/buildtool/logging", "log_level"]
+    [ ["", "libcurl"]
+    , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
-    , ["", "libcurl"]
     ]
   }
 , "curl_easy_handle":
@@ -19,9 +19,9 @@
   , "stage": ["src", "other_tools", "utils"]
   , "private-deps":
     [ ["@", "gsl", "", "gsl"]
+    , ["", "libcurl"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/logging", "logging"]
-    , ["", "libcurl"]
     ]
   }
 , "curl_url_handle":
@@ -32,9 +32,9 @@
   , "deps": ["curl_context", ["@", "gsl", "", "gsl"]]
   , "stage": ["src", "other_tools", "utils"]
   , "private-deps":
-    [ ["src/buildtool/logging", "log_level"]
+    [ ["", "libcurl"]
+    , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
-    , ["", "libcurl"]
     ]
   }
 , "content":
@@ -60,8 +60,24 @@
   , "deps":
     [ ["src/buildtool/build_engine/expression", "expression"]
     , ["src/other_tools/ops_maps", "content_cas_map"]
+    , ["src/utils/cpp", "expected"]
     ]
-  , "private-deps": [["@", "fmt", "", "fmt"]]
+  , "private-deps":
+    [["@", "fmt", "", "fmt"], ["src/buildtool/crypto", "hash_info"]]
+  , "stage": ["src", "other_tools", "utils"]
+  }
+, "parse_git_tree":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["parse_git_tree"]
+  , "hdrs": ["parse_git_tree.hpp"]
+  , "srcs": ["parse_git_tree.cpp"]
+  , "deps":
+    [ ["src/buildtool/build_engine/expression", "expression"]
+    , ["src/other_tools/ops_maps", "git_tree_fetch_map"]
+    , ["src/utils/cpp", "expected"]
+    ]
+  , "private-deps":
+    [["@", "fmt", "", "fmt"], ["src/buildtool/crypto", "hash_info"]]
   , "stage": ["src", "other_tools", "utils"]
   }
 }

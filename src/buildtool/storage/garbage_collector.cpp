@@ -20,9 +20,7 @@
 #include <filesystem>
 #include <vector>
 
-#include "gsl/gsl"
 #include "src/buildtool/common/artifact.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/message_limits.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
@@ -70,13 +68,13 @@ auto GarbageCollector::LockFilePath(
 auto GarbageCollector::TriggerGarbageCollection(
     StorageConfig const& storage_config,
     bool no_rotation) noexcept -> bool {
-    auto const kRemoveMe = std::string{"remove-me"};
+    std::string const remove_me = "remove-me";
 
     auto pid = CreateProcessUniqueId();
     if (not pid) {
         return false;
     }
-    auto remove_me_prefix = kRemoveMe + *pid + std::string{"-"};
+    auto remove_me_prefix = remove_me + *pid + std::string{"-"};
     std::vector<std::filesystem::path> to_remove{};
 
     // With a shared lock, we can remove all directories with the given prefix,
@@ -91,7 +89,8 @@ auto GarbageCollector::TriggerGarbageCollection(
 
         for (auto const& entry :
              std::filesystem::directory_iterator(storage_config.CacheRoot())) {
-            if (entry.path().filename().string().find(remove_me_prefix) == 0) {
+            if (entry.path().filename().string().starts_with(
+                    remove_me_prefix)) {
                 to_remove.emplace_back(entry.path());
             }
         }
@@ -122,7 +121,7 @@ auto GarbageCollector::TriggerGarbageCollection(
         std::vector<std::filesystem::path> left_over{};
         for (auto const& entry :
              std::filesystem::directory_iterator(storage_config.CacheRoot())) {
-            if (entry.path().filename().string().find(kRemoveMe) == 0) {
+            if (entry.path().filename().string().starts_with(remove_me)) {
                 left_over.emplace_back(entry.path());
             }
         }
@@ -214,21 +213,6 @@ auto GarbageCollector::TriggerGarbageCollection(
 
 auto GarbageCollector::Compactify(StorageConfig const& storage_config,
                                   size_t threshold) noexcept -> bool {
-    // Return to the initial compatibility mode once done:
-    auto const guard = gsl::finally([mode = Compatibility::IsCompatible()] {
-        Compatibility::SetCompatible(mode);
-    });
-
-    auto compactify = [threshold](StorageConfig const& config) -> bool {
-        Compatibility::SetCompatible(config.hash_function.GetType() ==
-                                     HashFunction::Type::PlainSHA256);
-        auto const storage = ::Generation::Create(&config);
-
-        return Compactifier::RemoveInvalid(storage.CAS()) and
-               Compactifier::RemoveSpliced(storage.CAS()) and
-               Compactifier::SplitLarge(storage.CAS(), threshold);
-    };
-
     // Compactification must be done for both native and compatible storages.
     static constexpr std::array kHashes = {HashFunction::Type::GitSHA1,
                                            HashFunction::Type::PlainSHA256};
@@ -236,13 +220,20 @@ auto GarbageCollector::Compactify(StorageConfig const& storage_config,
                        .SetBuildRoot(storage_config.build_root)
                        .SetNumGenerations(storage_config.num_generations);
 
-    return std::all_of(kHashes.begin(),
-                       kHashes.end(),
-                       [&builder, &compactify](HashFunction::Type hash_type) {
-                           auto const config =
-                               builder.SetHashType(hash_type).Build();
-                           return config.has_value() and compactify(*config);
-                       });
+    return std::all_of(
+        kHashes.begin(),
+        kHashes.end(),
+        [threshold, &builder](HashFunction::Type hash_type) {
+            auto const config = builder.SetHashType(hash_type).Build();
+            if (not config) {
+                return false;
+            }
+
+            auto const storage = ::Generation::Create(&*config);
+            return Compactifier::RemoveInvalid(storage.CAS()) and
+                   Compactifier::RemoveSpliced(storage.CAS()) and
+                   Compactifier::SplitLarge(storage.CAS(), threshold);
+        });
 }
 
 #endif  // BOOTSTRAP_BUILD_TOOL

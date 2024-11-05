@@ -12,12 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// settings common for server and client
-#ifndef BYTESTREAM_COMMON_HPP
-#define BYTESTREAM_COMMON_HPP
-#include <cstddef>
+#ifndef INCLUDED_SRC_BUILDTOOL_COMMON_PROTOCOL_TRAITS_HPP
+#define INCLUDED_SRC_BUILDTOOL_COMMON_PROTOCOL_TRAITS_HPP
 
-// Chunk size for uploads (default size used by BuildBarn)
-constexpr static std::size_t kChunkSize = 64 * 1024;
+#include "src/buildtool/crypto/hash_function.hpp"
 
-#endif
+class ProtocolTraits final {
+  public:
+    static constexpr auto IsNative(HashFunction::Type hash_type) noexcept
+        -> bool {
+        return hash_type == HashFunction::Type::GitSHA1;
+    }
+
+    static constexpr auto IsTreeAllowed(HashFunction::Type hash_type) noexcept
+        -> bool {
+        return IsNative(hash_type);
+    }
+};
+#endif  // INCLUDED_SRC_BUILDTOOL_COMMON_PROTOCOL_TRAITS_HPP

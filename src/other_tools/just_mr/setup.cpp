@@ -24,12 +24,17 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/remote/retry_config.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
 #include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
 #include "src/buildtool/execution_api/local/context.hpp"
+#include "src/buildtool/execution_api/local/local_api.hpp"
+#include "src/buildtool/execution_api/remote/bazel/bazel_api.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/execution_api/remote/context.hpp"
+#include "src/buildtool/execution_api/serve/mr_local_api.hpp"
 #include "src/buildtool/file_system/symlinks_map/resolve_symlinks_map.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -39,6 +44,7 @@
 #include "src/buildtool/serve_api/remote/config.hpp"
 #include "src/buildtool/serve_api/remote/serve_api.hpp"
 #include "src/buildtool/storage/fs_utils.hpp"
+#include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress_reporter.hpp"
@@ -54,6 +60,7 @@
 #include "src/other_tools/root_maps/distdir_git_map.hpp"
 #include "src/other_tools/root_maps/fpath_git_map.hpp"
 #include "src/other_tools/root_maps/tree_id_git_map.hpp"
+#include "src/utils/cpp/file_locking.hpp"
 
 auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                     MultiRepoCommonArguments const& common_args,
@@ -61,10 +68,10 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                     MultiRepoJustSubCmdsArguments const& just_cmd_args,
                     MultiRepoRemoteAuthArguments const& auth_args,
                     RetryArguments const& retry_args,
-                    StorageConfig const& storage_config,
-                    Storage const& storage,
+                    StorageConfig const& native_storage_config,
+                    Storage const& native_storage,
                     bool interactive,
-                    std::string multi_repo_tool_name)
+                    std::string const& multi_repo_tool_name)
     -> std::optional<std::filesystem::path> {
     // provide report
     Logger::Log(LogLevel::Info, "Performing repositories setup");
@@ -104,6 +111,7 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                     LogLevel::Error,
                     "Unsupported value {} for field \"main\" in configuration.",
                     main_from_config->ToString());
+                return std::nullopt;
             }
         }
     }
@@ -127,57 +135,121 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                 setup_repos->to_setup.size());
 
     // setup local execution config
-    auto local_exec_config =
+    auto const local_exec_config =
         JustMR::Utils::CreateLocalExecutionConfig(common_args);
     if (not local_exec_config) {
         return std::nullopt;
     }
 
-    // pack the local context instances to be passed to ApiBundle
-    LocalContext const local_context{.exec_config = &*local_exec_config,
-                                     .storage_config = &storage_config,
-                                     .storage = &storage};
+    // pack the native local context and create api
+    LocalContext const native_local_context{
+        .exec_config = &*local_exec_config,
+        .storage_config = &native_storage_config,
+        .storage = &native_storage};
+    IExecutionApi::Ptr const native_local_api =
+        std::make_shared<LocalApi>(&native_local_context);
+
+    // pack the compatible local context, if needed
+    std::unique_ptr<StorageConfig> compat_storage_config = nullptr;
+    std::unique_ptr<Storage> compat_storage = nullptr;
+    std::unique_ptr<LocalContext> compat_local_context = nullptr;
+    std::optional<LockFile> compat_lock = std::nullopt;
+    IExecutionApi::Ptr compat_local_api = nullptr;
+    if (common_args.compatible) {
+        auto config = StorageConfig::Builder{}
+                          .SetBuildRoot(native_storage_config.build_root)
+                          .SetHashType(HashFunction::Type::PlainSHA256)
+                          .Build();
+        if (not config) {
+            Logger::Log(LogLevel::Error, config.error());
+            return std::nullopt;
+        }
+        compat_storage_config =
+            std::make_unique<StorageConfig>(*std::move(config));
+        compat_storage = std::make_unique<Storage>(
+            Storage::Create(compat_storage_config.get()));
+        compat_local_context = std::make_unique<LocalContext>(
+            LocalContext{.exec_config = &*local_exec_config,
+                         .storage_config = compat_storage_config.get(),
+                         .storage = compat_storage.get()});
+        // if a compatible storage is created, one must get a lock for it the
+        // same way as done for the native one
+        compat_lock = GarbageCollector::SharedLock(*compat_storage_config);
+        if (not compat_lock) {
+            Logger::Log(LogLevel::Error,
+                        "Failed to acquire compatible storage gc lock");
+            return std::nullopt;
+        }
+        compat_local_api = std::make_shared<LocalApi>(&*compat_local_context);
+    }
+
+    // setup the overall local api, aware of compatibility
+    IExecutionApi::Ptr mr_local_api = std::make_shared<MRLocalApi>(
+        &native_local_context,
+        &*native_local_api,
+        common_args.compatible ? &*compat_local_context : nullptr,
+        common_args.compatible ? &*compat_local_api : nullptr);
 
     // setup authentication config
-    auto auth_config = JustMR::Utils::CreateAuthConfig(auth_args);
+    auto const auth_config = JustMR::Utils::CreateAuthConfig(auth_args);
     if (not auth_config) {
         return std::nullopt;
     }
 
     // setup the retry config
-    auto retry_config = CreateRetryConfig(retry_args);
+    auto const retry_config = CreateRetryConfig(retry_args);
     if (not retry_config) {
         return std::nullopt;
     }
 
     // setup remote execution config
-    auto remote_exec_config = JustMR::Utils::CreateRemoteExecutionConfig(
+    auto const remote_exec_config = JustMR::Utils::CreateRemoteExecutionConfig(
         common_args.remote_execution_address, common_args.remote_serve_address);
     if (not remote_exec_config) {
         return std::nullopt;
     }
 
-    // pack the remote context instances to be passed to ApiBundle
+    // create the remote api
+    auto const hash_fct =
+        compat_local_context != nullptr
+            ? compat_local_context->storage_config->hash_function
+            : native_local_context.storage_config->hash_function;
+    IExecutionApi::Ptr remote_api = nullptr;
+    if (auto const address = remote_exec_config->remote_address) {
+        ExecutionConfiguration config;
+        config.skip_cache_lookup = false;
+        remote_api = std::make_shared<BazelApi>("remote-execution",
+                                                address->host,
+                                                address->port,
+                                                &*auth_config,
+                                                &*retry_config,
+                                                config,
+                                                &hash_fct);
+    }
+    bool const has_remote_api = remote_api != nullptr;
+
+    // pack the remote context
     RemoteContext const remote_context{.auth = &*auth_config,
                                        .retry_config = &*retry_config,
                                        .exec_config = &*remote_exec_config};
 
-    auto const apis = ApiBundle::Create(&local_context,
-                                        &remote_context,
-                                        /*repo_config=*/nullptr);
-
-    bool const has_remote_api =
-        apis.local != apis.remote and not common_args.compatible;
-
-    // setup the API for serving roots
+    // setup the api for serving roots
     auto serve_config =
         JustMR::Utils::CreateServeConfig(common_args.remote_serve_address);
     if (not serve_config) {
         return std::nullopt;
     }
-
-    auto serve =
-        ServeApi::Create(*serve_config, &local_context, &remote_context, &apis);
+    auto const apis =
+        ApiBundle{.hash_function = hash_fct,
+                  .local = mr_local_api,
+                  .remote = has_remote_api ? remote_api : mr_local_api};
+    auto serve = ServeApi::Create(
+        *serve_config,
+        compat_local_context != nullptr
+            ? &*compat_local_context
+            : &native_local_context,  // defines the client's hash_function
+        &remote_context,
+        &apis /*unused*/);
 
     // check configuration of the serve endpoint provided
     if (serve) {
@@ -213,78 +285,87 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
     auto crit_git_op_ptr = std::make_shared<CriticalGitOpGuard>();
     auto critical_git_op_map = CreateCriticalGitOpMap(crit_git_op_ptr);
 
-    auto content_cas_map =
-        CreateContentCASMap(common_args.just_mr_paths,
-                            common_args.alternative_mirrors,
-                            common_args.ca_info,
-                            &critical_git_op_map,
-                            serve ? &*serve : nullptr,
-                            &storage_config,
-                            &storage,
-                            &(*apis.local),
-                            has_remote_api ? &*apis.remote : nullptr,
-                            &progress,
-                            common_args.jobs);
+    auto content_cas_map = CreateContentCASMap(
+        common_args.just_mr_paths,
+        common_args.alternative_mirrors,
+        common_args.ca_info,
+        &critical_git_op_map,
+        serve ? &*serve : nullptr,
+        &native_storage_config,
+        compat_storage_config != nullptr ? &*compat_storage_config : nullptr,
+        &native_storage,
+        compat_storage != nullptr ? &*compat_storage : nullptr,
+        &(*apis.local),
+        has_remote_api ? &*apis.remote : nullptr,
+        &progress,
+        common_args.jobs);
 
     auto import_to_git_map =
         CreateImportToGitMap(&critical_git_op_map,
                              common_args.git_path->string(),
                              *common_args.local_launcher,
-                             &storage_config,
+                             &native_storage_config,
                              common_args.jobs);
 
-    auto git_tree_fetch_map =
-        CreateGitTreeFetchMap(&critical_git_op_map,
-                              &import_to_git_map,
-                              common_args.git_path->string(),
-                              *common_args.local_launcher,
-                              serve ? &*serve : nullptr,
-                              &storage_config,
-                              &(*apis.local),
-                              has_remote_api ? &*apis.remote : nullptr,
-                              false, /* backup_to_remote */
-                              &progress,
-                              common_args.jobs);
+    auto git_tree_fetch_map = CreateGitTreeFetchMap(
+        &critical_git_op_map,
+        &import_to_git_map,
+        common_args.git_path->string(),
+        *common_args.local_launcher,
+        serve ? &*serve : nullptr,
+        &native_storage_config,
+        compat_storage_config != nullptr ? &*compat_storage_config : nullptr,
+        compat_storage != nullptr ? &*compat_storage : nullptr,
+        &(*apis.local),
+        has_remote_api ? &*apis.remote : nullptr,
+        false, /* backup_to_remote */
+        &progress,
+        common_args.jobs);
 
     auto resolve_symlinks_map = CreateResolveSymlinksMap();
 
-    auto commit_git_map =
-        CreateCommitGitMap(&critical_git_op_map,
-                           &import_to_git_map,
-                           common_args.just_mr_paths,
-                           common_args.alternative_mirrors,
-                           common_args.git_path->string(),
-                           *common_args.local_launcher,
-                           serve ? &*serve : nullptr,
-                           &storage_config,
-                           &(*apis.local),
-                           has_remote_api ? &*apis.remote : nullptr,
-                           common_args.fetch_absent,
-                           &progress,
-                           common_args.jobs);
+    auto commit_git_map = CreateCommitGitMap(
+        &critical_git_op_map,
+        &import_to_git_map,
+        common_args.just_mr_paths,
+        common_args.alternative_mirrors,
+        common_args.git_path->string(),
+        *common_args.local_launcher,
+        serve ? &*serve : nullptr,
+        &native_storage_config,
+        compat_storage_config != nullptr ? &*compat_storage_config : nullptr,
+        compat_storage != nullptr ? &*compat_storage : nullptr,
+        &(*apis.local),
+        has_remote_api ? &*apis.remote : nullptr,
+        common_args.fetch_absent,
+        &progress,
+        common_args.jobs);
 
-    auto content_git_map =
-        CreateContentGitMap(&content_cas_map,
-                            &import_to_git_map,
-                            common_args.just_mr_paths,
-                            common_args.alternative_mirrors,
-                            common_args.ca_info,
-                            &resolve_symlinks_map,
-                            &critical_git_op_map,
-                            serve ? &*serve : nullptr,
-                            &storage_config,
-                            &storage,
-                            has_remote_api ? &*apis.remote : nullptr,
-                            common_args.fetch_absent,
-                            &progress,
-                            common_args.jobs);
+    auto content_git_map = CreateContentGitMap(
+        &content_cas_map,
+        &import_to_git_map,
+        common_args.just_mr_paths,
+        common_args.alternative_mirrors,
+        common_args.ca_info,
+        &resolve_symlinks_map,
+        &critical_git_op_map,
+        serve ? &*serve : nullptr,
+        &native_storage_config,
+        compat_storage_config != nullptr ? &*compat_storage_config : nullptr,
+        &native_storage,
+        compat_storage != nullptr ? &*compat_storage : nullptr,
+        has_remote_api ? &*apis.local : nullptr,  // only needed if remote given
+        has_remote_api ? &*apis.remote : nullptr,
+        common_args.fetch_absent,
+        &progress,
+        common_args.jobs);
 
     auto foreign_file_git_map =
         CreateForeignFileGitMap(&content_cas_map,
                                 &import_to_git_map,
                                 serve ? &*serve : nullptr,
-                                &storage_config,
-                                &storage,
+                                &native_storage_config,
+                                &native_storage,
                                 common_args.fetch_absent,
                                 common_args.jobs);
 
@@ -294,34 +375,41 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
         &import_to_git_map,
         &resolve_symlinks_map,
         serve ? &*serve : nullptr,
-        &storage_config,
+        &native_storage_config,
+        compat_storage_config != nullptr ? &*compat_storage_config : nullptr,
+        compat_storage != nullptr ? &*compat_storage : nullptr,
+        has_remote_api ? &*apis.local : nullptr,  // only needed if remote given
         has_remote_api ? &*apis.remote : nullptr,
         common_args.jobs,
         multi_repo_tool_name,
         common_args.just_path ? common_args.just_path->string()
                               : kDefaultJustPath);
 
-    auto distdir_git_map =
-        CreateDistdirGitMap(&content_cas_map,
-                            &import_to_git_map,
-                            &critical_git_op_map,
-                            serve ? &*serve : nullptr,
-                            &storage_config,
-                            &storage,
-                            &(*apis.local),
-                            has_remote_api ? &*apis.remote : nullptr,
-                            common_args.jobs);
+    auto distdir_git_map = CreateDistdirGitMap(
+        &content_cas_map,
+        &import_to_git_map,
+        &critical_git_op_map,
+        serve ? &*serve : nullptr,
+        &native_storage_config,
+        compat_storage_config != nullptr ? &*compat_storage_config : nullptr,
+        &native_storage,
+        compat_storage != nullptr ? &*compat_storage : nullptr,
+        &(*apis.local),
+        has_remote_api ? &*apis.remote : nullptr,
+        common_args.jobs);
 
-    auto tree_id_git_map =
-        CreateTreeIdGitMap(&git_tree_fetch_map,
-                           &critical_git_op_map,
-                           &import_to_git_map,
-                           common_args.fetch_absent,
-                           serve ? &*serve : nullptr,
-                           &storage_config,
-                           &(*apis.local),
-                           has_remote_api ? &*apis.remote : nullptr,
-                           common_args.jobs);
+    auto tree_id_git_map = CreateTreeIdGitMap(
+        &git_tree_fetch_map,
+        &critical_git_op_map,
+        &import_to_git_map,
+        common_args.fetch_absent,
+        serve ? &*serve : nullptr,
+        &native_storage_config,
+        compat_storage_config != nullptr ? &*compat_storage_config : nullptr,
+        compat_storage != nullptr ? &*compat_storage : nullptr,
+        &(*apis.local),
+        has_remote_api ? &*apis.remote : nullptr,
+        common_args.jobs);
 
     auto repos_to_setup_map = CreateReposToSetupMap(config,
                                                     main,
@@ -366,11 +454,11 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                     nlohmann::json mr_repos{};
                     for (auto const& repo : setup_repos->to_setup) {
                         auto i = static_cast<std::size_t>(
-                            &repo - &setup_repos->to_setup[0]);  // get index
+                            &repo - setup_repos->to_setup.data());  // get index
                         mr_repos[repo] = *values[i];
                     }
                     // populate ALT_DIRS
-                    constexpr auto err_msg_format =
+                    constexpr auto kErrMsgFormat =
                         "While performing {} {}:\nWhile populating fields for "
                         "repository {}:\nExpected value for key \"{}\" to be a "
                         "string, but found {}";
@@ -386,7 +474,7 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                                         // we expect a string
                                         if (not val->IsString()) {
                                             Logger::Log(LogLevel::Error,
-                                                        err_msg_format,
+                                                        kErrMsgFormat,
                                                         multi_repo_tool_name,
                                                         interactive
                                                             ? "setup-env"
@@ -456,5 +544,5 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
         return std::nullopt;
     }
     // if successful, return the output config
-    return StorageUtils::AddToCAS(storage, mr_config.dump(2));
+    return StorageUtils::AddToCAS(native_storage, mr_config.dump(2));
 }

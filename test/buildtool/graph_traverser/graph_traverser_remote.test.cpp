@@ -18,6 +18,7 @@
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
 #include "test/buildtool/graph_traverser/graph_traverser.test.hpp"
+#include "test/utils/hermeticity/test_hash_function_type.hpp"
 #include "test/utils/remote_execution/test_auth_config.hpp"
 #include "test/utils/remote_execution/test_remote_config.hpp"
 
@@ -34,9 +35,7 @@
 
     StorageConfig::Builder builder;
     auto config = builder.SetBuildRoot(cache_dir)
-                      .SetHashType(Compatibility::IsCompatible()
-                                       ? HashFunction::Type::PlainSHA256
-                                       : HashFunction::Type::GitSHA1)
+                      .SetHashType(TestHashType::ReadFromEnvironment())
                       .SetRemoteExecutionArgs(remote_config.remote_address,
                                               remote_config.platform_properties,
                                               remote_config.dispatch)

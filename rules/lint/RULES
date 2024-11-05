@@ -55,16 +55,22 @@
     { "linter":
       [ "Single artifact running the lint checks."
       , ""
-      , "This artifact with"
+      , "This program is invoked with"
       , "- argv[1] the file to lint, and"
       , "- argv[2:] the original command line."
       , "This invocation happens in an environment with"
       , "- CONFIG pointing to the directory with all the artifacts given"
-      , "  by the field \"config\"."
+      , "  by the field \"config\", and"
       , "- OUT pointing to a directory to which files with the lint result"
       , "  can be written."
-      , "The linter is supposed to indicate by the exit code whether the"
-      , "indicated file complies with the given linting policy, with 0 meaning"
+      , "- META pointing to a json file contaning"
+      , "  - at key \"direct deps artifact names\" a list of all input"
+      , "    artifacts that come from the target itself or are runfiles of a"
+      , "    direct dependency."
+      , "- TMPDIR pointing to a directory location that can be used to"
+      , "  create additional temporary files."
+      , "It is supposed to indicate by the exit code whether the file to lint"
+      , "complies with the given linting policy, with 0 meaning"
       , "compliant."
       , "Stdout and stderr, as well as the directory ${OUT} can be used to"
       , "provide additional information."
@@ -72,14 +78,14 @@
     , "config": ["Any configuration or other files needed by the linter."]
     , "summarizer":
       [ "Single artifact generating a summary of the individual lint results."
-      , "It will be called in a directory where all subdirectories with names"
-      , "consisting entirely of digits are the results of the individual lint"
+      , "It will be called in a directory where all subdirectories"
+      , "except . and .. represent the results of the individual lint"
       , "actions. Those are given as"
-      , " - a file result with content PASS if and only if the lint action"
-      , "   exited 0,"
-      , " - files stdout and stderr with stdout and stderr of the lint"
+      , " - a file \"result\" with content \"PASS\" if and only if the lint"
+      , "   action exited 0,"
+      , " - files \"stdout\" and \"stderr\" with stdout and stderr of the lint"
       , "   action, and"
-      , " - a directory out with the additional information provided by the"
+      , " - a directory \"out\" with the additional information provided by the"
       , "   lint action."
       , "The summarizer is required to indicate the overall result by the exit"
       , "code, produce a human-readable summary on stdout, and optionally"
@@ -152,6 +158,12 @@
                   , "dep": {"type": "var", "name": "_"}
                   }
                 ]
+              , [ "direct deps artifact names"
+                , { "type": "DEP_PROVIDES"
+                  , "dep": {"type": "var", "name": "_"}
+                  , "provider": "direct deps artifact names"
+                  }
+                ]
               ]
             , "body":
               { "type": "TREE"
@@ -169,6 +181,19 @@
                     , { "type": "to_subdir"
                       , "subdir": "config"
                       , "$1": {"type": "var", "name": "config"}
+                      }
+                    , { "type": "singleton_map"
+                      , "key": "meta.json"
+                      , "value":
+                        { "type": "BLOB"
+                        , "data":
+                          { "type": "json_encode"
+                          , "$1":
+                            { "type": "env"
+                            , "vars": ["direct deps artifact names"]
+                            }
+                          }
+                        }
                       }
                     ]
                   }

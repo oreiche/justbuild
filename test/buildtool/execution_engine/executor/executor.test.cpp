@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -27,9 +28,10 @@
 #include "gsl/gsl"
 #include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
@@ -37,7 +39,9 @@
 #include "src/buildtool/execution_engine/executor/context.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/progress_reporting/progress.hpp"
+#include "src/utils/cpp/expected.hpp"
 #include "test/utils/executor/test_api_bundle.hpp"
+#include "test/utils/hermeticity/test_hash_function_type.hpp"
 
 /// \brief Mockup API test config.
 struct TestApiConfig {
@@ -48,7 +52,7 @@ struct TestApiConfig {
 
     struct TestExecutionConfig {
         bool failed{};
-        std::vector<std::string> outputs{};
+        std::vector<std::string> outputs;
     };
 
     struct TestResponseConfig {
@@ -56,10 +60,16 @@ struct TestApiConfig {
         int exit_code{};
     };
 
-    std::unordered_map<std::string, TestArtifactConfig> artifacts{};
+    std::unordered_map<std::string, TestArtifactConfig> artifacts;
     TestExecutionConfig execution;
     TestResponseConfig response;
 };
+
+static auto NamedDigest(std::string const& str) -> ArtifactDigest {
+    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
+    return ArtifactDigestFactory::HashDataAs<ObjectType::File>(hash_function,
+                                                               str);
+}
 
 // forward declarations
 class TestApi;
@@ -68,9 +78,10 @@ class TestResponse;
 
 /// \brief Mockup Response, stores only config and action result
 class TestResponse : public IExecutionResponse {
-    friend class TestAction;
-
   public:
+    explicit TestResponse(TestApiConfig config) noexcept
+        : config_{std::move(config)} {}
+
     [[nodiscard]] auto Status() const noexcept -> StatusCode final {
         return StatusCode::Success;
     }
@@ -89,25 +100,23 @@ class TestResponse : public IExecutionResponse {
         static const std::string kEmptyHash;
         return kEmptyHash;
     }
-    [[nodiscard]] auto Artifacts() noexcept -> ArtifactInfos const& final {
+    [[nodiscard]] auto Artifacts() noexcept
+        -> expected<gsl::not_null<ArtifactInfos const*>, std::string> final {
         if (not populated_) {
             Populate();
         }
-        return artifacts_;
+        return gsl::not_null<ArtifactInfos const*>(&artifacts_);
     }
     [[nodiscard]] auto DirectorySymlinks() noexcept
-        -> DirSymlinks const& final {
+        -> expected<gsl::not_null<DirSymlinks const*>, std::string> final {
         static const DirSymlinks kEmptySymlinks{};
-        return kEmptySymlinks;
+        return gsl::not_null<DirSymlinks const*>(&kEmptySymlinks);
     }
 
   private:
     TestApiConfig config_{};
     ArtifactInfos artifacts_;
     bool populated_ = false;
-
-    explicit TestResponse(TestApiConfig config) noexcept
-        : config_{std::move(config)} {}
 
     void Populate() noexcept {
         if (populated_) {
@@ -123,9 +132,8 @@ class TestResponse : public IExecutionResponse {
             try {
                 artifacts.emplace(
                     path,
-                    Artifact::ObjectInfo{
-                        .digest = ArtifactDigest{path, 0, /*is_tree=*/false},
-                        .type = ObjectType::File});
+                    Artifact::ObjectInfo{.digest = NamedDigest(path),
+                                         .type = ObjectType::File});
             } catch (...) {
                 return;
             }
@@ -136,23 +144,22 @@ class TestResponse : public IExecutionResponse {
 
 /// \brief Mockup Action, stores only config
 class TestAction : public IExecutionAction {
-    friend class TestApi;
-
   public:
+    explicit TestAction(TestApiConfig config) noexcept
+        : config_{std::move(config)} {}
+
     auto Execute(Logger const* /*unused*/) noexcept
         -> IExecutionResponse::Ptr final {
         if (config_.execution.failed) {
             return nullptr;
         }
-        return IExecutionResponse::Ptr{new TestResponse{config_}};
+        return std::make_unique<TestResponse>(config_);
     }
     void SetCacheFlag(CacheFlag /*unused*/) noexcept final {}
     void SetTimeout(std::chrono::milliseconds /*unused*/) noexcept final {}
 
   private:
     TestApiConfig config_{};
-    explicit TestAction(TestApiConfig config) noexcept
-        : config_{std::move(config)} {}
 };
 
 /// \brief Mockup Api, use config to create action and handle artifact upload
@@ -170,7 +177,7 @@ class TestApi : public IExecutionApi {
         std::map<std::string, std::string> const& /*unused*/,
         std::map<std::string, std::string> const& /*unused*/) const noexcept
         -> IExecutionAction::Ptr final {
-        return IExecutionAction::Ptr{new TestAction(config_)};
+        return std::make_unique<TestAction>(config_);
     }
     [[nodiscard]] auto RetrieveToPaths(
         std::vector<Artifact::ObjectInfo> const& /*unused*/,
@@ -261,24 +268,25 @@ class TestApi : public IExecutionApi {
 
     auto const local_cpp_desc =
         ArtifactDescription::CreateLocal(path{"local.cpp"}, "");
-    auto const known_cpp_desc = ArtifactDescription::CreateKnown(
-        ArtifactDigest{"known.cpp", 0, /*is_tree=*/false}, ObjectType::File);
+    auto const known_digest = NamedDigest("known.cpp");
+    auto const known_cpp_desc =
+        ArtifactDescription::CreateKnown(known_digest, ObjectType::File);
 
     auto const test_action_desc = ActionDescription{
         {"output1.exe", "output2.exe"},
         {},
         Action{"test_action", {"cmd", "line"}, {}},
-        {{"local.cpp", local_cpp_desc}, {"known.cpp", known_cpp_desc}}};
+        {{"local.cpp", local_cpp_desc}, {known_digest.hash(), known_cpp_desc}}};
 
     CHECK(g->AddAction(test_action_desc));
     CHECK(FileSystemManager::WriteFile("local.cpp", ws / "local.cpp"));
 
     TestApiConfig config{};
 
-    config.artifacts["local.cpp"].uploads = true;
-    config.artifacts["known.cpp"].available = true;
-    config.artifacts["output1.exe"].available = true;
-    config.artifacts["output2.exe"].available = true;
+    config.artifacts[NamedDigest("local.cpp").hash()].uploads = true;
+    config.artifacts[NamedDigest("known.cpp").hash()].available = true;
+    config.artifacts[NamedDigest("output1.exe").hash()].available = true;
+    config.artifacts[NamedDigest("output2.exe").hash()].available = true;
 
     config.execution.failed = false;
     config.execution.outputs = {"output1.exe", "output2.exe"};
@@ -295,17 +303,14 @@ TEST_CASE("Executor: Process artifact", "[executor]") {
     DependencyGraph g;
     auto [config, repo_config] = CreateTest(&g, workspace_path);
 
-    HashFunction const hash_function{Compatibility::IsCompatible()
-                                         ? HashFunction::Type::PlainSHA256
-                                         : HashFunction::Type::GitSHA1};
+    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
 
     auto const local_cpp_id =
         ArtifactDescription::CreateLocal("local.cpp", "").Id();
 
-    auto const known_cpp_id =
-        ArtifactDescription::CreateKnown(
-            ArtifactDigest{"known.cpp", 0, /*is_tree=*/false}, ObjectType::File)
-            .Id();
+    auto const known_cpp_id = ArtifactDescription::CreateKnown(
+                                  NamedDigest("known.cpp"), ObjectType::File)
+                                  .Id();
 
     Auth auth{};
     RetryConfig retry_config{};             // default retry config
@@ -315,10 +320,10 @@ TEST_CASE("Executor: Process artifact", "[executor]") {
                                        .exec_config = &remote_config};
 
     SECTION("Processing succeeds for valid config") {
-        auto api = TestApi::Ptr{new TestApi{config}};
+        auto api = std::make_shared<TestApi>(config);
         Statistics stats{};
         Progress progress{};
-        auto const apis = CreateTestApiBundle(hash_function, api);
+        auto const apis = CreateTestApiBundle(&hash_function, api);
         ExecutionContext const exec_context{.repo_config = &repo_config,
                                             .apis = &apis,
                                             .remote_context = &remote_context,
@@ -331,12 +336,12 @@ TEST_CASE("Executor: Process artifact", "[executor]") {
     }
 
     SECTION("Processing fails if uploading local artifact failed") {
-        config.artifacts["local.cpp"].uploads = false;
+        config.artifacts[NamedDigest("local.cpp").hash()].uploads = false;
 
-        auto api = TestApi::Ptr{new TestApi{config}};
+        auto api = std::make_shared<TestApi>(config);
         Statistics stats{};
         Progress progress{};
-        auto const apis = CreateTestApiBundle(hash_function, api);
+        auto const apis = CreateTestApiBundle(&hash_function, api);
         ExecutionContext const exec_context{.repo_config = &repo_config,
                                             .apis = &apis,
                                             .remote_context = &remote_context,
@@ -349,12 +354,12 @@ TEST_CASE("Executor: Process artifact", "[executor]") {
     }
 
     SECTION("Processing fails if known artifact is not available") {
-        config.artifacts["known.cpp"].available = false;
+        config.artifacts[NamedDigest("known.cpp").hash()].available = false;
 
-        auto api = TestApi::Ptr{new TestApi{config}};
+        auto api = std::make_shared<TestApi>(config);
         Statistics stats{};
         Progress progress{};
-        auto const apis = CreateTestApiBundle(hash_function, api);
+        auto const apis = CreateTestApiBundle(&hash_function, api);
         ExecutionContext const exec_context{.repo_config = &repo_config,
                                             .apis = &apis,
                                             .remote_context = &remote_context,
@@ -374,17 +379,14 @@ TEST_CASE("Executor: Process action", "[executor]") {
     DependencyGraph g;
     auto [config, repo_config] = CreateTest(&g, workspace_path);
 
-    HashFunction const hash_function{Compatibility::IsCompatible()
-                                         ? HashFunction::Type::PlainSHA256
-                                         : HashFunction::Type::GitSHA1};
+    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
 
     auto const local_cpp_id =
         ArtifactDescription::CreateLocal("local.cpp", "").Id();
 
-    auto const known_cpp_id =
-        ArtifactDescription::CreateKnown(
-            ArtifactDigest{"known.cpp", 0, /*is_tree=*/false}, ObjectType::File)
-            .Id();
+    auto const known_cpp_id = ArtifactDescription::CreateKnown(
+                                  NamedDigest("known.cpp"), ObjectType::File)
+                                  .Id();
 
     ActionIdentifier const action_id{"test_action"};
     auto const output1_id =
@@ -401,10 +403,10 @@ TEST_CASE("Executor: Process action", "[executor]") {
                                        .exec_config = &remote_config};
 
     SECTION("Processing succeeds for valid config") {
-        auto api = TestApi::Ptr{new TestApi{config}};
+        auto api = std::make_shared<TestApi>(config);
         Statistics stats{};
         Progress progress{};
-        auto const apis = CreateTestApiBundle(hash_function, api);
+        auto const apis = CreateTestApiBundle(&hash_function, api);
         ExecutionContext const exec_context{.repo_config = &repo_config,
                                             .apis = &apis,
                                             .remote_context = &remote_context,
@@ -422,10 +424,10 @@ TEST_CASE("Executor: Process action", "[executor]") {
     SECTION("Processing succeeds even if result was is not cached") {
         config.response.cached = false;
 
-        auto api = TestApi::Ptr{new TestApi{config}};
+        auto api = std::make_shared<TestApi>(config);
         Statistics stats{};
         Progress progress{};
-        auto const apis = CreateTestApiBundle(hash_function, api);
+        auto const apis = CreateTestApiBundle(&hash_function, api);
         ExecutionContext const exec_context{.repo_config = &repo_config,
                                             .apis = &apis,
                                             .remote_context = &remote_context,
@@ -441,12 +443,12 @@ TEST_CASE("Executor: Process action", "[executor]") {
     }
 
     SECTION("Processing succeeds even if output is not available in CAS") {
-        config.artifacts["output2.exe"].available = false;
+        config.artifacts[NamedDigest("output2.exe").hash()].available = false;
 
-        auto api = TestApi::Ptr{new TestApi{config}};
+        auto api = std::make_shared<TestApi>(config);
         Statistics stats{};
         Progress progress{};
-        auto const apis = CreateTestApiBundle(hash_function, api);
+        auto const apis = CreateTestApiBundle(&hash_function, api);
         ExecutionContext const exec_context{.repo_config = &repo_config,
                                             .apis = &apis,
                                             .remote_context = &remote_context,
@@ -467,10 +469,10 @@ TEST_CASE("Executor: Process action", "[executor]") {
     SECTION("Processing fails if execution failed") {
         config.execution.failed = true;
 
-        auto api = TestApi::Ptr{new TestApi{config}};
+        auto api = std::make_shared<TestApi>(config);
         Statistics stats{};
         Progress progress{};
-        auto const apis = CreateTestApiBundle(hash_function, api);
+        auto const apis = CreateTestApiBundle(&hash_function, api);
         ExecutionContext const exec_context{.repo_config = &repo_config,
                                             .apis = &apis,
                                             .remote_context = &remote_context,
@@ -488,10 +490,10 @@ TEST_CASE("Executor: Process action", "[executor]") {
     SECTION("Processing fails if exit code is non-zero") {
         config.response.exit_code = 1;
 
-        auto api = TestApi::Ptr{new TestApi{config}};
+        auto api = std::make_shared<TestApi>(config);
         Statistics stats{};
         Progress progress{};
-        auto const apis = CreateTestApiBundle(hash_function, api);
+        auto const apis = CreateTestApiBundle(&hash_function, api);
         ExecutionContext const exec_context{.repo_config = &repo_config,
                                             .apis = &apis,
                                             .remote_context = &remote_context,
@@ -512,10 +514,10 @@ TEST_CASE("Executor: Process action", "[executor]") {
     SECTION("Processing fails if any output is missing") {
         config.execution.outputs = {"output1.exe" /*, "output2.exe"*/};
 
-        auto api = TestApi::Ptr{new TestApi{config}};
+        auto api = std::make_shared<TestApi>(config);
         Statistics stats{};
         Progress progress{};
-        auto const apis = CreateTestApiBundle(hash_function, api);
+        auto const apis = CreateTestApiBundle(&hash_function, api);
         ExecutionContext const exec_context{.repo_config = &repo_config,
                                             .apis = &apis,
                                             .remote_context = &remote_context,

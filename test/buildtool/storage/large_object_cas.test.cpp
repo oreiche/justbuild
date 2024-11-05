@@ -28,7 +28,7 @@
 
 #include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
-#include "src/buildtool/compatibility/native_support.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
@@ -42,23 +42,23 @@
 namespace {
 namespace LargeTestUtils {
 
-template <bool IsExecutable>
+template <bool kIsExecutable>
 class Blob final {
   public:
-    static constexpr auto kLargeId = std::string_view("bl_8Mb");
-    static constexpr auto kLargeSize = std::uintmax_t(8 * 1024 * 1024);
+    static constexpr auto kLargeId = "bl_8Mb";
+    static constexpr std::uintmax_t kLargeSize = 8UL * 1024 * 1024;
 
-    static constexpr auto kSmallId = std::string_view("bl_1kB");
-    static constexpr auto kSmallSize = std::uintmax_t(1024);
+    static constexpr auto kSmallId = "bl_1kB";
+    static constexpr std::uintmax_t kSmallSize = 1024;
 
-    static constexpr auto kEmptyId = std::string_view("bl_0");
-    static constexpr auto kEmptySize = std::uintmax_t(0);
+    static constexpr auto kEmptyId = "bl_0";
+    static constexpr std::uintmax_t kEmptySize = 0;
 
     [[nodiscard]] static auto Create(
         LocalCAS<kDefaultDoGlobalUplink> const& cas,
         std::string const& id,
         std::uintmax_t size) noexcept
-        -> std::optional<std::pair<bazel_re::Digest, std::filesystem::path>>;
+        -> std::optional<std::pair<ArtifactDigest, std::filesystem::path>>;
 
     [[nodiscard]] static auto Generate(std::string const& id,
                                        std::uintmax_t size) noexcept
@@ -69,20 +69,20 @@ using File = Blob<false>;
 
 class Tree final {
   public:
-    static constexpr auto kLargeId = std::string_view("tree_4096");
-    static constexpr auto kLargeSize = std::uintmax_t(4096);
+    static constexpr auto kLargeId = "tree_4096";
+    static constexpr std::uintmax_t kLargeSize = 4096;
 
-    static constexpr auto kSmallId = std::string_view("tree_1");
-    static constexpr auto kSmallSize = std::uintmax_t(1);
+    static constexpr auto kSmallId = "tree_1";
+    static constexpr std::uintmax_t kSmallSize = 1;
 
-    static constexpr auto kEmptyId = std::string_view("tree_0");
-    static constexpr auto kEmptySize = std::uintmax_t(0);
+    static constexpr auto kEmptyId = "tree_0";
+    static constexpr std::uintmax_t kEmptySize = 0;
 
     [[nodiscard]] static auto Create(
         LocalCAS<kDefaultDoGlobalUplink> const& cas,
         std::string const& id,
         std::uintmax_t entries_count) noexcept
-        -> std::optional<std::pair<bazel_re::Digest, std::filesystem::path>>;
+        -> std::optional<std::pair<ArtifactDigest, std::filesystem::path>>;
 
     [[nodiscard]] static auto Generate(std::string const& id,
                                        std::uintmax_t entries_count) noexcept
@@ -91,7 +91,7 @@ class Tree final {
     [[nodiscard]] static auto StoreRaw(
         LocalCAS<kDefaultDoGlobalUplink> const& cas,
         std::filesystem::path const& directory) noexcept
-        -> std::optional<bazel_re::Digest>;
+        -> std::optional<ArtifactDigest>;
 };
 
 }  // namespace LargeTestUtils
@@ -105,8 +105,7 @@ TEST_CASE("LargeObjectCAS: split a small tree", "[storage]") {
 
     // Create a small tree:
     using LargeTestUtils::Tree;
-    auto small =
-        Tree::Create(cas, std::string(Tree::kSmallId), Tree::kSmallSize);
+    auto small = Tree::Create(cas, Tree::kSmallId, Tree::kSmallSize);
     REQUIRE(small);
     auto const& [digest, path] = *small;
 
@@ -116,7 +115,7 @@ TEST_CASE("LargeObjectCAS: split a small tree", "[storage]") {
 
     // The result must contain one blob digest:
     CHECK(split_pack->size() == 1);
-    CHECK_FALSE(NativeSupport::IsTree(split_pack->front().hash()));
+    CHECK_FALSE(split_pack->front().IsTree());
 }
 
 // Test splitting of a large object. The split must be successful and the entry
@@ -137,8 +136,8 @@ static void TestLarge(StorageConfig const& storage_config,
         auto const& cas = storage.CAS();
 
         // Create a large object:
-        auto object = TestType::Create(
-            cas, std::string(TestType::kLargeId), TestType::kLargeSize);
+        auto object =
+            TestType::Create(cas, TestType::kLargeId, TestType::kLargeSize);
         CHECK(object);
         auto const& [digest, path] = *object;
 
@@ -224,8 +223,8 @@ static void TestSmall(Storage const& storage) noexcept {
         auto const& cas = storage.CAS();
 
         // Create a small object:
-        auto object = TestType::Create(
-            cas, std::string(TestType::kSmallId), TestType::kSmallSize);
+        auto object =
+            TestType::Create(cas, TestType::kSmallId, TestType::kSmallSize);
         CHECK(object);
         auto const& [digest, path] = *object;
 
@@ -233,7 +232,7 @@ static void TestSmall(Storage const& storage) noexcept {
         auto pack_1 = kIsTree ? cas.SplitTree(digest) : cas.SplitBlob(digest);
         CHECK(pack_1);
         CHECK(pack_1->size() == 1);
-        CHECK_FALSE(NativeSupport::IsTree(pack_1->front().hash()));
+        CHECK_FALSE(pack_1->front().IsTree());
 
         // Test that there is no large entry in the storage:
         // To ensure there is no split of the initial object, it is removed:
@@ -279,7 +278,7 @@ static void TestEmpty(Storage const& storage) noexcept {
 
         // Create an empty file:
         auto temp_path = LargeTestUtils::Blob</*kIsExec=*/false>::Generate(
-            std::string(TestType::kEmptyId), TestType::kEmptySize);
+            TestType::kEmptyId, TestType::kEmptySize);
         REQUIRE(temp_path);
 
         auto const& cas = storage.CAS();
@@ -336,8 +335,8 @@ static void TestExternal(StorageConfig const& storage_config,
         auto const& cas = storage.CAS();
 
         // Create a large object:
-        auto object = TestType::Create(
-            cas, std::string(TestType::kLargeId), TestType::kLargeSize);
+        auto object =
+            TestType::Create(cas, TestType::kLargeId, TestType::kLargeSize);
         CHECK(object);
         auto const& [digest, path] = *object;
 
@@ -351,8 +350,8 @@ static void TestExternal(StorageConfig const& storage_config,
         // generation:
         REQUIRE(GarbageCollector::TriggerGarbageCollection(storage_config));
         for (auto const& part : *pack_1) {
-            static constexpr bool is_executable = false;
-            REQUIRE(cas.BlobPath(part, is_executable));
+            static constexpr bool kIsExecutable = false;
+            REQUIRE(cas.BlobPath(part, kIsExecutable));
         }
 
         auto const youngest = ::Generation::Create(&storage_config);
@@ -383,8 +382,8 @@ static void TestExternal(StorageConfig const& storage_config,
             REQUIRE(*implicit_splice == path);
 
             // Randomize one more object to simulate invalidation:
-            auto small = TestType::Create(
-                cas, std::string(TestType::kSmallId), TestType::kSmallSize);
+            auto small =
+                TestType::Create(cas, TestType::kSmallId, TestType::kSmallSize);
             REQUIRE(small);
             auto const& [small_digest, small_path] = *small;
 
@@ -405,7 +404,8 @@ static void TestExternal(StorageConfig const& storage_config,
             REQUIRE(FileSystemManager::IsFile(path));
         }
 
-        if (kIsTree and not Compatibility::IsCompatible()) {
+        if (kIsTree and ProtocolTraits::IsTreeAllowed(
+                            storage_config.hash_function.GetType())) {
             // Tree invariants check is omitted in compatible mode.
             SECTION("Tree invariants check fails") {
                 // Check splice fails due to the tree invariants check.
@@ -436,8 +436,8 @@ static void TestCompactification(StorageConfig const& storage_config,
         auto const& cas = storage.CAS();
 
         // Create a large object and split it:
-        auto object = TestType::Create(
-            cas, std::string(TestType::kLargeId), TestType::kLargeSize);
+        auto object =
+            TestType::Create(cas, TestType::kLargeId, TestType::kLargeSize);
         REQUIRE(object);
         auto& [digest, path] = *object;
         auto result = kIsTree ? cas.SplitTree(digest) : cas.SplitBlob(digest);
@@ -445,12 +445,12 @@ static void TestCompactification(StorageConfig const& storage_config,
 
         // For trees the size must be increased to exceed the internal
         // compactification threshold:
-        static constexpr auto ExceedThresholdSize =
+        static constexpr auto kExceedThresholdSize =
             kIsTree ? TestType::kLargeSize * 8 : TestType::kLargeSize;
 
         // Create a large object that is to be split during compactification:
         auto object_2 = TestType::Create(
-            cas, std::string(TestType::kLargeId) + "_2", ExceedThresholdSize);
+            cas, std::string(TestType::kLargeId) + "_2", kExceedThresholdSize);
         REQUIRE(object_2);
         auto& [digest_2, path_2] = *object_2;
 
@@ -458,7 +458,7 @@ static void TestCompactification(StorageConfig const& storage_config,
         // may be present in the storage. To ensure compactification deals with
         // them properly, a "unique" file is created:
         auto invalid_object = TestType::Create(
-            cas, std::string(TestType::kLargeId) + "_3", ExceedThresholdSize);
+            cas, std::string(TestType::kLargeId) + "_3", kExceedThresholdSize);
         REQUIRE(invalid_object);
         auto& [invalid_digest, invalid_path] = *invalid_object;
 
@@ -467,7 +467,7 @@ static void TestCompactification(StorageConfig const& storage_config,
         REQUIRE(FileSystemManager::Rename(invalid_path, *unique_path));
 
         // Ensure all entries are in the storage:
-        auto get_path = [](auto const& cas, bazel_re::Digest const& digest) {
+        auto get_path = [](auto const& cas, ArtifactDigest const& digest) {
             return kIsTree ? cas.TreePath(digest)
                            : cas.BlobPath(digest, kIsExec);
         };
@@ -542,7 +542,7 @@ TEST_CASE("LargeObjectCAS: uplink nested large objects", "[storage]") {
 
     // Randomize a large directory:
     auto tree_path = LargeTestUtils::Tree::Generate(
-        std::string("nested_tree"), LargeTestUtils::Tree::kLargeSize);
+        "nested_tree", LargeTestUtils::Tree::kLargeSize);
     REQUIRE(tree_path);
 
     // Randomize a large nested tree:
@@ -606,7 +606,8 @@ TEST_CASE("LargeObjectCAS: uplink nested large objects", "[storage]") {
 
     // However, in native mode they might be reconstructed on request because
     // their entries are in the latest generation:
-    if (not Compatibility::IsCompatible()) {
+    if (ProtocolTraits::IsNative(
+            storage_config.Get().hash_function.GetType())) {
         auto split_nested_tree_2 = latest.CAS().SplitTree(*nested_tree_digest);
         REQUIRE(split_nested_tree_2);
 
@@ -647,24 +648,24 @@ class TestFilesDirectory final {
 };
 
 namespace LargeTestUtils {
-template <bool IsExecutable>
-auto Blob<IsExecutable>::Create(LocalCAS<kDefaultDoGlobalUplink> const& cas,
-                                std::string const& id,
-                                std::uintmax_t size) noexcept
-    -> std::optional<std::pair<bazel_re::Digest, std::filesystem::path>> {
+template <bool kIsExecutable>
+auto Blob<kIsExecutable>::Create(LocalCAS<kDefaultDoGlobalUplink> const& cas,
+                                 std::string const& id,
+                                 std::uintmax_t size) noexcept
+    -> std::optional<std::pair<ArtifactDigest, std::filesystem::path>> {
     auto path = Generate(id, size);
-    auto digest = path ? cas.StoreBlob(*path, IsExecutable) : std::nullopt;
+    auto digest = path ? cas.StoreBlob(*path, kIsExecutable) : std::nullopt;
     auto blob_path =
-        digest ? cas.BlobPath(*digest, IsExecutable) : std::nullopt;
+        digest ? cas.BlobPath(*digest, kIsExecutable) : std::nullopt;
     if (digest and blob_path) {
         return std::make_pair(std::move(*digest), std::move(*blob_path));
     }
     return std::nullopt;
 }
 
-template <bool IsExecutable>
-auto Blob<IsExecutable>::Generate(std::string const& id,
-                                  std::uintmax_t size) noexcept
+template <bool kIsExecutable>
+auto Blob<kIsExecutable>::Generate(std::string const& id,
+                                   std::uintmax_t size) noexcept
     -> std::optional<std::filesystem::path> {
     std::string const path_id = "blob" + id;
     auto path = TestFilesDirectory::Instance().GetPath() / path_id;
@@ -678,7 +679,7 @@ auto Blob<IsExecutable>::Generate(std::string const& id,
 auto Tree::Create(LocalCAS<kDefaultDoGlobalUplink> const& cas,
                   std::string const& id,
                   std::uintmax_t entries_count) noexcept
-    -> std::optional<std::pair<bazel_re::Digest, std::filesystem::path>> {
+    -> std::optional<std::pair<ArtifactDigest, std::filesystem::path>> {
     auto path = Generate(id, entries_count);
     auto digest = path ? StoreRaw(cas, *path) : std::nullopt;
     auto cas_path = digest ? cas.TreePath(*digest) : std::nullopt;
@@ -702,28 +703,28 @@ auto Tree::Generate(std::string const& id,
 
 auto Tree::StoreRaw(LocalCAS<kDefaultDoGlobalUplink> const& cas,
                     std::filesystem::path const& directory) noexcept
-    -> std::optional<bazel_re::Digest> {
+    -> std::optional<ArtifactDigest> {
     if (not FileSystemManager::IsDirectory(directory)) {
         return std::nullopt;
     }
 
     auto store_blob = [&cas](std::filesystem::path const& path,
-                             auto is_exec) -> std::optional<bazel_re::Digest> {
+                             auto is_exec) -> std::optional<ArtifactDigest> {
         return cas.StoreBlob</*kOwner=*/true>(path, is_exec);
     };
     auto store_tree =
-        [&cas](std::string const& content) -> std::optional<bazel_re::Digest> {
+        [&cas](std::string const& content) -> std::optional<ArtifactDigest> {
         return cas.StoreTree(content);
     };
     auto store_symlink =
-        [&cas](std::string const& content) -> std::optional<bazel_re::Digest> {
+        [&cas](std::string const& content) -> std::optional<ArtifactDigest> {
         return cas.StoreBlob(content);
     };
 
-    return Compatibility::IsCompatible()
-               ? BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
+    return ProtocolTraits::IsNative(cas.GetHashFunction().GetType())
+               ? BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
                      directory, store_blob, store_tree, store_symlink)
-               : BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
+               : BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
                      directory, store_blob, store_tree, store_symlink);
 }
 }  // namespace LargeTestUtils

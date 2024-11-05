@@ -25,7 +25,8 @@
 [[nodiscard]] auto MultiRepoUpdate(std::shared_ptr<Configuration> const& config,
                                    MultiRepoCommonArguments const& common_args,
                                    MultiRepoUpdateArguments const& update_args,
-                                   StorageConfig const& storage_config,
-                                   std::string multi_repo_tool_name) -> int;
+                                   StorageConfig const& native_storage_config,
+                                   std::string const& multi_repo_tool_name)
+    -> int;
 
 #endif  // INCLUDED_SRC_OTHER_TOOLS_JUST_MR_UPDATE_HPP

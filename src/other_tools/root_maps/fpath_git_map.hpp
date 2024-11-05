@@ -27,13 +27,14 @@
 #include "src/buildtool/file_system/symlinks_map/resolve_symlinks_map.hpp"
 #include "src/buildtool/serve_api/remote/serve_api.hpp"
 #include "src/buildtool/storage/config.hpp"
+#include "src/buildtool/storage/storage.hpp"
 #include "src/other_tools/just_mr/utils.hpp"
 #include "src/other_tools/ops_maps/import_to_git_map.hpp"
 #include "src/utils/cpp/hash_combine.hpp"
 #include "src/utils/cpp/path_hash.hpp"
 
 struct FpathInfo {
-    std::filesystem::path fpath{}; /* key */
+    std::filesystem::path fpath; /* key */
     // create root based on "special" pragma value
     std::optional<PragmaSpecial> pragma_special{std::nullopt}; /* key */
     // create an absent root
@@ -56,11 +57,14 @@ using FilePathGitMap = AsyncMapConsumer<FpathInfo, nlohmann::json>;
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    Storage const* compat_storage,
+    IExecutionApi const* local_api,
     IExecutionApi const* remote_api,
     std::size_t jobs,
-    std::string multi_repo_tool_name,
-    std::string build_tool_name) -> FilePathGitMap;
+    std::string const& multi_repo_tool_name,
+    std::string const& build_tool_name) -> FilePathGitMap;
 
 namespace std {
 template <>

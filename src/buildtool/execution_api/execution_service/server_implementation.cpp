@@ -26,8 +26,8 @@
 #include "fmt/core.h"
 #include "grpcpp/grpcpp.h"
 #include "nlohmann/json.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/common/remote/port.hpp"
-#include "src/buildtool/compatibility/compatibility.hpp"
 #include "src/buildtool/execution_api/execution_service/ac_server.hpp"
 #include "src/buildtool/execution_api/execution_service/bytestream_server.hpp"
 #include "src/buildtool/execution_api/execution_service/capabilities_server.hpp"
@@ -84,12 +84,14 @@ auto ServerImpl::Run(gsl::not_null<LocalContext const*> const& local_context,
                      gsl::not_null<RemoteContext const*> const& remote_context,
                      ApiBundle const& apis,
                      std::optional<std::uint8_t> op_exponent) -> bool {
+    auto const hash_type =
+        local_context->storage_config->hash_function.GetType();
     ExecutionServiceImpl es{local_context, &*apis.local, op_exponent};
     ActionCacheServiceImpl ac{local_context};
     CASServiceImpl cas{local_context};
     BytestreamServiceImpl b{local_context};
-    CapabilitiesServiceImpl cap{};
-    OperarationsServiceImpl op{&es.GetOpCache()};
+    CapabilitiesServiceImpl cap{hash_type};
+    OperationsServiceImpl op{&es.GetOpCache()};
 
     grpc::ServerBuilder builder;
 
@@ -140,11 +142,11 @@ auto ServerImpl::Run(gsl::not_null<LocalContext const*> const& local_context,
         }
     }
 
-    auto const& info_str = nlohmann::to_string(info);
+    auto const info_str = nlohmann::to_string(info);
     Logger::Log(LogLevel::Info,
-                fmt::format("{}execution service started: {}",
-                            Compatibility::IsCompatible() ? "compatible " : "",
-                            info_str));
+                "{}execution service started: {}",
+                ProtocolTraits::IsNative(hash_type) ? "" : "compatible ",
+                info_str);
 
     if (not info_file_.empty()) {
         if (not TryWrite(info_file_, info_str)) {

@@ -21,13 +21,15 @@
 #include <optional>
 
 #include "src/buildtool/common/artifact.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 
 [[nodiscard]] auto GenerateArchive(
+    HashFunction::Type hash_type,
     IExecutionApi const& api,
     const Artifact::ObjectInfo& artifact,
     const std::optional<std::filesystem::path>& output_path) -> bool;
 
 #endif
 
-#endif
+#endif  // INCLUDED_SRC_BUILDTOOL_MAIN_ARCHIVE_HPP

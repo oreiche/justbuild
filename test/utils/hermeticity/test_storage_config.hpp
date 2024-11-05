@@ -21,11 +21,12 @@
 #include <utility>  //std::move
 
 #include "gsl/gsl"
-#include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
+#include "test/utils/hermeticity/test_hash_function_type.hpp"
 
 class TestStorageConfig final {
   public:
@@ -40,9 +41,13 @@ class TestStorageConfig final {
          * there. Hence we set the storage root to a fixed location under
          * TEST_TMPDIR which is set by the test launcher.
          */
+        char const* const env_tmpdir = std::getenv("TEST_TMPDIR");
+        if (env_tmpdir == nullptr) {
+            Logger::Log(LogLevel::Debug, "missing TEST_TMPDIR env variable");
+            std::exit(EXIT_FAILURE);
+        }
         auto const test_tempdir =
-            std::filesystem::path{std::string{std::getenv("TEST_TMPDIR")}} /
-            ".test_build_root";
+            std::filesystem::path{std::string{env_tmpdir}} / ".test_build_root";
 
         auto temp_dir = TmpDir::Create(test_tempdir);
         if (temp_dir == nullptr) {
@@ -53,9 +58,7 @@ class TestStorageConfig final {
 
         StorageConfig::Builder builder;
         auto config = builder.SetBuildRoot(temp_dir->GetPath())
-                          .SetHashType(Compatibility::IsCompatible()
-                                           ? HashFunction::Type::PlainSHA256
-                                           : HashFunction::Type::GitSHA1)
+                          .SetHashType(TestHashType::ReadFromEnvironment())
                           .Build();
         if (not config) {
             Logger::Log(LogLevel::Error, config.error());

@@ -16,6 +16,8 @@
 
 #include <utility>  // std::move
 
+#include "fmt/core.h"
+#include "google/protobuf/text_format.h"
 #include "grpcpp/grpcpp.h"
 #include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/common/remote/retry.hpp"
@@ -40,6 +42,17 @@ void LogExecutionStatus(gsl::not_null<Logger const*> const& logger,
                          "Execution could not be started.\n{}",
                          s.ShortDebugString());
             break;
+        case grpc::StatusCode::FAILED_PRECONDITION:
+            // quote from remote_execution.proto:
+            // One or more errors occurred in setting up the
+            // action requested, such as a missing input or command or no worker
+            // being available. The client may be able to fix the errors and
+            // retry.
+            logger->Emit(LogLevel::Progress,
+                         "Some precondition for the action failed.\n{}",
+                         s.message());
+            break;
+
         default:
             // fallback to default status logging
             LogStatus(logger, LogLevel::Error, s);
@@ -80,8 +93,7 @@ auto BazelExecutionClient::Execute(std::string const& instance_name,
     bazel_re::ExecuteRequest request;
     request.set_instance_name(instance_name);
     request.set_skip_cache_lookup(config.skip_cache_lookup);
-    request.set_allocated_action_digest(
-        gsl::owner<bazel_re::Digest*>{new bazel_re::Digest(action_digest)});
+    (*request.mutable_action_digest()) = action_digest;
     request.set_allocated_execution_policy(execution_policy.release());
     request.set_allocated_results_cache_policy(results_cache_policy.release());
     BazelExecutionClient::ExecutionResponse response;
@@ -90,20 +102,22 @@ auto BazelExecutionClient::Execute(std::string const& instance_name,
         std::unique_ptr<grpc::ClientReader<google::longrunning::Operation>>
             reader(stub_->Execute(&context, request));
 
-        auto [op, fatal, error_msg] = ReadExecution(reader.get(), wait);
+        auto [op, fatal, _] = ReadExecution(reader.get(), wait);
         if (not op.has_value()) {
-            return {
-                .ok = false, .exit_retry_loop = fatal, .error_msg = error_msg};
+            return {.ok = false, .exit_retry_loop = fatal};
         }
         auto contents = ExtractContents(std::move(op));
         response = contents.response;
+        if (response.state == ExecutionResponse::State::Ongoing) {
+            return {.ok = true, .exit_retry_loop = true};
+        }
         if (response.state == ExecutionResponse::State::Finished) {
             return {.ok = true};
         }
+        auto const is_fatal = response.state != ExecutionResponse::State::Retry;
         return {.ok = false,
-                .exit_retry_loop =
-                    response.state != ExecutionResponse::State::Retry,
-                .error_msg = contents.error_msg};
+                .exit_retry_loop = is_fatal,
+                .error_msg = is_fatal ? std::nullopt : contents.error_msg};
     };
     if (not WithRetry(execute, retry_config_, logger_)) {
         logger_.Emit(LogLevel::Error,
@@ -125,21 +139,19 @@ auto BazelExecutionClient::WaitExecution(std::string const& execution_handle)
         std::unique_ptr<grpc::ClientReader<google::longrunning::Operation>>
             reader(stub_->WaitExecution(&context, request));
 
-        auto [op, fatal, error_msg] =
-            ReadExecution(reader.get(), /*wait=*/true);
+        auto [op, fatal, _] = ReadExecution(reader.get(), /*wait=*/true);
         if (not op.has_value()) {
-            return {
-                .ok = false, .exit_retry_loop = fatal, .error_msg = error_msg};
+            return {.ok = false, .exit_retry_loop = fatal};
         }
         auto contents = ExtractContents(std::move(op));
         response = contents.response;
         if (response.state == ExecutionResponse::State::Finished) {
             return {.ok = true};
         }
+        auto const is_fatal = response.state != ExecutionResponse::State::Retry;
         return {.ok = false,
-                .exit_retry_loop =
-                    response.state != ExecutionResponse::State::Retry,
-                .error_msg = contents.error_msg};
+                .exit_retry_loop = is_fatal,
+                .error_msg = is_fatal ? std::nullopt : contents.error_msg};
     };
     if (not WithRetry(wait_execution, retry_config_, logger_)) {
         logger_.Emit(
@@ -163,7 +175,8 @@ auto BazelExecutionClient::ReadExecution(
     if (not reader->Read(&operation)) {
         grpc::Status status = reader->Finish();
         auto exit_retry_loop =
-            status.error_code() != grpc::StatusCode::UNAVAILABLE;
+            (status.error_code() != grpc::StatusCode::UNAVAILABLE) &&
+            (status.error_code() != grpc::StatusCode::DEADLINE_EXCEEDED);
         LogStatus(&logger_,
                   (exit_retry_loop ? LogLevel::Error : LogLevel::Debug),
                   status);
@@ -177,7 +190,8 @@ auto BazelExecutionClient::ReadExecution(
         grpc::Status status = reader->Finish();
         if (not status.ok()) {
             auto exit_retry_loop =
-                status.error_code() != grpc::StatusCode::UNAVAILABLE;
+                (status.error_code() != grpc::StatusCode::UNAVAILABLE) &&
+                (status.error_code() != grpc::StatusCode::DEADLINE_EXCEEDED);
             LogStatus(&logger_,
                       (exit_retry_loop ? LogLevel::Error : LogLevel::Debug),
                       status);
@@ -228,6 +242,17 @@ auto BazelExecutionClient::ExtractContents(
     if (status_code != grpc::StatusCode::OK) {
         LogExecutionStatus(&logger_, exec_response.status());
         if (status_code == grpc::StatusCode::UNAVAILABLE) {
+            response.state = ExecutionResponse::State::Retry;
+        }
+        else if (status_code == grpc::StatusCode::FAILED_PRECONDITION) {
+            logger_.Emit(LogLevel::Debug, [&exec_response] {
+                std::string text_repr;
+                google::protobuf::TextFormat::PrintToString(exec_response,
+                                                            &text_repr);
+                return fmt::format(
+                    "Full exec_response of precondition failure\n{}",
+                    text_repr);
+            });
             response.state = ExecutionResponse::State::Retry;
         }
         else {

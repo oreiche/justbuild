@@ -15,6 +15,7 @@
 #include "src/other_tools/root_maps/content_git_map.hpp"
 
 #include "fmt/core.h"
+#include "src/buildtool/crypto/hash_info.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
@@ -51,7 +52,10 @@ void EnsureRootAsAbsent(
     std::string const& tree_id,
     ArchiveRepoInfo const& key,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    Storage const* compat_storage,
+    IExecutionApi const* local_api,
     IExecutionApi const* remote_api,
     bool is_cache_hit,
     ContentGitMap::SetterPtr const& ws_setter,
@@ -67,21 +71,20 @@ void EnsureRootAsAbsent(
             // try to see if serve endpoint has the information to prepare the
             // root itself; this is redundant if root is not already cached
             if (is_cache_hit) {
-                auto serve_result =
-                    serve->RetrieveTreeFromArchive(key.archive.content,
-                                                   key.repo_type,
-                                                   key.subdir,
-                                                   key.pragma_special,
-                                                   /*sync_tree=*/false);
+                auto const serve_result = serve->RetrieveTreeFromArchive(
+                    key.archive.content_hash.Hash(),
+                    key.repo_type,
+                    key.subdir,
+                    key.pragma_special,
+                    /*sync_tree=*/false);
                 if (serve_result) {
                     // if serve has set up the tree, it must match what we
                     // expect
-                    auto const& served_tree_id = *serve_result;
-                    if (tree_id != served_tree_id) {
+                    if (tree_id != serve_result->tree) {
                         (*logger)(fmt::format("Mismatch in served root tree "
                                               "id:\nexpected {}, but got {}",
                                               tree_id,
-                                              served_tree_id),
+                                              serve_result->tree),
                                   /*fatal=*/true);
                         return;
                     }
@@ -93,7 +96,7 @@ void EnsureRootAsAbsent(
                         (*logger)(
                             fmt::format("Serve endpoint failed to set up "
                                         "root from known archive content {}",
-                                        key.archive.content),
+                                        key.archive.content_hash.Hash()),
                             /*fatal=*/true);
                         return;
                     }
@@ -113,7 +116,11 @@ void EnsureRootAsAbsent(
                     if (not EnsureAbsentRootOnServe(
                             *serve,
                             tree_id,
-                            storage_config->GitRoot(),
+                            native_storage_config->GitRoot(), /*repo_path*/
+                            native_storage_config,
+                            compat_storage_config,
+                            compat_storage,
+                            local_api,
                             remote_api,
                             logger,
                             /*no_sync_is_fatal=*/true)) {
@@ -136,12 +143,17 @@ void EnsureRootAsAbsent(
                 // the tree is known locally, so we can upload it to remote
                 // CAS for the serve endpoint to retrieve it and set up the
                 // root
-                if (not EnsureAbsentRootOnServe(*serve,
-                                                tree_id,
-                                                storage_config->GitRoot(),
-                                                remote_api,
-                                                logger,
-                                                /*no_sync_is_fatal=*/true)) {
+                if (not EnsureAbsentRootOnServe(
+                        *serve,
+                        tree_id,
+                        native_storage_config->GitRoot(), /*repo_root*/
+                        native_storage_config,
+                        compat_storage_config,
+                        compat_storage,
+                        local_api,
+                        remote_api,
+                        logger,
+                        /*no_sync_is_fatal=*/true)) {
                     return;
                 }
             }
@@ -170,7 +182,10 @@ void ResolveContentTree(
     bool is_cache_hit,
     bool is_absent,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    Storage const* compat_storage,
+    IExecutionApi const* local_api,
     IExecutionApi const* remote_api,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
@@ -180,7 +195,7 @@ void ResolveContentTree(
     if (key.pragma_special) {
         // get the resolved tree
         auto tree_id_file = StorageUtils::GetResolvedTreeIDFile(
-            *storage_config, tree_hash, *key.pragma_special);
+            *native_storage_config, tree_hash, *key.pragma_special);
         if (FileSystemManager::Exists(tree_id_file)) {
             // read resolved tree id
             auto resolved_tree_id = FileSystemManager::ReadFile(tree_id_file);
@@ -196,18 +211,22 @@ void ResolveContentTree(
                 EnsureRootAsAbsent(*resolved_tree_id,
                                    key,
                                    serve,
-                                   storage_config,
+                                   native_storage_config,
+                                   compat_storage_config,
+                                   compat_storage,
+                                   local_api,
                                    remote_api,
                                    is_cache_hit,
                                    ws_setter,
                                    logger);
             }
             else {
-                (*ws_setter)(std::pair(
-                    nlohmann::json::array({FileRoot::kGitTreeMarker,
-                                           *resolved_tree_id,
-                                           storage_config->GitRoot().string()}),
-                    /*is_cache_hit=*/is_cache_hit));
+                (*ws_setter)(
+                    std::pair(nlohmann::json::array(
+                                  {FileRoot::kGitTreeMarker,
+                                   *resolved_tree_id,
+                                   native_storage_config->GitRoot().string()}),
+                              /*is_cache_hit=*/is_cache_hit));
             }
         }
         else {
@@ -228,7 +247,10 @@ void ResolveContentTree(
                  key,
                  is_absent,
                  serve,
-                 storage_config,
+                 native_storage_config,
+                 compat_storage_config,
+                 compat_storage,
+                 local_api,
                  remote_api,
                  ts,
                  ws_setter,
@@ -238,7 +260,8 @@ void ResolveContentTree(
                     GitOpKey op_key = {
                         .params =
                             {
-                                storage_config->GitRoot(),    // target_path
+                                native_storage_config
+                                    ->GitRoot(),              // target_path
                                 resolved_tree_id,             // git_hash
                                 "Keep referenced tree alive"  // message
                             },
@@ -251,7 +274,10 @@ void ResolveContentTree(
                          tree_id_file,
                          is_absent,
                          serve,
-                         storage_config,
+                         native_storage_config,
+                         compat_storage_config,
+                         compat_storage,
+                         local_api,
                          remote_api,
                          is_cache_hit,
                          ws_setter,
@@ -278,7 +304,10 @@ void ResolveContentTree(
                                 EnsureRootAsAbsent(resolved_tree_id,
                                                    key,
                                                    serve,
-                                                   storage_config,
+                                                   native_storage_config,
+                                                   compat_storage_config,
+                                                   compat_storage,
+                                                   local_api,
                                                    remote_api,
                                                    is_cache_hit,
                                                    ws_setter,
@@ -289,11 +318,13 @@ void ResolveContentTree(
                                     nlohmann::json::array(
                                         {FileRoot::kGitTreeMarker,
                                          resolved_tree_id,
-                                         storage_config->GitRoot().string()}),
+                                         native_storage_config->GitRoot()
+                                             .string()}),
                                     /*is_cache_hit=*/is_cache_hit));
                             }
                         },
-                        [logger, target_path = storage_config->GitRoot()](
+                        [logger,
+                         target_path = native_storage_config->GitRoot()](
                             auto const& msg, bool fatal) {
                             (*logger)(
                                 fmt::format("While running critical Git op "
@@ -303,11 +334,11 @@ void ResolveContentTree(
                                 fatal);
                         });
                 },
-                [logger, content = key.archive.content](auto const& msg,
-                                                        bool fatal) {
+                [logger, hash = key.archive.content_hash.Hash()](
+                    auto const& msg, bool fatal) {
                     (*logger)(fmt::format("While resolving symlinks for "
                                           "content {}:\n{}",
-                                          content,
+                                          hash,
                                           msg),
                               fatal);
                 });
@@ -319,18 +350,22 @@ void ResolveContentTree(
             EnsureRootAsAbsent(tree_hash,
                                key,
                                serve,
-                               storage_config,
+                               native_storage_config,
+                               compat_storage_config,
+                               compat_storage,
+                               local_api,
                                remote_api,
                                is_cache_hit,
                                ws_setter,
                                logger);
         }
         else {
-            (*ws_setter)(std::pair(
-                nlohmann::json::array({FileRoot::kGitTreeMarker,
-                                       tree_hash,
-                                       storage_config->GitRoot().string()}),
-                /*is_cache_hit=*/is_cache_hit));
+            (*ws_setter)(
+                std::pair(nlohmann::json::array(
+                              {FileRoot::kGitTreeMarker,
+                               tree_hash,
+                               native_storage_config->GitRoot().string()}),
+                          /*is_cache_hit=*/is_cache_hit));
         }
     }
 }
@@ -345,7 +380,10 @@ void WriteIdFileAndSetWSRoot(
     std::filesystem::path const& archive_tree_id_file,
     bool is_absent,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    Storage const* compat_storage,
+    IExecutionApi const* local_api,
     IExecutionApi const* remote_api,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
@@ -390,7 +428,10 @@ void WriteIdFileAndSetWSRoot(
                        false, /*is_cache_hit*/
                        is_absent,
                        serve,
-                       storage_config,
+                       native_storage_config,
+                       compat_storage_config,
+                       compat_storage,
+                       local_api,
                        remote_api,
                        critical_git_op_map,
                        resolve_symlinks_map,
@@ -408,7 +449,10 @@ void ExtractAndImportToGit(
     std::filesystem::path const& archive_tree_id_file,
     bool is_absent,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    Storage const* compat_storage,
+    IExecutionApi const* local_api,
     IExecutionApi const* remote_api,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
@@ -417,11 +461,11 @@ void ExtractAndImportToGit(
     ContentGitMap::SetterPtr const& setter,
     ContentGitMap::LoggerPtr const& logger) {
     // extract archive
-    auto tmp_dir = storage_config->CreateTypedTmpDir(key.repo_type);
+    auto tmp_dir = native_storage_config->CreateTypedTmpDir(key.repo_type);
     if (not tmp_dir) {
         (*logger)(fmt::format("Failed to create tmp path for {} target {}",
                               key.repo_type,
-                              key.archive.content),
+                              key.archive.content_hash.Hash()),
                   /*fatal=*/true);
         return;
     }
@@ -436,7 +480,8 @@ void ExtractAndImportToGit(
         return;
     }
     // import to git
-    CommitInfo c_info{tmp_dir->GetPath(), key.repo_type, key.archive.content};
+    CommitInfo c_info{
+        tmp_dir->GetPath(), key.repo_type, key.archive.content_hash.Hash()};
     import_to_git_map->ConsumeAfterKeysReady(
         ts,
         {std::move(c_info)},
@@ -445,7 +490,10 @@ void ExtractAndImportToGit(
          key,
          is_absent,
          serve,
-         storage_config,
+         native_storage_config,
+         compat_storage_config,
+         compat_storage,
+         local_api,
          remote_api,
          critical_git_op_map,
          resolve_symlinks_map,
@@ -467,7 +515,10 @@ void ExtractAndImportToGit(
                                     archive_tree_id_file,
                                     is_absent,
                                     serve,
-                                    storage_config,
+                                    native_storage_config,
+                                    compat_storage_config,
+                                    compat_storage,
+                                    local_api,
                                     remote_api,
                                     critical_git_op_map,
                                     resolve_symlinks_map,
@@ -485,13 +536,16 @@ void ExtractAndImportToGit(
 }
 
 auto IdFileExistsInOlderGeneration(
-    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
     ArchiveRepoInfo const& key) -> std::optional<std::size_t> {
     for (std::size_t generation = 1;
-         generation < storage_config->num_generations;
+         generation < native_storage_config->num_generations;
          generation++) {
-        auto archive_tree_id_file = StorageUtils::GetArchiveTreeIDFile(
-            *storage_config, key.repo_type, key.archive.content, generation);
+        auto archive_tree_id_file =
+            StorageUtils::GetArchiveTreeIDFile(*native_storage_config,
+                                               key.repo_type,
+                                               key.archive.content_hash.Hash(),
+                                               generation);
         if (FileSystemManager::Exists(archive_tree_id_file)) {
             return generation;
         }
@@ -504,9 +558,12 @@ void HandleLocallyKnownTree(
     std::filesystem::path const& archive_tree_id_file,
     bool fetch_absent,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    Storage const* compat_storage,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
+    IExecutionApi const* local_api,
     IExecutionApi const* remote_api,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
@@ -523,11 +580,11 @@ void HandleLocallyKnownTree(
     // define Git operation to be done
     GitOpKey op_key = {.params =
                            {
-                               storage_config->GitRoot(),  // target_path
-                               "",                         // git_hash
-                               std::nullopt,               // message
-                               std::nullopt,               // source_path
-                               true                        // init_bare
+                               native_storage_config->GitRoot(),  // target_path
+                               "",                                // git_hash
+                               std::nullopt,                      // message
+                               std::nullopt,                      // source_path
+                               true                               // init_bare
                            },
                        .op_type = GitOpType::ENSURE_INIT};
     critical_git_op_map->ConsumeAfterKeysReady(
@@ -537,7 +594,10 @@ void HandleLocallyKnownTree(
          key,
          fetch_absent,
          serve,
-         storage_config,
+         native_storage_config,
+         compat_storage_config,
+         compat_storage,
+         local_api,
          remote_api,
          critical_git_op_map,
          resolve_symlinks_map,
@@ -580,7 +640,10 @@ void HandleLocallyKnownTree(
                 /*is_cache_hit = */ true,
                 /*is_absent = */ (key.absent and not fetch_absent),
                 serve,
-                storage_config,
+                native_storage_config,
+                compat_storage_config,
+                compat_storage,
+                local_api,
                 remote_api,
                 critical_git_op_map,
                 resolve_symlinks_map,
@@ -588,8 +651,8 @@ void HandleLocallyKnownTree(
                 setter,
                 logger);
         },
-        [logger, target_path = storage_config->GitRoot()](auto const& msg,
-                                                          bool fatal) {
+        [logger, target_path = native_storage_config->GitRoot()](
+            auto const& msg, bool fatal) {
             (*logger)(fmt::format("While running critical Git "
                                   "op ENSURE_INIT for "
                                   "target {}:\n{}",
@@ -604,9 +667,12 @@ void HandleKnownInOlderGenerationAfterImport(
     const std::string& tree_id,
     bool fetch_absent,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    Storage const* compat_storage,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
+    IExecutionApi const* local_api,
     IExecutionApi const* remote_api,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
@@ -614,7 +680,7 @@ void HandleKnownInOlderGenerationAfterImport(
     // Now that we have the tree persisted in the git repository of the youngest
     // generation; hence we can write the map-entry.
     auto archive_tree_id_file = StorageUtils::GetArchiveTreeIDFile(
-        *storage_config, key.repo_type, key.archive.content);
+        *native_storage_config, key.repo_type, key.archive.content_hash.Hash());
     if (not StorageUtils::WriteTreeIDFile(archive_tree_id_file, tree_id)) {
         (*logger)(fmt::format("Failed to write tree id to file {}",
                               archive_tree_id_file.string()),
@@ -627,9 +693,12 @@ void HandleKnownInOlderGenerationAfterImport(
                            archive_tree_id_file,
                            fetch_absent,
                            serve,
-                           storage_config,
+                           native_storage_config,
+                           compat_storage_config,
+                           compat_storage,
                            resolve_symlinks_map,
                            critical_git_op_map,
+                           local_api,
                            remote_api,
                            ts,
                            setter,
@@ -644,10 +713,12 @@ void HandleKnownInOlderGenerationAfterTaggingAndInit(
     std::filesystem::path const& source,
     bool fetch_absent,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
-    gsl::not_null<Storage const*> const& storage,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    Storage const* compat_storage,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
+    IExecutionApi const* local_api,
     IExecutionApi const* remote_api,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
@@ -667,14 +738,14 @@ void HandleKnownInOlderGenerationAfterTaggingAndInit(
                       fatal);
         });
     if (not git_repo->LocalFetchViaTmpRepo(
-            *storage_config, source, tag, fetch_logger)) {
+            *native_storage_config, source, tag, fetch_logger)) {
         return;
     }
     GitOpKey op_key = {.params =
                            {
-                               storage_config->GitRoot(),    // target_path
-                               tree_id,                      // git_hash
-                               "Keep referenced tree alive"  // message
+                               native_storage_config->GitRoot(),  // target_path
+                               tree_id,                           // git_hash
+                               "Keep referenced tree alive"       // message
                            },
                        .op_type = GitOpType::KEEP_TREE};
     critical_git_op_map->ConsumeAfterKeysReady(
@@ -685,10 +756,12 @@ void HandleKnownInOlderGenerationAfterTaggingAndInit(
          git_cas,
          fetch_absent,
          serve,
-         storage_config,
-         storage,
+         native_storage_config,
+         compat_storage_config,
+         compat_storage,
          resolve_symlinks_map,
          critical_git_op_map,
+         local_api,
          remote_api,
          ts,
          setter,
@@ -704,9 +777,12 @@ void HandleKnownInOlderGenerationAfterTaggingAndInit(
                                                     tree_id,
                                                     fetch_absent,
                                                     serve,
-                                                    storage_config,
+                                                    native_storage_config,
+                                                    compat_storage_config,
+                                                    compat_storage,
                                                     resolve_symlinks_map,
                                                     critical_git_op_map,
+                                                    local_api,
                                                     remote_api,
                                                     ts,
                                                     setter,
@@ -727,21 +803,23 @@ void HandleKnownInOlderGenerationAfterTagging(
     std::filesystem::path const& source,
     bool fetch_absent,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
-    gsl::not_null<Storage const*> const& storage,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    Storage const* compat_storage,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
+    IExecutionApi const* local_api,
     IExecutionApi const* remote_api,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
     ContentGitMap::LoggerPtr const& logger) {
     GitOpKey op_key = {.params =
                            {
-                               storage_config->GitRoot(),  // target_path
-                               "",                         // git_hash
-                               std::nullopt,               // message
-                               std::nullopt,               // source_path
-                               true                        // init_bare
+                               native_storage_config->GitRoot(),  // target_path
+                               "",                                // git_hash
+                               std::nullopt,                      // message
+                               std::nullopt,                      // source_path
+                               true                               // init_bare
                            },
                        .op_type = GitOpType::ENSURE_INIT};
     critical_git_op_map->ConsumeAfterKeysReady(
@@ -753,10 +831,12 @@ void HandleKnownInOlderGenerationAfterTagging(
          source,
          fetch_absent,
          serve,
-         storage_config,
-         storage,
+         native_storage_config,
+         compat_storage_config,
+         compat_storage,
          resolve_symlinks_map,
          critical_git_op_map,
+         local_api,
          remote_api,
          ts,
          setter,
@@ -775,17 +855,19 @@ void HandleKnownInOlderGenerationAfterTagging(
                 source,
                 fetch_absent,
                 serve,
-                storage_config,
-                storage,
+                native_storage_config,
+                compat_storage_config,
+                compat_storage,
                 resolve_symlinks_map,
                 critical_git_op_map,
+                local_api,
                 remote_api,
                 ts,
                 setter,
                 logger);
         },
-        [logger, target_path = storage_config->GitRoot()](auto const& msg,
-                                                          bool fatal) {
+        [logger, target_path = native_storage_config->GitRoot()](
+            auto const& msg, bool fatal) {
             (*logger)(fmt::format("While running critical Git op "
                                   "ENSURE_INIT for target {}:\n{}",
                                   target_path.string(),
@@ -799,16 +881,21 @@ void HandleKnownInOlderGeneration(
     std::size_t generation,
     bool fetch_absent,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
-    gsl::not_null<Storage const*> const& storage,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    Storage const* compat_storage,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
+    IExecutionApi const* local_api,
     IExecutionApi const* remote_api,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
     ContentGitMap::LoggerPtr const& logger) {
-    auto archive_tree_id_file = StorageUtils::GetArchiveTreeIDFile(
-        *storage_config, key.repo_type, key.archive.content, generation);
+    auto archive_tree_id_file =
+        StorageUtils::GetArchiveTreeIDFile(*native_storage_config,
+                                           key.repo_type,
+                                           key.archive.content_hash.Hash(),
+                                           generation);
     auto archive_tree_id = FileSystemManager::ReadFile(archive_tree_id_file);
     if (not archive_tree_id) {
         (*logger)(fmt::format("Failed to read tree id from file {}",
@@ -816,7 +903,7 @@ void HandleKnownInOlderGeneration(
                   /*fatal=*/true);
         return;
     }
-    auto source = storage_config->GitGenerationRoot(generation);
+    auto source = native_storage_config->GitGenerationRoot(generation);
 
     GitOpKey op_key = {.params =
                            {
@@ -833,10 +920,12 @@ void HandleKnownInOlderGeneration(
          source,
          fetch_absent,
          serve,
-         storage_config,
-         storage,
+         native_storage_config,
+         compat_storage_config,
+         compat_storage,
          resolve_symlinks_map,
          critical_git_op_map,
+         local_api,
          remote_api,
          ts,
          setter,
@@ -853,10 +942,12 @@ void HandleKnownInOlderGeneration(
                                                      source,
                                                      fetch_absent,
                                                      serve,
-                                                     storage_config,
-                                                     storage,
+                                                     native_storage_config,
+                                                     compat_storage_config,
+                                                     compat_storage,
                                                      resolve_symlinks_map,
                                                      critical_git_op_map,
+                                                     local_api,
                                                      remote_api,
                                                      ts,
                                                      setter,
@@ -883,8 +974,11 @@ auto CreateContentGitMap(
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     ServeApi const* serve,
-    gsl::not_null<StorageConfig const*> const& storage_config,
-    gsl::not_null<Storage const*> const& storage,
+    gsl::not_null<StorageConfig const*> const& native_storage_config,
+    StorageConfig const* compat_storage_config,
+    gsl::not_null<Storage const*> const& native_storage,
+    Storage const* compat_storage,
+    IExecutionApi const* local_api,
     IExecutionApi const* remote_api,
     bool fetch_absent,
     gsl::not_null<JustMRProgress*> const& progress,
@@ -897,8 +991,11 @@ auto CreateContentGitMap(
                            additional_mirrors,
                            ca_info,
                            serve,
-                           storage,
-                           storage_config,
+                           native_storage_config,
+                           compat_storage_config,
+                           native_storage,
+                           compat_storage,
+                           local_api,
                            remote_api,
                            fetch_absent,
                            progress](auto ts,
@@ -906,31 +1003,38 @@ auto CreateContentGitMap(
                                      auto logger,
                                      auto /* unused */,
                                      auto const& key) {
-        auto archive_tree_id_file = StorageUtils::GetArchiveTreeIDFile(
-            *storage_config, key.repo_type, key.archive.content);
+        auto archive_tree_id_file =
+            StorageUtils::GetArchiveTreeIDFile(*native_storage_config,
+                                               key.repo_type,
+                                               key.archive.content_hash.Hash());
         if (FileSystemManager::Exists(archive_tree_id_file)) {
             HandleLocallyKnownTree(key,
                                    archive_tree_id_file,
                                    fetch_absent,
                                    serve,
-                                   storage_config,
+                                   native_storage_config,
+                                   compat_storage_config,
+                                   compat_storage,
                                    resolve_symlinks_map,
                                    critical_git_op_map,
+                                   local_api,
                                    remote_api,
                                    ts,
                                    setter,
                                    logger);
         }
-        else if (auto generation =
-                     IdFileExistsInOlderGeneration(storage_config, key)) {
+        else if (auto generation = IdFileExistsInOlderGeneration(
+                     native_storage_config, key)) {
             HandleKnownInOlderGeneration(key,
                                          *generation,
                                          fetch_absent,
                                          serve,
-                                         storage_config,
-                                         storage,
+                                         native_storage_config,
+                                         compat_storage_config,
+                                         compat_storage,
                                          resolve_symlinks_map,
                                          critical_git_op_map,
+                                         local_api,
                                          remote_api,
                                          ts,
                                          setter,
@@ -942,18 +1046,18 @@ auto CreateContentGitMap(
                 // request the resolved subdir tree from the serve endpoint, if
                 // given
                 if (serve != nullptr) {
-                    auto serve_result =
-                        serve->RetrieveTreeFromArchive(key.archive.content,
-                                                       key.repo_type,
-                                                       key.subdir,
-                                                       key.pragma_special,
-                                                       /*sync_tree = */ false);
+                    auto const serve_result = serve->RetrieveTreeFromArchive(
+                        key.archive.content_hash.Hash(),
+                        key.repo_type,
+                        key.subdir,
+                        key.pragma_special,
+                        /*sync_tree = */ false);
                     if (serve_result) {
                         // set the workspace root as absent
                         progress->TaskTracker().Stop(key.archive.origin);
                         (*setter)(std::pair(
                             nlohmann::json::array(
-                                {FileRoot::kGitTreeMarker, *serve_result}),
+                                {FileRoot::kGitTreeMarker, serve_result->tree}),
                             /*is_cache_hit = */ false));
                         return;
                     }
@@ -963,7 +1067,7 @@ auto CreateContentGitMap(
                         (*logger)(
                             fmt::format("Serve endpoint failed to set up root "
                                         "from known archive content {}",
-                                        key.archive.content),
+                                        key.archive.content_hash.Hash()),
                             /*fatal=*/true);
                         return;
                     }
@@ -973,16 +1077,19 @@ auto CreateContentGitMap(
                 // a serve endpoint exists we can upload it the root ourselves;
 
                 // check if content already in CAS
-                auto const& cas = storage->CAS();
-                auto digest = ArtifactDigest(key.archive.content, 0, false);
+                auto const& native_cas = native_storage->CAS();
+                auto const digest = ArtifactDigest{key.archive.content_hash, 0};
                 if (auto content_cas_path =
-                        cas.BlobPath(digest, /*is_executable=*/false)) {
+                        native_cas.BlobPath(digest, /*is_executable=*/false)) {
                     ExtractAndImportToGit(key,
                                           *content_cas_path,
                                           archive_tree_id_file,
                                           /*is_absent = */ true,
                                           serve,
-                                          storage_config,
+                                          native_storage_config,
+                                          compat_storage_config,
+                                          compat_storage,
+                                          local_api,
                                           remote_api,
                                           critical_git_op_map,
                                           import_to_git_map,
@@ -999,11 +1106,11 @@ auto CreateContentGitMap(
                 GitOpKey op_key = {
                     .params =
                         {
-                            storage_config->GitRoot(),  // target_path
-                            "",                         // git_hash
-                            std::nullopt,               // message
-                            std::nullopt,               // source_path
-                            true                        // init_bare
+                            native_storage_config->GitRoot(),  // target_path
+                            "",                                // git_hash
+                            std::nullopt,                      // message
+                            std::nullopt,                      // source_path
+                            true                               // init_bare
                         },
                     .op_type = GitOpType::ENSURE_INIT};
                 critical_git_op_map->ConsumeAfterKeysReady(
@@ -1019,8 +1126,11 @@ auto CreateContentGitMap(
                      additional_mirrors,
                      ca_info,
                      serve,
-                     storage,
-                     storage_config,
+                     native_storage_config,
+                     compat_storage_config,
+                     native_storage,
+                     compat_storage,
+                     local_api,
                      remote_api,
                      progress,
                      ts,
@@ -1044,40 +1154,46 @@ auto CreateContentGitMap(
                         // verify if local Git knows content blob
                         auto wrapped_logger =
                             std::make_shared<AsyncMapConsumerLogger>(
-                                [&logger, blob = key.archive.content](
+                                [&logger,
+                                 hash = key.archive.content_hash.Hash()](
                                     auto const& msg, bool fatal) {
                                     (*logger)(
                                         fmt::format("While verifying presence "
                                                     "of blob {}:\n{}",
-                                                    blob,
+                                                    hash,
                                                     msg),
                                         fatal);
                                 });
                         auto res = just_git_repo->TryReadBlob(
-                            key.archive.content, wrapped_logger);
+                            key.archive.content_hash.Hash(), wrapped_logger);
                         if (not res.first) {
                             // blob check failed
                             return;
                         }
-                        auto const& cas = storage->CAS();
+                        auto const& native_cas = native_storage->CAS();
                         if (res.second) {
                             // blob found; add it to CAS
-                            if (not cas.StoreBlob(*res.second,
-                                                  /*is_executable=*/false)) {
-                                (*logger)(fmt::format("Failed to store content "
-                                                      "{} to local CAS",
-                                                      key.archive.content),
+                            if (not native_cas.StoreBlob(
+                                    *res.second,
+                                    /*is_executable=*/false)) {
+                                (*logger)(fmt::format(
+                                              "Failed to store content "
+                                              "{} to local CAS",
+                                              key.archive.content_hash.Hash()),
                                           /*fatal=*/true);
                                 return;
                             }
-                            if (auto content_cas_path = cas.BlobPath(
+                            if (auto content_cas_path = native_cas.BlobPath(
                                     digest, /*is_executable=*/false)) {
                                 ExtractAndImportToGit(key,
                                                       *content_cas_path,
                                                       archive_tree_id_file,
                                                       /*is_absent=*/true,
                                                       serve,
-                                                      storage_config,
+                                                      native_storage_config,
+                                                      compat_storage_config,
+                                                      compat_storage,
+                                                      local_api,
                                                       remote_api,
                                                       critical_git_op_map,
                                                       import_to_git_map,
@@ -1105,17 +1221,20 @@ auto CreateContentGitMap(
                                        .filename()
                                        .string());
                         StorageUtils::AddDistfileToCAS(
-                            *storage, repo_distfile, just_mr_paths);
+                            *native_storage, repo_distfile, just_mr_paths);
                         // check if content is in CAS now
-                        if (auto content_cas_path =
-                                cas.BlobPath(digest, /*is_executable=*/false)) {
+                        if (auto content_cas_path = native_cas.BlobPath(
+                                digest, /*is_executable=*/false)) {
                             progress->TaskTracker().Stop(key.archive.origin);
                             ExtractAndImportToGit(key,
                                                   *content_cas_path,
                                                   archive_tree_id_file,
                                                   /*is_absent=*/true,
                                                   serve,
-                                                  storage_config,
+                                                  native_storage_config,
+                                                  compat_storage_config,
+                                                  compat_storage,
+                                                  local_api,
                                                   remote_api,
                                                   critical_git_op_map,
                                                   import_to_git_map,
@@ -1129,10 +1248,10 @@ auto CreateContentGitMap(
                         // report not being able to set up this root as absent
                         (*logger)(fmt::format("Cannot create workspace root as "
                                               "absent for content {}.",
-                                              key.archive.content),
+                                              key.archive.content_hash.Hash()),
                                   /*fatal=*/true);
                     },
-                    [logger, target_path = storage_config->GitRoot()](
+                    [logger, target_path = native_storage_config->GitRoot()](
                         auto const& msg, bool fatal) {
                         (*logger)(fmt::format("While running critical Git op "
                                               "ENSURE_INIT for target {}:\n{}",
@@ -1148,8 +1267,8 @@ auto CreateContentGitMap(
                     {key.archive},
                     [archive_tree_id_file,
                      key,
-                     storage,
-                     storage_config,
+                     native_storage_config,
+                     native_storage,
                      critical_git_op_map,
                      import_to_git_map,
                      resolve_symlinks_map,
@@ -1157,11 +1276,12 @@ auto CreateContentGitMap(
                      setter,
                      logger]([[maybe_unused]] auto const& values) {
                         // content is in local CAS now
-                        auto const& cas = storage->CAS();
+                        auto const& native_cas = native_storage->CAS();
                         auto content_cas_path =
-                            cas.BlobPath(ArtifactDigest(
-                                             key.archive.content, 0, false),
-                                         /*is_executable=*/false)
+                            native_cas
+                                .BlobPath(
+                                    ArtifactDigest{key.archive.content_hash, 0},
+                                    /*is_executable=*/false)
                                 .value();
                         // root can only be present, so default all arguments
                         // that refer to a serve endpoint
@@ -1170,7 +1290,10 @@ auto CreateContentGitMap(
                                               archive_tree_id_file,
                                               /*is_absent=*/false,
                                               /*serve=*/nullptr,
-                                              storage_config,
+                                              native_storage_config,
+                                              /*compat_storage_config=*/nullptr,
+                                              /*compat_storage=*/nullptr,
+                                              /*local_api=*/nullptr,
                                               /*remote_api=*/nullptr,
                                               critical_git_op_map,
                                               import_to_git_map,
@@ -1179,11 +1302,11 @@ auto CreateContentGitMap(
                                               setter,
                                               logger);
                     },
-                    [logger, content = key.archive.content](auto const& msg,
-                                                            bool fatal) {
+                    [logger, hash = key.archive.content_hash.Hash()](
+                        auto const& msg, bool fatal) {
                         (*logger)(fmt::format("While ensuring content {} is in "
                                               "CAS:\n{}",
-                                              content,
+                                              hash,
                                               msg),
                                   fatal);
                     });

@@ -32,8 +32,8 @@ constexpr std::size_t kOIDHexSize{GIT_OID_HEXSZ};
 
 auto GitLastError() noexcept -> std::string {
 #ifndef BOOTSTRAP_BUILD_TOOL
-    git_error const* err{nullptr};
-    if ((err = git_error_last()) != nullptr and err->message != nullptr) {
+    git_error const* const err = git_error_last();
+    if (err != nullptr and err->message != nullptr) {
         return fmt::format("error code {}: {}", err->klass, err->message);
     }
 #endif  // BOOTSTRAP_BUILD_TOOL
@@ -79,38 +79,6 @@ void odb_closer(gsl::owner<git_odb*> odb) {
 void tree_closer(gsl::owner<git_tree*> tree) {
 #ifndef BOOTSTRAP_BUILD_TOOL
     git_tree_free(tree);
-#endif
-}
-
-void treebuilder_closer(gsl::owner<git_treebuilder*> builder) {
-#ifndef BOOTSTRAP_BUILD_TOOL
-    git_treebuilder_free(builder);
-#endif
-}
-
-void index_closer(gsl::owner<git_index*> index) {
-#ifndef BOOTSTRAP_BUILD_TOOL
-    git_index_free(index);
-#endif
-}
-
-void strarray_closer(gsl::owner<git_strarray*> strarray) {
-#ifndef BOOTSTRAP_BUILD_TOOL
-    git_strarray_dispose(strarray);
-#endif
-}
-
-void strarray_deleter(gsl::owner<git_strarray*> strarray) {
-#ifndef BOOTSTRAP_BUILD_TOOL
-    if (strarray->strings != nullptr) {
-        for (std::size_t i = 0; i < strarray->count; ++i) {
-            // NOLINTNEXTLINE(cppcoreguidelines-owning-memory,cppcoreguidelines-pro-bounds-pointer-arithmetic)
-            delete[] strarray->strings[i];
-        }
-        delete[] strarray->strings;
-        strarray->strings = nullptr;
-        strarray->count = 0;
-    }
 #endif
 }
 
