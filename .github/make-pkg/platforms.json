@@ -56,7 +56,8 @@
   { "type": "deb"
   , "image": "debian:sid"
   , "build-depends":
-    [ "protobuf-compiler"
+    [ "clang"
+    , "protobuf-compiler"
     , "protobuf-compiler-grpc"
     , "libprotobuf-dev"
     , "libgrpc++-dev"
