@@ -6,7 +6,7 @@ Index: b/src/other_tools/just_mr/setup_utils.cpp
 ===================================================================
 --- a/src/other_tools/just_mr/setup_utils.cpp
 +++ b/src/other_tools/just_mr/setup_utils.cpp
-@@ -205,7 +205,7 @@ auto ReadConfiguration(
+@@ -186,7 +186,7 @@ auto ReadConfiguration(
                                  absent_file_opt->string());
                      std::exit(kExitConfigError);
                  }
