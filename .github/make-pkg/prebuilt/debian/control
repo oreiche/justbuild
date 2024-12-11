@@ -13,7 +13,7 @@ Package: justbuild
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Recommends: python3, bash-completion, git (>= 2.29)
-Description: Justbuild generic build system
+Description: Generic build system
  Justbuild is a generic build system supporting multi-repository builds. A
  peculiarity of the tool is the separation between global names and physical
  location on the one hand, and logical paths used for actions and installation
