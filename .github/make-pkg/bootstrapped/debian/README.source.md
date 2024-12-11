@@ -5,7 +5,7 @@
 The archives contain only [Protocol buffers](https://protobuf.dev/) (an
 interface description language) that are meant to be consumed as sources by
 [protoc](https://packages.debian.org/de/sid/protobuf-compiler) and
-[grpc](https://packages.debian.org/de/bookworm/protobuf-compiler-grpc). These
+[grpc](https://packages.debian.org/de/sid/protobuf-compiler-grpc). These
 files are only required during the build process and will not be shipped as part
 of the final binary package.
 
