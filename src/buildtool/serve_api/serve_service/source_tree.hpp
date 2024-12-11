@@ -23,16 +23,16 @@
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
-#include <vector>
+
+#include <grpcpp/grpcpp.h>
 
 #include "gsl/gsl"
 #include "justbuild/just_serve/just_serve.grpc.pb.h"
-#include "src/buildtool/common/remote/remote_common.hpp"
+#include "justbuild/just_serve/just_serve.pb.h"
 #include "src/buildtool/execution_api/common/api_bundle.hpp"
-#include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/local/context.hpp"
-#include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/file_system/git_types.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
 #include "src/buildtool/file_system/symlinks_map/resolve_symlinks_map.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -137,7 +137,7 @@ class SourceTreeService final
     ApiBundle const& apis_;
     gsl::not_null<LocalContext const*> native_context_;
     LocalContext const* compat_context_;
-    mutable std::shared_mutex mutex_;
+    mutable std::mutex mutex_;
     std::shared_ptr<Logger> logger_{std::make_shared<Logger>("serve-service")};
     // symlinks resolver map
     ResolveSymlinksMap resolve_symlinks_map_{CreateResolveSymlinksMap()};

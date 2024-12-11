@@ -15,14 +15,21 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_FILE_SYSTEM_FILE_ROOT_HPP
 #define INCLUDED_SRC_BUILDTOOL_FILE_SYSTEM_FILE_ROOT_HPP
 
+#include <algorithm>
+#include <compare>
+#include <cstddef>
+#include <exception>
 #include <filesystem>
+#include <functional>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 
+#include "fmt/core.h"
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
@@ -32,11 +39,16 @@
 #include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/file_system/git_cas.hpp"
 #include "src/buildtool/file_system/git_tree.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/concepts.hpp"
-#include "src/utils/cpp/json.hpp"
+#include "src/utils/cpp/expected.hpp"
+#include "src/utils/cpp/hash_combine.hpp"
+// Keep it to ensure fmt::format works on JSON objects
+#include "src/utils/cpp/json.hpp"  // IWYU pragma: keep
 
 /// FilteredIterator is an helper class to allow for iteration over
 /// directory-only or file-only entries stored inside the class
@@ -100,15 +112,57 @@ class FileRoot {
         gsl::not_null<GitCASPtr> cas;
         gsl::not_null<GitTreePtr> tree;
     };
+
+  public:
+    struct ComputedRoot {
+        std::string repository;
+        std::string target_module;
+        std::string target_name;
+        nlohmann::json config;
+
+        [[nodiscard]] auto operator==(
+            ComputedRoot const& other) const noexcept {
+            return (repository == other.repository) and
+                   (target_module == other.target_module) and
+                   (target_name == other.target_name) and
+                   (config == other.config);
+        }
+
+        [[nodiscard]] auto operator<(ComputedRoot const& other) const noexcept {
+            if (auto const res = repository <=> other.repository; res != 0) {
+                return res < 0;
+            }
+            if (auto const res = target_module <=> other.target_module;
+                res != 0) {
+                return res < 0;
+            }
+            if (auto const res = target_name <=> other.target_name; res != 0) {
+                return res < 0;
+            }
+            return config < other.config;
+        }
+
+        [[nodiscard]] auto ToString() const -> std::string {
+            return fmt::format("([\"@\", {}, {}, {}], {})",
+                               nlohmann::json(repository).dump(),
+                               nlohmann::json(target_module).dump(),
+                               nlohmann::json(target_name).dump(),
+                               config.dump());
+        }
+    };
+
+  private:
     // absent roots are defined by a tree hash with no witnessing repository
     using absent_root_t = std::string;
-    using root_t = std::variant<fs_root_t, RootGit, absent_root_t>;
+    using root_t =
+        std::variant<fs_root_t, RootGit, absent_root_t, ComputedRoot>;
 
   public:
     static constexpr auto kGitTreeMarker = "git tree";
     static constexpr auto kGitTreeIgnoreSpecialMarker =
         "git tree ignore-special";
     static constexpr auto kFileIgnoreSpecialMarker = "file ignore-special";
+    static constexpr auto kComputedMarker = "computed";
 
     class DirectoryEntries {
         friend class FileRoot;
@@ -325,6 +379,14 @@ class FileRoot {
              gsl::not_null<GitTreePtr> const& tree,
              bool ignore_special = false) noexcept
         : root_{RootGit{cas, tree}}, ignore_special_{ignore_special} {}
+    FileRoot(std::string repository,
+             std::string target_module,
+             std::string target_name,
+             nlohmann::json config) noexcept
+        : root_{ComputedRoot{std::move(repository),
+                             std::move(target_module),
+                             std::move(target_name),
+                             std::move(config)}} {}
 
     [[nodiscard]] static auto FromGit(std::filesystem::path const& repo_path,
                                       std::string const& git_tree_id,
@@ -625,6 +687,22 @@ class FileRoot {
         return std::nullopt;
     }
 
+    [[nodiscard]] auto IsComputed() const noexcept -> bool {
+        return std::holds_alternative<ComputedRoot>(root_);
+    }
+
+    [[nodiscard]] auto GetComputedDescription() const noexcept
+        -> std::optional<ComputedRoot> {
+        if (std::holds_alternative<ComputedRoot>(root_)) {
+            try {
+                return std::get<ComputedRoot>(root_);
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] auto IgnoreSpecial() const noexcept -> bool {
         return ignore_special_;
     }
@@ -634,31 +712,30 @@ class FileRoot {
     /// nullopt on errors.
     [[nodiscard]] static auto ParseRoot(std::string const& repo,
                                         std::string const& keyword,
-                                        nlohmann::json const& root,
-                                        gsl::not_null<std::string*> error_msg)
-        -> std::optional<
-            std::pair<FileRoot, std::optional<std::filesystem::path>>> {
+                                        nlohmann::json const& root)
+        -> expected<std::pair<FileRoot, std::optional<std::filesystem::path>>,
+                    std::string> {
+        using ResultType =
+            std::pair<FileRoot, std::optional<std::filesystem::path>>;
         if ((not root.is_array()) or root.empty()) {
-            *error_msg = fmt::format(
+            return unexpected{fmt::format(
                 "Expected {} for {} to be of the form [<scheme>, ...], but "
                 "found {}",
                 keyword,
                 repo,
-                root.dump());
-            return std::nullopt;
+                root.dump())};
         }
         if (root[0] == "file") {
             if (root.size() != 2 or (not root[1].is_string())) {
-                *error_msg = fmt::format(
+                return unexpected{fmt::format(
                     "\"file\" scheme expects precisely one string argument, "
                     "but found {} for {} of repository {}",
                     root.dump(),
                     keyword,
-                    repo);
-                return std::nullopt;
+                    repo)};
             }
             auto path = std::filesystem::path{root[1].get<std::string>()};
-            return std::pair(FileRoot{path}, std::move(path));
+            return ResultType{FileRoot{path}, std::move(path)};
         }
         if (root[0] == FileRoot::kGitTreeMarker) {
             bool const has_one_arg = root.size() == 2 and root[1].is_string();
@@ -666,43 +743,40 @@ class FileRoot {
                                       root[1].is_string() and
                                       root[2].is_string();
             if (not has_one_arg and not has_two_args) {
-                *error_msg = fmt::format(
+                return unexpected{fmt::format(
                     "\"git tree\" scheme expects one or two string "
                     "arguments, but found {} for {} of repository {}",
                     root.dump(),
                     keyword,
-                    repo);
-                return std::nullopt;
+                    repo)};
             }
             if (root.size() == 3) {
                 if (auto git_root = FileRoot::FromGit(root[2], root[1])) {
-                    return std::pair(std::move(*git_root), std::nullopt);
+                    return ResultType{std::move(*git_root), std::nullopt};
                 }
-                *error_msg = fmt::format(
+                return unexpected{fmt::format(
                     "Could not create file root for {}tree id {}",
                     root.size() == 3
                         ? fmt::format("git repository {} and ", root[2])
                         : "",
-                    root[1]);
-                return std::nullopt;
+                    root[1])};
             }
             // return absent root
-            return std::pair(FileRoot{std::string{root[1]}}, std::nullopt);
+            return ResultType{FileRoot{std::string{root[1]}}, std::nullopt};
         }
         if (root[0] == FileRoot::kFileIgnoreSpecialMarker) {
             if (root.size() != 2 or (not root[1].is_string())) {
-                *error_msg = fmt::format(
+                return unexpected{fmt::format(
                     "\"file ignore-special\" scheme expects precisely "
                     "one string "
                     "argument, but found {} for {} of repository {}",
                     root.dump(),
                     keyword,
-                    repo);
-                return std::nullopt;
+                    repo)};
             }
             auto path = std::filesystem::path{root[1].get<std::string>()};
-            return std::pair(FileRoot{path, /*ignore_special=*/true},
-                             std::move(path));
+            return ResultType{FileRoot{path, /*ignore_special=*/true},
+                              std::move(path)};
         }
         if (root[0] == FileRoot::kGitTreeIgnoreSpecialMarker) {
             bool const has_one_arg = root.size() == 2 and root[1].is_string();
@@ -710,39 +784,56 @@ class FileRoot {
                                       root[1].is_string() and
                                       root[2].is_string();
             if (not has_one_arg and not has_two_args) {
-                *error_msg = fmt::format(
+                return unexpected{fmt::format(
                     "\"git tree ignore-special\" scheme expects one or two "
                     "string arguments, but found {} for {} of repository {}",
                     root.dump(),
                     keyword,
-                    repo);
-                return std::nullopt;
+                    repo)};
             }
             if (root.size() == 3) {
                 if (auto git_root = FileRoot::FromGit(
                         root[2], root[1], /*ignore_special=*/true)) {
-                    return std::pair(std::move(*git_root), std::nullopt);
+                    return ResultType{std::move(*git_root), std::nullopt};
                 }
-                *error_msg = fmt::format(
+                return unexpected{fmt::format(
                     "Could not create ignore-special file root for {}tree id "
                     "{}",
                     root.size() == 3
                         ? fmt::format("git repository {} and ", root[2])
                         : "",
-                    root[1]);
-                return std::nullopt;
+                    root[1])};
             }
             // return absent root
-            return std::pair(
+            return ResultType{
                 FileRoot{std::string{root[1]}, /*ignore_special=*/true},
-                std::nullopt);
+                std::nullopt};
         }
-        *error_msg = fmt::format(
+        if (root[0] == FileRoot::kComputedMarker) {
+            // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+            if (root.size() != 5 or (not root[1].is_string()) or
+                (not root[2].is_string()) or (not root[3].is_string()) or
+                (not root[4].is_object())) {
+                return unexpected{fmt::format(
+                    "{} scheme requires, in this order, the arugments root, "
+                    "module, name, config. However found {} for {} of "
+                    "repository {}",
+                    kComputedMarker,
+                    root.dump(),
+                    keyword,
+                    repo)};
+            }
+            return ResultType{FileRoot{std::string{root[1]},
+                                       std::string{root[2]},
+                                       std::string{root[3]},
+                                       root[4]},
+                              std::nullopt};
+        }
+        return unexpected{fmt::format(
             "Unknown scheme in the specification {} of {} of repository {}",
             root.dump(),
             keyword,
-            repo);
-        return std::nullopt;
+            repo)};
     }
 
   private:
@@ -752,5 +843,20 @@ class FileRoot {
     // there are no more fast tree lookups, i.e., tree traversal is a must.
     bool ignore_special_{};
 };
+
+namespace std {
+template <>
+struct hash<FileRoot::ComputedRoot> {
+    [[nodiscard]] auto operator()(FileRoot::ComputedRoot const& cr) const
+        -> std::size_t {
+        size_t seed{};
+        hash_combine<std::string>(&seed, cr.repository);
+        hash_combine<std::string>(&seed, cr.target_module);
+        hash_combine<std::string>(&seed, cr.target_name);
+        hash_combine<nlohmann::json>(&seed, cr.config);
+        return seed;
+    }
+};
+}  // namespace std
 
 #endif  // INCLUDED_SRC_BUILDTOOL_FILE_SYSTEM_FILE_ROOT_HPP

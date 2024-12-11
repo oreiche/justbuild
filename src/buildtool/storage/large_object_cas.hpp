@@ -17,11 +17,13 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
@@ -199,6 +201,6 @@ class LargeObjectCAS final {
 };
 
 // NOLINTNEXTLINE(misc-header-include-cycle)
-#include "src/buildtool/storage/large_object_cas.tpp"
+#include "src/buildtool/storage/large_object_cas.tpp"  // IWYU pragma: export
 
 #endif  // INCLUDED_SRC_BUILDTOOL_STORAGE_LARGE_OBJECT_CAS_HPP

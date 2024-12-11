@@ -16,7 +16,14 @@
 
 #include "src/buildtool/serve_api/serve_service/target.hpp"
 
+#include <exception>
+#include <functional>
+#include <optional>
+#include <utility>
+
 #include "fmt/core.h"
+#include "google/protobuf/repeated_ptr_field.h"
+#include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/base_maps/entity_name.hpp"
 #include "src/buildtool/build_engine/base_maps/entity_name_data.hpp"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
@@ -27,10 +34,12 @@
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/artifact_digest_factory.hpp"
-#include "src/buildtool/common/remote/retry_config.hpp"
+#include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/common/cli.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_engine/executor/context.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
@@ -45,9 +54,14 @@
 #include "src/buildtool/progress_reporting/progress_reporter.hpp"
 #include "src/buildtool/serve_api/serve_service/target_utils.hpp"
 #include "src/buildtool/storage/backend_description.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/buildtool/storage/repository_garbage_collector.hpp"
+#include "src/buildtool/storage/storage.hpp"
+#include "src/buildtool/storage/target_cache.hpp"
+#include "src/buildtool/storage/target_cache_entry.hpp"
 #include "src/buildtool/storage/target_cache_key.hpp"
+#include "src/utils/cpp/tmp_dir.hpp"
 
 auto TargetService::GetDispatchList(
     ArtifactDigest const& dispatch_digest) noexcept
@@ -436,7 +450,6 @@ auto TargetService::ServeTarget(
                               error_msg};
     }
 
-    BuildMaps::Target::ResultTargetMap result_map{serve_config_.jobs};
     auto configured_target = BuildMaps::Target::ConfiguredTarget{
         .target = std::move(*entity), .config = std::move(config)};
 
@@ -463,37 +476,38 @@ auto TargetService::ServeTarget(
                                .serve = serve_};
 
     // analyse the configured target
-    auto result = AnalyseTarget(&analyse_ctx,
-                                configured_target,
-                                &result_map,
-                                serve_config_.jobs,
-                                std::nullopt /*request_action_input*/,
-                                &logger);
+    auto analyse_result = AnalyseTarget(&analyse_ctx,
+                                        configured_target,
+                                        serve_config_.jobs,
+                                        std::nullopt /*request_action_input*/,
+                                        &logger);
 
-    if (not result) {
+    if (not analyse_result) {
         // report failure locally, to keep track of it...
         auto msg = fmt::format("Failed to analyse target {}",
                                configured_target.target.ToString());
         logger_->Emit(LogLevel::Warning, "{}", msg);
         return HandleFailureLog(tmp_log, "analysis", response);
     }
-    logger_->Emit(LogLevel::Info, "Analysed target {}", result->id.ToString());
+    logger_->Emit(
+        LogLevel::Info, "Analysed target {}", analyse_result->id.ToString());
 
     // get the output artifacts
-    auto const [artifacts, runfiles] = ReadOutputArtifacts(result->target);
+    auto const [artifacts, runfiles] =
+        ReadOutputArtifacts(analyse_result->target);
 
-    // get the result map outputs
+    // get the analyse_result map outputs
     auto const& [actions, blobs, trees] =
-        result_map.ToResult(&stats, &progress, &logger);
+        analyse_result->result_map.ToResult(&stats, &progress, &logger);
 
     // collect cache targets and artifacts for target-level caching
-    auto const cache_targets = result_map.CacheTargets();
+    auto const cache_targets = analyse_result->result_map.CacheTargets();
     auto cache_artifacts = CollectNonKnownArtifacts(cache_targets);
 
-    // Clean up result map, now that it is no longer needed
+    // Clean up analyse_result map, now that it is no longer needed
     {
         TaskSystem ts{serve_config_.jobs};
-        result_map.Clear(&ts);
+        analyse_result->result_map.Clear(&ts);
     }
 
     auto jobs = serve_config_.build_jobs;

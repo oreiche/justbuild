@@ -1,0 +1,86 @@
+{ "basic":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["basic"]
+  , "test": ["basic.sh"]
+  , "deps": [["", "tool-under-test"]]
+  , "keep":
+    [ "out/base/TARGETS"
+    , "out/derived/out"
+    , "out/other-derived/out"
+    , "out/log"
+    , "out/log.root"
+    , "out/log2"
+    ]
+  }
+, "mr_computed_setup":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["mr_computed_setup"]
+  , "test": ["mr_computed_setup.sh"]
+  , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
+  }
+, "error-reporting":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["error-reporting"]
+  , "test": ["error-reporting.sh"]
+  , "deps": [["", "tool-under-test"]]
+  , "keep":
+    ["out/not-export.log", "out/not-content-fixed.log", "out/cycle.log"]
+  }
+, "error-remote":
+  { "type": ["end-to-end", "with remote"]
+  , "name": ["error-remote"]
+  , "test": ["error-remote.sh"]
+  , "deps": [["", "tool-under-test"]]
+  , "keep": ["out/build.log"]
+  }
+, "basic remote build":
+  { "type": ["end-to-end", "with remote"]
+  , "name": ["remote"]
+  , "test": ["remote.sh"]
+  , "deps": [["", "tool-under-test"]]
+  , "keep": ["out/log", "out/log.root"]
+  }
+, "remote sharding":
+  { "type": ["end-to-end", "with remote"]
+  , "name": ["sharding"]
+  , "test": ["sharding.sh"]
+  , "deps": [["", "tool-under-test"]]
+  , "keep":
+    [ "out/base-local.log"
+    , "out/derived-local.log"
+    , "out/derived-local/out"
+    , "out/derived-local2.log"
+    , "out/derived-remote.log"
+    , "out/derived-remote/out"
+    ]
+  }
+, "artifacts-only":
+  { "type": ["end-to-end", "with remote"]
+  , "name": ["artifacts-only"]
+  , "test": ["artifacts-only.sh"]
+  , "deps": [["", "tool-under-test"]]
+  }
+, "absent base of root (data)":
+  {"type": "install", "files": {"TARGETS": "targets.absent-base"}}
+, "absent base of root":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["absent-base"]
+  , "test": ["absent-base.sh"]
+  , "deps": [["", "tool-under-test"]]
+  , "repos": ["absent base of root (data)"]
+  }
+, "TESTS":
+  { "type": ["@", "rules", "test", "suite"]
+  , "stage": ["computed-roots"]
+  , "deps":
+    [ "absent base of root"
+    , "artifacts-only"
+    , "basic"
+    , "basic remote build"
+    , "error-remote"
+    , "error-reporting"
+    , "mr_computed_setup"
+    , "remote sharding"
+    ]
+  }
+}

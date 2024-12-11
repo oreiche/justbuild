@@ -14,6 +14,10 @@
 
 #include "src/buildtool/main/cli.hpp"
 
+#include <cstdlib>
+#include <exception>
+
+#include "CLI/CLI.hpp"
 #include "gsl/gsl"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
@@ -51,6 +55,8 @@ auto SetupAnalyseCommandArguments(
     SetupServeEndpointArguments(app, &clargs->serve);
     SetupCommonAuthArguments(app, &clargs->auth);
     SetupClientAuthArguments(app, &clargs->cauth);
+    SetupCommonBuildArguments(app, &clargs->build);
+    SetupBuildArguments(app, &clargs->build);
     SetupDiagnosticArguments(app, &clargs->diagnose);
     SetupProtocolArguments(app, &clargs->protocol);
     SetupRetryArguments(app, &clargs->retry);
@@ -71,6 +77,7 @@ auto SetupBuildCommandArguments(
     SetupClientAuthArguments(app, &clargs->cauth);
     SetupCommonBuildArguments(app, &clargs->build);
     SetupBuildArguments(app, &clargs->build);
+    SetupExtendedBuildArguments(app, &clargs->build);
     SetupTCArguments(app, &clargs->tc);
     SetupProtocolArguments(app, &clargs->protocol);
     SetupRetryArguments(app, &clargs->retry);
@@ -134,6 +141,7 @@ auto SetupTraverseCommandArguments(
     SetupGraphArguments(app, &clargs->graph);  // instead of analysis
     SetupCommonBuildArguments(app, &clargs->build);
     SetupBuildArguments(app, &clargs->build);
+    SetupExtendedBuildArguments(app, &clargs->build);
     SetupStageArguments(app, &clargs->stage);
     SetupProtocolArguments(app, &clargs->protocol);
 }

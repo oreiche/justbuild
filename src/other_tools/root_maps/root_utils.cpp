@@ -14,6 +14,10 @@
 
 #include "src/other_tools/root_maps/root_utils.hpp"
 
+#include <functional>
+#include <memory>
+#include <vector>
+
 #include "fmt/core.h"
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
@@ -21,8 +25,9 @@
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/serve/mr_git_api.hpp"
-#include "src/buildtool/execution_api/serve/utils.hpp"
+#include "src/buildtool/execution_api/utils/rehash_utils.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 auto CheckServeHasAbsentRoot(ServeApi const& serve,
                              std::string const& tree_id,
@@ -87,10 +92,11 @@ auto EnsureAbsentRootOnServe(
     ArtifactDigest remote_digest = *native_digest;
     if (compat_storage_config != nullptr) {
         // in compatible mode, get compatible digest from mapping, if exists
-        auto cached_obj = MRApiUtils::ReadRehashedDigest(*native_digest,
-                                                         *native_storage_config,
-                                                         *compat_storage_config,
-                                                         /*from_git=*/true);
+        auto cached_obj =
+            RehashUtils::ReadRehashedDigest(*native_digest,
+                                            *native_storage_config,
+                                            *compat_storage_config,
+                                            /*from_git=*/true);
         if (not cached_obj) {
             (*logger)(cached_obj.error(), /*fatal=*/true);
             return false;

@@ -24,6 +24,7 @@
   , "hdrs": ["object_cas.hpp"]
   , "deps":
     [ "file_storage"
+    , "object_type"
     , ["@", "gsl", "", "gsl"]
     , ["src/buildtool/common", "artifact_digest_factory"]
     , ["src/buildtool/common", "common"]
@@ -40,6 +41,7 @@
   , "hdrs": ["file_system_manager.hpp"]
   , "deps":
     [ "object_type"
+    , ["@", "fmt", "", "fmt"]
     , ["@", "gsl", "", "gsl"]
     , ["@", "json", "", "json"]
     , ["src/buildtool/logging", "log_level"]
@@ -57,9 +59,9 @@
   , "deps":
     [ "file_system_manager"
     , "object_type"
+    , ["@", "json", "", "json"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
-    , ["src/utils/cpp", "json"]
     ]
   , "stage": ["src", "buildtool", "file_system"]
   }
@@ -68,11 +70,16 @@
   , "name": ["git_cas"]
   , "hdrs": ["git_cas.hpp"]
   , "srcs": ["git_cas.cpp"]
-  , "deps": ["git_context", "git_utils", ["@", "gsl", "", "gsl"]]
+  , "deps":
+    [ "git_utils"
+    , "object_type"
+    , ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/logging", "log_level"]
+    ]
   , "stage": ["src", "buildtool", "file_system"]
   , "private-deps":
-    [ ["", "libgit2"]
-    , ["src/buildtool/logging", "log_level"]
+    [ "git_context"
+    , ["", "libgit2"]
     , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "hex_string"]
     , ["src/utils/cpp", "path"]
@@ -84,7 +91,8 @@
   , "hdrs": ["git_tree.hpp"]
   , "srcs": ["git_tree.cpp"]
   , "deps":
-    [ "git_repo"
+    [ "git_cas"
+    , "git_repo"
     , "object_type"
     , ["@", "gsl", "", "gsl"]
     , ["src/buildtool/multithreading", "atomic_value"]
@@ -92,9 +100,7 @@
     ]
   , "stage": ["src", "buildtool", "file_system"]
   , "private-deps":
-    [ "file_system_manager"
-    , ["", "libgit2"]
-    , ["src/buildtool/common", "common"]
+    [ ["src/buildtool/common", "common"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "path"]
@@ -107,10 +113,10 @@
   , "srcs": ["git_context.cpp"]
   , "stage": ["src", "buildtool", "file_system"]
   , "private-deps":
-    [ ["", "libgit2"]
+    [ ["@", "gsl", "", "gsl"]
+    , ["", "libgit2"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
-    , ["src/utils/cpp", "gsl"]
     ]
   }
 , "git_repo":
@@ -121,6 +127,8 @@
   , "deps":
     [ "git_cas"
     , "git_types"
+    , "git_utils"
+    , "object_type"
     , ["@", "gsl", "", "gsl"]
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/storage", "config"]
@@ -128,15 +136,17 @@
     ]
   , "stage": ["src", "buildtool", "file_system"]
   , "private-deps":
-    [ ["", "libgit2"]
+    [ "git_context"
+    , ["@", "fmt", "", "fmt"]
+    , ["", "libgit2"]
     , ["src/buildtool/common", "artifact_digest_factory"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
-    , ["src/utils/cpp", "gsl"]
+    , ["src/utils/cpp", "file_locking"]
     , ["src/utils/cpp", "hex_string"]
-    , ["src/utils/cpp", "path"]
+    , ["src/utils/cpp", "tmp_dir"]
     ]
   , "cflags": ["-pthread"]
   }
@@ -145,7 +155,7 @@
   , "name": ["git_utils"]
   , "hdrs": ["git_utils.hpp"]
   , "srcs": ["git_utils.cpp"]
-  , "deps": ["object_type", ["@", "gsl", "", "gsl"]]
+  , "deps": [["@", "gsl", "", "gsl"]]
   , "stage": ["src", "buildtool", "file_system"]
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]
@@ -167,7 +177,10 @@
   , "hdrs": ["file_root.hpp"]
   , "deps":
     [ "file_system_manager"
+    , "git_cas"
     , "git_tree"
+    , "object_type"
+    , ["@", "fmt", "", "fmt"]
     , ["@", "gsl", "", "gsl"]
     , ["@", "json", "", "json"]
     , ["src/buildtool/common", "artifact_description"]
@@ -179,6 +192,8 @@
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "concepts"]
+    , ["src/utils/cpp", "expected"]
+    , ["src/utils/cpp", "hash_combine"]
     , ["src/utils/cpp", "json"]
     ]
   , "stage": ["src", "buildtool", "file_system"]

@@ -12,19 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef INCLUDED_SRC_BUILDTOOL_EXECUTION_API_SERVE_UTILS_HPP
-#define INCLUDED_SRC_BUILDTOOL_EXECUTION_API_SERVE_UTILS_HPP
+#ifndef INCLUDED_SRC_BUILDTOOL_EXECUTION_API_UTILS_REHASH_UTILS_HPP
+#define INCLUDED_SRC_BUILDTOOL_EXECUTION_API_UTILS_REHASH_UTILS_HPP
 
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
+#include "gsl/gsl"
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/repository_config.hpp"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/utils/cpp/expected.hpp"
 
-namespace MRApiUtils {
+namespace RehashUtils {
 
 /// \brief Get a corresponding known object from a different local CAS, as
 /// stored in a mapping file, if exists.
@@ -59,6 +64,38 @@ namespace MRApiUtils {
                                        bool from_git = false) noexcept
     -> std::optional<std::string>;
 
-}  // namespace MRApiUtils
+[[nodiscard]] auto RehashDigest(
+    std::vector<Artifact::ObjectInfo> const& digests,
+    StorageConfig const& source_config,
+    StorageConfig const& target_config,
+    std::optional<gsl::not_null<ApiBundle const*>> apis)
+    -> expected<std::vector<Artifact::ObjectInfo>, std::string>;
 
-#endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_SERVE_UTILS_HPP
+[[nodiscard]] auto RehashGitDigest(
+    std::vector<Artifact::ObjectInfo> const& digests,
+    StorageConfig const& source_config,
+    StorageConfig const& target_config,
+    RepositoryConfig const& repo_config)
+    -> expected<std::vector<Artifact::ObjectInfo>, std::string>;
+
+class Rehasher {
+  public:
+    Rehasher(StorageConfig source_config,
+             StorageConfig target_config,
+             std::optional<gsl::not_null<ApiBundle const*>> apis)
+        : source_{std::move(source_config)},
+          target_{std::move(target_config)},
+          apis_{std::move(apis)} {}
+
+    [[nodiscard]] auto Rehash(Artifact::ObjectInfo const& info) const
+        -> expected<Artifact::ObjectInfo, std::string>;
+
+  private:
+    StorageConfig const source_;
+    StorageConfig const target_;
+    std::optional<gsl::not_null<ApiBundle const*>> const apis_;
+};
+
+}  // namespace RehashUtils
+
+#endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_UTILS_REHASH_UTILS_HPP

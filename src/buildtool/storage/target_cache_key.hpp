@@ -15,6 +15,8 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_STORAGE_TARGET_CACHE_KEY_HPP
 #define INCLUDED_SRC_BUILDTOOL_STORAGE_TARGET_CACHE_KEY_HPP
 
+#include <cstddef>
+#include <functional>
 #include <utility>
 
 #include "src/buildtool/common/artifact.hpp"
@@ -37,5 +39,15 @@ class TargetCacheKey {
   private:
     Artifact::ObjectInfo id_;
 };
+
+namespace std {
+template <>
+struct hash<TargetCacheKey> {
+    [[nodiscard]] auto operator()(TargetCacheKey const& key) const noexcept
+        -> std::size_t {
+        return std::hash<Artifact::ObjectInfo>{}(key.Id());
+    }
+};
+}  // namespace std
 
 #endif  // INCLUDED_SRC_BUILDTOOL_STORAGE_TARGET_CACHE_KEY_HPP

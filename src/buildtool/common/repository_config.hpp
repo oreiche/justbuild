@@ -16,6 +16,7 @@
 #define INCLUDED_SRC_BUILDTOOL_COMMON_REPOSITORY_CONFIG_HPP
 
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -29,6 +30,8 @@
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/git_cas.hpp"
+#include "src/buildtool/file_system/git_tree.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/multithreading/atomic_value.hpp"
 #include "src/buildtool/storage/storage.hpp"
 
@@ -55,13 +58,18 @@ class RepositoryConfig {
         repos_[repo].base_desc = info.BaseContentDescription();
         repos_[repo].info = std::move(info);
         repos_[repo].key.Reset();
+        duplicates_.Reset();
     }
 
     [[nodiscard]] auto SetGitCAS(
-        std::filesystem::path const& repo_path) noexcept {
-        git_cas_ = GitCAS::Open(repo_path);
+        std::filesystem::path const& repo_path,
+        LogLevel log_level = LogLevel::Warning) noexcept -> bool {
+        git_cas_ = GitCAS::Open(repo_path, log_level);
         return static_cast<bool>(git_cas_);
     }
+
+    void SetComputedRoot(FileRoot::ComputedRoot const& root,
+                         FileRoot const& value);
 
     [[nodiscard]] auto Info(std::string const& repo) const noexcept
         -> RepositoryInfo const* {
@@ -171,9 +179,13 @@ class RepositoryConfig {
     [[nodiscard]] auto Get(std::string const& repo,
                            std::function<T const*(RepositoryInfo const&)> const&
                                getter) const noexcept -> T const* {
-        if (auto const* info = Info(repo)) {
-            return getter(*info);
-        }
+        try {
+            if (auto const* info = Info(repo)) {
+                return getter(*info);
+            }
+        } catch (...) {
+            return nullptr;
+        };
         return nullptr;
     }
 

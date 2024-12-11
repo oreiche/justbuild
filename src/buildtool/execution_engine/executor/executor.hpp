@@ -17,37 +17,55 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <exception>
+#include <filesystem>
 #include <functional>
-#include <iostream>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
-#include <type_traits>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "fmt/core.h"
 #include "gsl/gsl"
+#include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/expression/evaluator.hpp"
+#include "src/buildtool/build_engine/target_map/configured_target.hpp"
+#include "src/buildtool/common/action.hpp"
+#include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/git_hashes_converter.hpp"
 #include "src/buildtool/common/protocol_traits.hpp"
+#include "src/buildtool/common/remote/remote_common.hpp"
+#include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
-#include "src/buildtool/common/tree.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
+#include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
 #include "src/buildtool/execution_api/common/common_api.hpp"
+#include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
+#include "src/buildtool/execution_api/common/execution_response.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_api.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
 #include "src/buildtool/execution_engine/executor/context.hpp"
-#include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/file_system/file_root.hpp"
+#include "src/buildtool/file_system/git_tree.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/progress_reporting/progress.hpp"
+#include "src/buildtool/progress_reporting/task_tracker.hpp"
+#include "src/utils/cpp/expected.hpp"
 #include "src/utils/cpp/hex_string.hpp"
 #include "src/utils/cpp/path_rebase.hpp"
 #include "src/utils/cpp/prefix.hpp"
@@ -560,6 +578,7 @@ class ExecutorImpl {
 
         if (not response) {
             logger.Emit(LogLevel::Trace, "response is empty");
+            PrintError(logger, action, progress);
             return false;
         }
 
@@ -573,17 +592,15 @@ class ExecutorImpl {
         progress->TaskTracker().Stop(action->Content().Id());
 
         PrintInfo(logger, action, response);
+        bool action_failed = false;
         bool should_fail_outputs = false;
         for (auto const& [local_path, node] : action->Dependencies()) {
             should_fail_outputs |= node->Content().Info()->failed;
         }
         if (response->ExitCode() != 0) {
             if (action->MayFail()) {
-                logger.Emit(LogLevel::Warning,
-                            "{} (exit code {})",
-                            *(action->MayFail()),
-                            response->ExitCode());
                 should_fail_outputs = true;
+                action_failed = true;
             }
             else {
                 logger.Emit(LogLevel::Error,
@@ -607,23 +624,48 @@ class ExecutorImpl {
             not CheckOutputsExist(*artifacts.value(),
                                   action->OutputDirPaths(),
                                   action->Content().Cwd())) {
-            logger.Emit(LogLevel::Error, [&] {
-                std::string message{
-                    "action executed with missing outputs.\n"
-                    " Action outputs should be the following artifacts:"};
+            logger.Emit(LogLevel::Error, [&]() {
+                std::ostringstream message{};
+                if (action_failed) {
+                    message << *(action->MayFail()) << " (exit code "
+                            << response->ExitCode() << ")\nMoreover ";
+                }
+                message << "action executed with missing outputs.\nAction "
+                           "outputs should be the following artifacts:";
                 for (auto const& output : action->OutputFilePaths()) {
-                    message += "\n  - file: " + output;
+                    message << "\n  - file: " << output;
                 }
                 for (auto const& output : action->OutputDirPaths()) {
-                    message += "\n  - dir: " + output;
+                    message << "\n  - dir: " << output;
                 }
-                return message;
+                return message.str();
             });
             PrintError(logger, action, progress);
             return false;
         }
 
         SaveObjectInfo(*artifacts.value(), action, should_fail_outputs);
+        if (action_failed) {
+            logger.Emit(LogLevel::Warning, [&]() {
+                std::ostringstream message{};
+                auto base = action->Content().Cwd();
+                message << *(action->MayFail()) << " (exit code "
+                        << response->ExitCode() << "); outputs:";
+                for (auto const& [name, node] : action->OutputFiles()) {
+                    message << "\n - " << nlohmann::json(name).dump() << " "
+                            << artifacts.value()
+                                   ->at(RebasePathStringRelativeTo(base, name))
+                                   .ToString();
+                }
+                for (auto const& [name, node] : action->OutputDirs()) {
+                    message << "\n - " << nlohmann::json(name).dump() << " "
+                            << artifacts.value()
+                                   ->at(RebasePathStringRelativeTo(base, name))
+                                   .ToString();
+                }
+                return message.str();
+            });
+        }
 
         return true;
     }

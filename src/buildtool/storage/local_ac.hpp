@@ -21,8 +21,8 @@
 
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
-#include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/storage/config.hpp"
@@ -30,11 +30,12 @@
 #include "src/buildtool/storage/uplinker.hpp"
 #include "src/utils/cpp/expected.hpp"
 
-// forward declarations
+#ifdef BOOTSTRAP_BUILD_TOOL
+// forward declarations needed by the bootstrap process only
 namespace build::bazel::remote::execution::v2 {
 class ActionResult;
 }  // namespace build::bazel::remote::execution::v2
-namespace bazel_re = build::bazel::remote::execution::v2;
+#endif  // BOOTSTRAP_BUILD_TOOL
 
 /// \brief The action cache for storing action results.
 /// Supports global uplinking across all generations. The uplink is
@@ -133,7 +134,7 @@ class LocalAC {
 
 #ifndef BOOTSTRAP_BUILD_TOOL
 // NOLINTNEXTLINE(misc-header-include-cycle)
-#include "src/buildtool/storage/local_ac.tpp"
+#include "src/buildtool/storage/local_ac.tpp"  // IWYU pragma: export
 #endif
 
 #endif  // INCLUDED_SRC_BUILDTOOL_STORAGE_LOCAL_AC_HPP

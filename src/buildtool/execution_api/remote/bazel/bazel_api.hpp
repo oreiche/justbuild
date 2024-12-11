@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "gsl/gsl"
@@ -31,13 +32,13 @@
 #include "src/buildtool/common/remote/retry_config.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
-#include "src/buildtool/execution_api/common/blob_tree.hpp"
+#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
+#include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
-#include "src/buildtool/execution_api/remote/config.hpp"
+#include "src/buildtool/execution_engine/dag/dag.hpp"
 
 // forward declaration for actual implementations
 class BazelNetwork;
-struct ExecutionConfiguration;
 
 /// \brief Bazel implementation of the abstract Execution API.
 class BazelApi final : public IExecutionApi {
@@ -72,10 +73,13 @@ class BazelApi final : public IExecutionApi {
         IExecutionApi const* alternative = nullptr) const noexcept
         -> bool final;
 
+    // NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] auto RetrieveToFds(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<int> const& fds,
-        bool raw_tree) const noexcept -> bool final;
+        bool raw_tree,
+        IExecutionApi const* alternative = nullptr) const noexcept
+        -> bool final;
 
     [[nodiscard]] auto ParallelRetrieveToCas(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,

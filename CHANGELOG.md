@@ -1,4 +1,21 @@
-## Release `1.4.0` (UNRELEASED)
+## Release `1.5.0` (UNRELEASED)
+
+A feature release on top of `1.4.0`, backwards compatible.
+
+### Fixes
+
+- Fixes ensuring proper pointer life time and access check.
+- A race condition in the use of `libgit2` was fixed that could
+  result in a segmentation fault.
+- Git operations are now properly locked against each other, also
+  between processes where necessary.
+- `just install-cas` correctly exits with non-zero exit code on
+  failure, also if isntallation to stdout is requested.
+- `just traverse` now exits unconditionally after traversal, also
+  in case of failure.
+- Missing entries in the documentation have been added.
+
+## Release `1.4.0` (2024-11-04)
 
 A feature release on top of `1.3.0`, backwards compatible with
 respect to rule language, build description, repository description,
@@ -8,6 +25,9 @@ local build root on upgrade.
 
 ### New features
 
+- `just serve` now also works together with a compatible remote-execution
+  endpoint. This uses an extended version of the serve protocol, so
+  both, `just-mr` and `just serve` need to be at the new version.
 - User-defined rules, as well as the built-in rule `"generic"` can
   now specify a subdirectory in which an action is to be executed.
 - `just-mr` now supports garbage collection for repository roots
@@ -74,6 +94,11 @@ local build root on upgrade.
   action is now possible, tests are independent of a .just-mrrc
   file the user might have in their home directory
 - Various improvements of the documentation.
+
+## Release `1.4.0~beta1` (2024-10-30)
+
+First beta release for the upcoming `1.4.0` release; see release
+notes there.
 
 ## Release `1.3.0` (2024-05-08)
 

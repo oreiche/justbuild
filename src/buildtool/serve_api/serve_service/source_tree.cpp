@@ -17,26 +17,38 @@
 #include "src/buildtool/serve_api/serve_service/source_tree.hpp"
 
 #include <algorithm>
-#include <shared_mutex>
-#include <thread>
+#include <functional>
+#include <vector>
 
 #include "fmt/core.h"
+#include "google/protobuf/repeated_ptr_field.h"
+#include "nlohmann/json.hpp"
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/common/protocol_traits.hpp"
+#include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
+#include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/serve/mr_git_api.hpp"
-#include "src/buildtool/execution_api/serve/utils.hpp"
+#include "src/buildtool/execution_api/utils/rehash_utils.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/file_system/git_cas.hpp"
 #include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/multithreading/async_map_utils.hpp"
+#include "src/buildtool/multithreading/task_system.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/fs_utils.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/buildtool/storage/repository_garbage_collector.hpp"
+#include "src/buildtool/storage/storage.hpp"
 #include "src/utils/archive/archive_ops.hpp"
 #include "src/utils/cpp/expected.hpp"
+#include "src/utils/cpp/file_locking.hpp"
+#include "src/utils/cpp/hex_string.hpp"
+#include "src/utils/cpp/tmp_dir.hpp"
 
 namespace {
 
@@ -411,10 +423,10 @@ auto SourceTreeService::SetDigestInResponse(
         // get the compatible digest from the mapping that was created during
         // upload from Git cache
         auto const cached_obj =
-            MRApiUtils::ReadRehashedDigest(*native_digest,
-                                           *native_context_->storage_config,
-                                           *compat_context_->storage_config,
-                                           from_git);
+            RehashUtils::ReadRehashedDigest(*native_digest,
+                                            *native_context_->storage_config,
+                                            *compat_context_->storage_config,
+                                            from_git);
         if (not cached_obj) {
             logger_->Emit(
                 LogLevel::Error, "SetDigestInResponse: {}", cached_obj.error());
@@ -539,7 +551,7 @@ auto SourceTreeService::ResolveContentTree(
             });
         {
             // this is a non-thread-safe Git operation, so it must be guarded!
-            std::shared_lock slock{mutex_};
+            std::unique_lock slock{mutex_};
             // open real repository at Git CAS location
             auto git_repo =
                 GitRepo::Open(native_context_->storage_config->GitRoot());
@@ -661,7 +673,7 @@ auto SourceTreeService::CommonImportToGit(
     // tag commit and keep it in Git CAS
     {
         // this is a non-thread-safe Git operation, so it must be guarded!
-        std::shared_lock slock{mutex_};
+        std::unique_lock slock{mutex_};
         // open real repository at Git CAS location
         auto git_repo =
             GitRepo::Open(native_context_->storage_config->GitRoot());

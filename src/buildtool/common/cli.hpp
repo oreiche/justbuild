@@ -15,11 +15,13 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_COMMON_CLI_HPP
 #define INCLUDED_SRC_BUILDTOOL_COMMON_CLI_HPP
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
+#include <exception>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <thread>
@@ -32,9 +34,9 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/expression/evaluator.hpp"
 #include "src/buildtool/common/clidefaults.hpp"
-#include "src/buildtool/common/retry_cli.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/logging/log_level.hpp"
+#include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/main/build_utils.hpp"
 #include "src/utils/cpp/path.hpp"
 
@@ -512,6 +514,12 @@ static inline auto SetupBuildArguments(
            clargs->build_jobs,
            "Number of jobs to run during build phase (Default: same as jobs).")
         ->type_name("NUM");
+}
+
+static inline auto SetupExtendedBuildArguments(
+    gsl::not_null<CLI::App*> const& app,
+    gsl::not_null<BuildArguments*> const& clargs) {
+
     app->add_option("--dump-artifacts",
                     clargs->dump_artifacts,
                     "Dump artifacts to file (use - for stdout).")

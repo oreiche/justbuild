@@ -22,16 +22,16 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "gsl/gsl"
 #include "src/buildtool/build_engine/analysed_target/analysed_target.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
-#include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/storage/target_cache_key.hpp"
 #ifndef BOOTSTRAP_BUILD_TOOL
 #include "src/buildtool/common/artifact.hpp"
-#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/execution_api/common/api_bundle.hpp"
-#include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
@@ -81,7 +81,7 @@ static const std::function<std::string(Artifact::ObjectInfo const&)>
 };
 
 /// \brief Write the target cache entries resulting after a build.
-/// \param strict_logging Bump warnings to actual errors.
+/// \param log_level the level at which to report failure
 void WriteTargetCacheEntries(
     std::unordered_map<TargetCacheKey, AnalysedTargetPtr> const& cache_targets,
     std::unordered_map<ArtifactDescription, Artifact::ObjectInfo> const&

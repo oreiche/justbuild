@@ -15,8 +15,14 @@
 #include "src/other_tools/just_mr/setup_utils.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <deque>
+#include <exception>
 #include <fstream>
+#include <iterator>
+#include <queue>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 
 #include "nlohmann/json.hpp"
@@ -26,6 +32,8 @@
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
+#include "src/other_tools/utils/parse_computed_root.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 namespace {
 
@@ -50,6 +58,20 @@ void WarnUnknownKeys(std::string const& name, ExpressionPtr const& repo_def) {
     }
 }
 
+[[nodiscard]] auto GetTargetRepoIfComputed(ExpressionPtr const& repo)
+    -> std::optional<std::string> {
+    if (not repo.IsNotNull() or not repo->IsMap()) {
+        return std::nullopt;
+    }
+    auto const repository = repo->Get("repository", Expression::none_t{});
+    if (auto const crparser = ComputedRootParser::Create(&repository)) {
+        if (auto target_repo = crparser->GetTargetRepository()) {
+            return std::move(target_repo).value();
+        }
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 namespace JustMR::Utils {
@@ -59,48 +81,58 @@ void ReachableRepositories(
     std::string const& main,
     std::shared_ptr<JustMR::SetupRepos> const& setup_repos) {
     // use temporary sets to avoid duplicates
-    std::unordered_set<std::string> include_repos_set{};
-    // traversal of bindings
-    std::function<void(std::string const&)> traverse =
-        [&](std::string const& repo_name) {
-            if (not include_repos_set.contains(repo_name)) {
-                // if not found, add it and repeat for its bindings
-                include_repos_set.insert(repo_name);
-                // check bindings
-                auto repos_repo_name =
-                    repos->Get(repo_name, Expression::none_t{});
-                if (not repos_repo_name.IsNotNull()) {
-                    return;
-                }
-                WarnUnknownKeys(repo_name, repos_repo_name);
-                auto bindings =
-                    repos_repo_name->Get("bindings", Expression::none_t{});
-                if (bindings.IsNotNull() and bindings->IsMap()) {
-                    for (auto const& bound : bindings->Map().Values()) {
-                        if (bound.IsNotNull() and bound->IsString()) {
-                            traverse(bound->String());
-                        }
-                    }
+    std::unordered_set<std::string> include_repos_set;
+    std::unordered_set<std::string> setup_repos_set;
+
+    // traverse all bindings of main repository
+    for (std::queue<std::string> to_process({main}); not to_process.empty();
+         to_process.pop()) {
+        auto const& repo_name = to_process.front();
+
+        // Check the repo hasn't been processed yet
+        if (not include_repos_set.insert(repo_name).second) {
+            continue;
+        }
+        auto const repos_repo_name =
+            repos->Get(repo_name, Expression::none_t{});
+        if (not repos_repo_name.IsNotNull()) {
+            continue;
+        }
+        WarnUnknownKeys(repo_name, repos_repo_name);
+
+        // If the current repo is a computed one, process its target repo
+        if (auto computed_target = GetTargetRepoIfComputed(repos_repo_name)) {
+            to_process.push(*std::move(computed_target));
+        }
+
+        // check bindings
+        auto const bindings =
+            repos_repo_name->Get("bindings", Expression::none_t{});
+        if (bindings.IsNotNull() and bindings->IsMap()) {
+            for (auto const& bound : bindings->Map().Values()) {
+                if (bound.IsNotNull() and bound->IsString()) {
+                    to_process.push(bound->String());
                 }
             }
-        };
-    traverse(main);  // traverse all bindings of main repository
+        }
 
-    // Add overlay repositories
-    std::unordered_set<std::string> setup_repos_set{include_repos_set};
-    for (auto const& repo : include_repos_set) {
-        auto repos_repo = repos->Get(repo, Expression::none_t{});
-        if (repos_repo.IsNotNull()) {
-            // copy over any present alternative root dirs
-            for (auto const& layer : kAltDirs) {
-                auto layer_val = repos_repo->Get(layer, Expression::none_t{});
-                if (layer_val.IsNotNull() and layer_val->IsString()) {
-                    auto repo_name = layer_val->String();
-                    setup_repos_set.insert(repo_name);
+        for (auto const& layer : kAltDirs) {
+            auto const layer_val =
+                repos_repo_name->Get(layer, Expression::none_t{});
+            if (layer_val.IsNotNull() and layer_val->IsString()) {
+                auto const layer_repo_name = layer_val->String();
+                setup_repos_set.insert(layer_repo_name);
+
+                // If the overlay repo is a computed one, process its target
+                // repo
+                if (auto computed_target = GetTargetRepoIfComputed(
+                        repos->Get(layer_repo_name, Expression::none_t{}))) {
+                    to_process.push(*std::move(computed_target));
                 }
             }
         }
     }
+    setup_repos_set.insert(include_repos_set.begin(), include_repos_set.end());
 
     // copy to vectors
     setup_repos->to_setup.clear();

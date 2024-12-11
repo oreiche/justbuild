@@ -160,15 +160,6 @@ using ActiveTargetCache = TargetCache<true>;
 #endif  // BOOTSTRAP_BUILD_TOOL
 
 // NOLINTNEXTLINE(misc-header-include-cycle)
-#include "src/buildtool/storage/target_cache.tpp"
-
-namespace std {
-template <>
-struct hash<TargetCacheKey> {
-    [[nodiscard]] auto operator()(TargetCacheKey const& k) const {
-        return std::hash<Artifact::ObjectInfo>{}(k.Id());
-    }
-};
-}  // namespace std
+#include "src/buildtool/storage/target_cache.tpp"  // IWYU pragma: export
 
 #endif  // INCLUDED_SRC_BUILDTOOL_STORAGE_TARGET_CACHE_HPP

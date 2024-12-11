@@ -27,6 +27,7 @@
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
@@ -99,7 +100,7 @@ class ObjectCAS {
         auto const& id = digest.hash();
         auto blob_path = file_store_.GetPath(id);
         if (not IsAvailable(digest, blob_path)) {
-            logger_.Emit(LogLevel::Debug, "Blob not found {}", id);
+            logger_.Emit(LogLevel::Trace, "Blob not found {}", id);
             return std::nullopt;
         }
         return blob_path;

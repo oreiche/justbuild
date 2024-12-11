@@ -17,10 +17,12 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
+#include <exception>
+#include <functional>
 #include <iterator>
 #include <mutex>
 #include <new>
-#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>  // std::move
@@ -33,24 +35,22 @@
 #include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
+#include "src/buildtool/execution_api/bazel_msg/directory_tree.hpp"
 #include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
 #include "src/buildtool/execution_api/common/common_api.hpp"
+#include "src/buildtool/execution_api/common/content_blob_container.hpp"
 #include "src/buildtool/execution_api/common/stream_dumper.hpp"
 #include "src/buildtool/execution_api/common/tree_reader.hpp"
-#include "src/buildtool/execution_api/remote/bazel/bazel_ac_client.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_action.hpp"
-#include "src/buildtool/execution_api/remote/bazel/bazel_cas_client.hpp"
-#include "src/buildtool/execution_api/remote/bazel/bazel_execution_client.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_network.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_network_reader.hpp"
-#include "src/buildtool/execution_api/remote/bazel/bazel_response.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
-#include "src/buildtool/storage/fs_utils.hpp"
+#include "src/utils/cpp/expected.hpp"
+#include "src/utils/cpp/transformed_range.hpp"
 
 namespace {
 
@@ -246,7 +246,8 @@ auto BazelApi::CreateAction(
     std::vector<std::size_t> artifact_pos{};
     for (std::size_t i{}; i < artifacts_info.size(); ++i) {
         auto const& info = artifacts_info[i];
-        if (alternative != nullptr and alternative->IsAvailable(info.digest)) {
+        if (alternative != nullptr and alternative != this and
+            alternative->IsAvailable(info.digest)) {
             if (not alternative->RetrieveToPaths({info}, {output_paths[i]})) {
                 return false;
             }
@@ -307,20 +308,56 @@ auto BazelApi::CreateAction(
     return true;
 }
 
+// NOLINTNEXTLINE(google-default-arguments)
 [[nodiscard]] auto BazelApi::RetrieveToFds(
     std::vector<Artifact::ObjectInfo> const& artifacts_info,
     std::vector<int> const& fds,
-    bool raw_tree) const noexcept -> bool {
-    auto dumper = StreamDumper<BazelNetworkReader>{network_->CreateReader()};
-    return CommonRetrieveToFds(
-        artifacts_info,
-        fds,
-        [&dumper, &raw_tree](Artifact::ObjectInfo const& info,
-                             gsl::not_null<FILE*> const& out) {
-            return dumper.DumpToStream(info, out, raw_tree);
-        },
-        std::nullopt  // remote can't fallback to Git
-    );
+    bool raw_tree,
+    IExecutionApi const* alternative) const noexcept -> bool {
+    if (alternative == nullptr or alternative == this) {
+        auto dumper =
+            StreamDumper<BazelNetworkReader>{network_->CreateReader()};
+        return CommonRetrieveToFds(
+            artifacts_info,
+            fds,
+            [&dumper, &raw_tree](Artifact::ObjectInfo const& info,
+                                 gsl::not_null<FILE*> const& out) {
+                return dumper.DumpToStream(info, out, raw_tree);
+            },
+            std::nullopt  // no fallback
+        );
+    }
+
+    // We have an alternative, and, in fact, preferred API. So go
+    // through the artifacts one by one and first try the the preferred one,
+    // then fall back to retrieving ourselves.
+    if (artifacts_info.size() != fds.size()) {
+        Logger::Log(LogLevel::Error,
+                    "different number of digests and file descriptors.");
+        return false;
+    }
+    for (std::size_t i{}; i < artifacts_info.size(); ++i) {
+        auto fd = fds[i];
+        auto const& info = artifacts_info[i];
+        if (alternative->IsAvailable(info.digest)) {
+            if (not alternative->RetrieveToFds(
+                    std::vector<Artifact::ObjectInfo>{info},
+                    std::vector<int>{fd},
+                    raw_tree,
+                    nullptr)) {
+                return false;
+            }
+        }
+        else {
+            if (not RetrieveToFds(std::vector<Artifact::ObjectInfo>{info},
+                                  std::vector<int>{fd},
+                                  raw_tree,
+                                  nullptr)) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] auto BazelApi::RetrieveToCas(
@@ -567,17 +604,20 @@ auto BazelApi::CreateAction(
     -> std::vector<ArtifactDigest> {
     std::vector<bazel_re::Digest> bazel_digests;
     bazel_digests.reserve(digests.size());
-    std::unordered_map<bazel_re::Digest, ArtifactDigest> digest_map;
+    std::unordered_map<bazel_re::Digest, ArtifactDigest const*> digest_map;
     for (auto const& digest : digests) {
         auto const& bazel_digest =
             bazel_digests.emplace_back(ArtifactDigestFactory::ToBazel(digest));
-        digest_map[bazel_digest] = digest;
+        digest_map.insert_or_assign(bazel_digest, &digest);
     }
-    auto bazel_result = network_->IsAvailable(bazel_digests);
+    auto const bazel_result = network_->IsAvailable(bazel_digests);
     std::vector<ArtifactDigest> result;
     result.reserve(bazel_result.size());
     for (auto const& bazel_digest : bazel_result) {
-        result.push_back(digest_map[bazel_digest]);
+        auto it = digest_map.find(bazel_digest);
+        if (it != digest_map.end()) {
+            result.push_back(*it->second);
+        }
     }
     return result;
 }

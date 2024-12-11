@@ -24,20 +24,19 @@
 #include "src/buildtool/build_engine/target_map/absent_target_map.hpp"
 #include "src/buildtool/build_engine/target_map/configured_target.hpp"
 #include "src/buildtool/build_engine/target_map/result_map.hpp"
-#include "src/buildtool/common/cli.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/main/analyse_context.hpp"
 
 struct AnalysisResult {
     BuildMaps::Target::ConfiguredTarget id;
     AnalysedTargetPtr target;
+    BuildMaps::Target::ResultTargetMap result_map;
     std::optional<std::string> modified;
 };
 
 [[nodiscard]] auto AnalyseTarget(
     gsl::not_null<AnalyseContext*> const& context,
     const BuildMaps::Target::ConfiguredTarget& id,
-    gsl::not_null<BuildMaps::Target::ResultTargetMap*> const& result_map,
     std::size_t jobs,
     std::optional<std::string> const& request_action_input,
     Logger const* logger = nullptr,

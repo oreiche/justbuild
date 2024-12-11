@@ -15,12 +15,15 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_STORAGE_LOCAL_CAS_TPP
 #define INCLUDED_SRC_BUILDTOOL_STORAGE_LOCAL_CAS_TPP
 
+// IWYU pragma: private, include "src/buildtool/storage/local_cas.hpp"
+
 #include <cstddef>
 #include <utility>  // std::move
 
 #include "fmt/core.h"
 #include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/storage/local_cas.hpp"
 

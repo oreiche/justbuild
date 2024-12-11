@@ -18,7 +18,6 @@
     [ "git_repo_remote"
     , ["@", "fmt", "", "fmt"]
     , ["src/buildtool/file_system", "file_system_manager"]
-    , ["src/buildtool/logging", "logging"]
     ]
   }
 , "git_repo_remote":
@@ -27,19 +26,23 @@
   , "hdrs": ["git_repo_remote.hpp"]
   , "srcs": ["git_repo_remote.cpp"]
   , "deps":
-    [ ["src/buildtool/file_system", "git_repo"]
+    [ ["src/buildtool/file_system", "git_cas"]
+    , ["src/buildtool/file_system", "git_repo"]
+    , ["src/buildtool/file_system", "git_utils"]
     , ["src/buildtool/storage", "config"]
     ]
   , "stage": ["src", "other_tools", "git_operations"]
   , "private-deps":
     [ "git_config_settings"
     , ["@", "fmt", "", "fmt"]
+    , ["@", "gsl", "", "gsl"]
     , ["@", "json", "", "json"]
     , ["", "libgit2"]
-    , ["src/buildtool/file_system", "git_utils"]
+    , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/system", "system_command"]
+    , ["src/utils/cpp", "tmp_dir"]
     ]
   }
 , "git_config_settings":
@@ -50,6 +53,7 @@
   , "stage": ["src", "other_tools", "git_operations"]
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]
+    , ["@", "gsl", "", "gsl"]
     , ["", "libgit2"]
     , ["src/other_tools/utils", "curl_url_handle"]
     ]

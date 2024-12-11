@@ -15,16 +15,20 @@
 #ifndef INCLUDED_SRC_OTHER_TOOLS_JUST_MR_UTILS_HPP
 #define INCLUDED_SRC_OTHER_TOOLS_JUST_MR_UTILS_HPP
 
+#include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
-#include "src/buildtool/build_engine/expression/configuration.hpp"
+#include "src/buildtool/build_engine/expression/expression_ptr.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/storage/config.hpp"
 
@@ -77,7 +81,7 @@ std::map<std::string, JustSubCmdFlags> const kKnownJustSubcommands{
     {"analyse",
      {.config = true,
       .build_root = true,
-      .launch = false,
+      .launch = true,
       .defines = true,
       .remote = true,
       .remote_props = true,
@@ -151,7 +155,8 @@ enum class CheckoutType : std::uint8_t {
     ForeignFile,
     File,
     Distdir,
-    GitTree
+    GitTree,
+    Computed
 };
 
 /// \brief Checkout type map
@@ -162,7 +167,8 @@ std::unordered_map<std::string, CheckoutType> const kCheckoutTypeMap = {
     {"foreign file", CheckoutType::ForeignFile},
     {"file", CheckoutType::File},
     {"distdir", CheckoutType::Distdir},
-    {"git tree", CheckoutType::GitTree}};
+    {"git tree", CheckoutType::GitTree},
+    {"computed", CheckoutType::Computed}};
 namespace JustMR::Utils {
 
 /// \brief Recursive part of the ResolveRepo function.

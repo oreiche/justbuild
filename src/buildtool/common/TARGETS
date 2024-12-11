@@ -18,7 +18,6 @@
   , "hdrs": ["cli.hpp"]
   , "deps":
     [ "clidefaults"
-    , "retry_cli"
     , ["@", "cli11", "", "cli11"]
     , ["@", "fmt", "", "fmt"]
     , ["@", "gsl", "", "gsl"]
@@ -38,6 +37,7 @@
   , "hdrs": ["bazel_types.hpp"]
   , "proto": [["@", "bazel_remote_apis", "", "remote_execution_proto"]]
   , "stage": ["src", "buildtool", "common"]
+  , "deps": [["@", "protoc", "", "libprotobuf"]]
   }
 , "bazel_digest_factory":
   { "type": ["@", "rules", "CC", "library"]
@@ -50,7 +50,6 @@
     , ["src/buildtool/crypto", "hash_info"]
     , ["src/buildtool/file_system", "object_type"]
     , ["src/utils/cpp", "expected"]
-    , ["src/utils/cpp", "gsl"]
     ]
   , "private-deps":
     [ "protocol_traits"
@@ -90,14 +89,15 @@
     , "statistics.hpp"
     ]
   , "deps":
-    [ "bazel_types"
-    , "protocol_traits"
+    [ "protocol_traits"
+    , ["@", "fmt", "", "fmt"]
     , ["@", "json", "", "json"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/crypto", "hash_info"]
     , ["src/buildtool/file_system", "object_type"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/utils/cpp", "expected"]
     , ["src/utils/cpp", "hash_combine"]
     ]
   , "stage": ["src", "buildtool", "common"]
@@ -112,11 +112,13 @@
     , ["@", "json", "", "json"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/file_system", "object_type"]
-    , ["src/buildtool/logging", "logging"]
     ]
   , "private-deps":
     [ "artifact_digest_factory"
+    , ["@", "gsl", "", "gsl"]
     , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
+    , ["src/utils/cpp", "expected"]
     , ["src/utils/cpp", "json"]
     ]
   , "stage": ["src", "buildtool", "common"]
@@ -146,8 +148,6 @@
     , "common"
     , ["@", "json", "", "json"]
     , ["src/buildtool/crypto", "hash_function"]
-    , ["src/buildtool/logging", "log_level"]
-    , ["src/buildtool/logging", "logging"]
     ]
   , "stage": ["src", "buildtool", "common"]
   }
@@ -163,6 +163,8 @@
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/file_system", "file_root"]
     , ["src/buildtool/file_system", "git_cas"]
+    , ["src/buildtool/file_system", "git_tree"]
+    , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/multithreading", "atomic_value"]
     , ["src/buildtool/storage", "storage"]
     ]

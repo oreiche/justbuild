@@ -17,6 +17,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -27,6 +28,8 @@
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/file_system/git_cas.hpp"
 #include "src/buildtool/file_system/git_types.hpp"
+#include "src/buildtool/file_system/git_utils.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/utils/cpp/expected.hpp"
 
@@ -313,51 +316,15 @@ class GitRepo {
         -> std::shared_ptr<git_config>;
 
   private:
-    /// \brief Wrapped git_repository with guarded destructor.
-    /// Kept privately nested to avoid misuse of its raw pointer members.
-    class GuardedRepo {
-      public:
-        GuardedRepo() noexcept = delete;
-        explicit GuardedRepo(std::shared_mutex* mutex) noexcept;
-        ~GuardedRepo() noexcept;
-
-        // prohibit moves and copies
-        GuardedRepo(GuardedRepo const&) = delete;
-        GuardedRepo(GuardedRepo&& other) = delete;
-        auto operator=(GuardedRepo const&) = delete;
-        auto operator=(GuardedRepo&& other) = delete;
-
-        // get the bare pointer
-        [[nodiscard]] auto Ptr() -> git_repository*;
-        [[nodiscard]] auto PtrRef() -> git_repository**;
-
-      private:
-        std::shared_mutex* mutex_;
-        git_repository* repo_{nullptr};
-    };
-
-    using GuardedRepoPtr = std::shared_ptr<GuardedRepo>;
-
-    // IMPORTANT! The GitCAS object must be defined before the repo object to
-    // keep the GitContext alive until cleanup ends.
-    GitCASPtr git_cas_{nullptr};
-    GuardedRepoPtr repo_{nullptr};
+    GitCASPtr git_cas_;
     // default to real repo, as that is non-thread-safe
-    bool is_repo_fake_{false};
+    bool is_repo_fake_;
 
   protected:
     /// \brief Open "fake" repository wrapper for existing CAS.
     explicit GitRepo(GitCASPtr git_cas) noexcept;
     /// \brief Open real repository at given location.
     explicit GitRepo(std::filesystem::path const& repo_path) noexcept;
-
-    [[nodiscard]] auto GetRepoRef() const noexcept -> GuardedRepoPtr;
-
-    [[nodiscard]] auto GetGitPath() const noexcept
-        -> std::filesystem::path const&;
-
-    [[nodiscard]] auto GetGitOdb() const noexcept
-        -> std::unique_ptr<git_odb, decltype(&odb_closer)> const&;
 
     using StoreDirEntryFunc =
         std::function<bool(std::filesystem::path const&, ObjectType type)>;
@@ -380,11 +347,7 @@ class GitRepo {
 
     class GitStrArray final {
       public:
-        void AddEntry(std::string entry) {
-            char* const entry_ptr =
-                entries_.emplace_back(std::move(entry)).data();
-            entry_pointers_.push_back(entry_ptr);
-        }
+        void AddEntry(std::string entry);
         [[nodiscard]] auto Get() & noexcept -> git_strarray;
 
       private:

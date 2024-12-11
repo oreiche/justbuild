@@ -14,21 +14,28 @@
 
 #include "src/other_tools/repo_map/repos_to_setup_map.hpp"
 
+#include <filesystem>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>  // std::move
+#include <vector>
 
 #include "fmt/core.h"
+#include "src/buildtool/build_engine/expression/expression.hpp"
+#include "src/buildtool/build_engine/expression/expression_ptr.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/crypto/hash_info.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
-#include "src/buildtool/logging/log_level.hpp"
-#include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
+#include "src/other_tools/just_mr/utils.hpp"
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
 #include "src/other_tools/ops_maps/git_tree_fetch_map.hpp"
 #include "src/other_tools/utils/parse_archive.hpp"
+#include "src/other_tools/utils/parse_computed_root.hpp"
 #include "src/other_tools/utils/parse_git_tree.hpp"
+#include "src/utils/cpp/expected.hpp"
+#include "src/utils/cpp/path.hpp"
 
 namespace {
 
@@ -629,6 +636,44 @@ void GitTreeCheckout(ExpressionPtr const& repo_desc,
         });
 }
 
+void ComputedRootCheckout(ExpressionPtr const& repo_desc,
+                          std::string const& repo_name,
+                          ReposToSetupMap::SetterPtr const& setter,
+                          ReposToSetupMap::SubCallerPtr const& subcaller,
+                          ReposToSetupMap::LoggerPtr const& logger) {
+    auto const parser = ComputedRootParser::Create(&repo_desc);
+    if (not parser) {
+        (*logger)(
+            fmt::format("ComputedRootCheckout: Not a computed repository: {}",
+                        nlohmann::json(repo_name).dump()),
+            /*fatal=*/true);
+        return;
+    }
+    auto result_root = parser->GetResult();
+    if (not result_root) {
+        (*logger)(fmt::format("ComputedRootCheckout: parsing repository {} "
+                              "failed with:\n{}",
+                              nlohmann::json(repo_name).dump(),
+                              std::move(result_root).error()),
+                  /*fatal=*/true);
+        return;
+    }
+    std::string target_repo = result_root->repository;
+    (*subcaller)(
+        {std::move(target_repo)},
+        [setter, result = *std::move(result_root)](auto const& /*unused*/) {
+            nlohmann::json cfg{};
+            auto& ws_root = cfg["workspace_root"];
+            ws_root.push_back("computed");
+            ws_root.push_back(result.repository);
+            ws_root.push_back(result.target_module);
+            ws_root.push_back(result.target_name);
+            ws_root.push_back(result.config);
+            std::invoke(*setter, std::move(cfg));
+        },
+        logger);
+}
+
 }  // namespace
 
 auto CreateReposToSetupMap(
@@ -657,7 +702,7 @@ auto CreateReposToSetupMap(
                        stats](auto ts,
                               auto setter,
                               auto logger,
-                              auto /* unused */,
+                              auto subcaller,
                               auto const& key) {
         auto repos = (*config)["repositories"];
         if (main and (key == *main) and interactive) {
@@ -812,6 +857,14 @@ auto CreateReposToSetupMap(
                                     ts,
                                     setter,
                                     wrapped_logger);
+                    break;
+                }
+                case CheckoutType::Computed: {
+                    ComputedRootCheckout(*resolved_repo_desc,
+                                         key,
+                                         setter,
+                                         subcaller,
+                                         wrapped_logger);
                     break;
                 }
             }

@@ -14,12 +14,15 @@
 
 #include "src/other_tools/git_operations/git_operations.hpp"
 
+#include <filesystem>
+#include <functional>
 #include <memory>
-#include <vector>
+#include <optional>
+#include <string>
+#include <utility>
 
 #include "fmt/core.h"
 #include "src/buildtool/file_system/file_system_manager.hpp"
-#include "src/buildtool/logging/logger.hpp"
 #include "src/other_tools/git_operations/git_repo_remote.hpp"
 
 auto CriticalGitOps::GitInitialCommit(GitOpParams const& crit_op_params,
@@ -41,7 +44,7 @@ auto CriticalGitOps::GitInitialCommit(GitOpParams const& crit_op_params,
     // Create and open a GitRepoRemote at given target location
     auto git_repo = GitRepoRemote::InitAndOpen(crit_op_params.target_path,
                                                /*is_bare=*/false);
-    if (git_repo == std::nullopt) {
+    if (git_repo == std::nullopt or git_repo->GetGitCAS() == nullptr) {
         (*logger)(fmt::format("could not initialize git repository {}",
                               crit_op_params.target_path.string()),
                   true /*fatal*/);
@@ -80,7 +83,7 @@ auto CriticalGitOps::GitEnsureInit(GitOpParams const& crit_op_params,
     auto git_repo = GitRepoRemote::InitAndOpen(
         crit_op_params.target_path,
         /*is_bare=*/crit_op_params.init_bare.value());
-    if (git_repo == std::nullopt) {
+    if (git_repo == std::nullopt or git_repo->GetGitCAS() == nullptr) {
         (*logger)(
             fmt::format("could not initialize {} git repository {}",
                         crit_op_params.init_bare.value() ? "bare" : "non-bare",

@@ -15,12 +15,29 @@
 #include "src/buildtool/main/diagnose.hpp"
 
 #include <algorithm>
+#include <compare>
 #include <cstddef>
+#include <fstream>
+#include <functional>
+#include <iostream>
+#include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
+#include "fmt/core.h"
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
+#include "src/buildtool/build_engine/analysed_target/analysed_target.hpp"
+#include "src/buildtool/build_engine/base_maps/entity_name_data.hpp"
+#include "src/buildtool/build_engine/expression/expression.hpp"
+#include "src/buildtool/build_engine/expression/expression_ptr.hpp"
+#include "src/buildtool/build_engine/expression/target_result.hpp"
+#include "src/buildtool/build_engine/target_map/configured_target.hpp"
+#include "src/buildtool/build_engine/target_map/result_map.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/json.hpp"
@@ -309,7 +326,6 @@ void DumpResult(std::string const& file_path, AnalysisResult const& result) {
 }  // namespace
 
 void DiagnoseResults(AnalysisResult const& result,
-                     BuildMaps::Target::ResultTargetMap const& result_map,
                      DiagnosticArguments const& clargs) {
     Logger::Log(
         LogLevel::Info,
@@ -342,14 +358,16 @@ void DiagnoseResults(AnalysisResult const& result,
         DumpVars(*clargs.dump_vars, result);
     }
     if (clargs.dump_targets) {
-        DumpTargets(*clargs.dump_targets, result_map.ConfiguredTargets());
+        DumpTargets(*clargs.dump_targets,
+                    result.result_map.ConfiguredTargets());
     }
     if (clargs.dump_export_targets) {
-        DumpTargets(
-            *clargs.dump_export_targets, result_map.ExportTargets(), "export ");
+        DumpTargets(*clargs.dump_export_targets,
+                    result.result_map.ExportTargets(),
+                    "export ");
     }
     if (clargs.dump_targets_graph) {
-        auto graph = result_map.ConfiguredTargetsGraph().dump(2);
+        auto graph = result.result_map.ConfiguredTargetsGraph().dump(2);
         Logger::Log(LogLevel::Info,
                     "Dumping graph of configured-targets to file {}.",
                     *clargs.dump_targets_graph);
@@ -357,7 +375,8 @@ void DiagnoseResults(AnalysisResult const& result,
         os << graph << std::endl;
     }
     if (clargs.dump_anonymous) {
-        DumpAnonymous(*clargs.dump_anonymous, result_map.ConfiguredTargets());
+        DumpAnonymous(*clargs.dump_anonymous,
+                      result.result_map.ConfiguredTargets());
     }
     if (clargs.dump_nodes) {
         DumpNodes(*clargs.dump_nodes, result);

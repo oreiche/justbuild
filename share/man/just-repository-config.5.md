@@ -26,14 +26,21 @@ which determines the type and semantic of the subsequent elements:
    path to the file root.
 
  - *`"git tree"`* refers to a file root that is available as part of a
-   Git repository. The list has to be of length 3 with the remaining two
+   Git repository. The list has to be of length 2 or 3 with the remaining two
    elements being:
 
    1. The *`git tree hash`*, which is sufficient to describe the content
       of an entire tree including its sub-trees and blobs. The tree hash
       has to be specified in hex encoding.
    2. The path to a Git repository on the file system with the promise
-      that it contains the aforementioned *`git tree hash`*.
+      that it contains the aforementioned *`git tree hash`*; if this
+      entry is missing, the root is considered absent and any target
+      requiring this root has to come from a specified serve end point.
+
+ - *`"computed"`* refers to a file root that is the result of evaluating
+   an export target of a content-fixed repository. The list has to have
+   length 5, with the remaining arguments being the global repository name,
+   the module name, the target name, and the configuration, in that order.
 
 Repository description
 ----------------------
@@ -84,8 +91,8 @@ keys:
 
  - *`"main"`* contains a string, which defines the repository name to
    consider by default if not explicitly specified on the command line
-   (i.e., via **`--main`**). This entry is optional and if omitted the
-   empty string is used.
+   (i.e., via **`--main`**). This entry is optional and if omitted **`just`**
+   will use the lexicographically first repository, as usual.
 
  - *`"repositories"`* contains a JSON object that defines all
    repositories by mapping global repository names to *repository

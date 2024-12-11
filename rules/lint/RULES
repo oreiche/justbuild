@@ -21,23 +21,17 @@
     { "type": "let*"
     , "bindings":
       [ [ "PATH"
-        , { "type": "reverse"
+        , { "type": "nub_left"
           , "$1":
-            { "type": "nub_right"
+            { "type": "++"
             , "$1":
-              { "type": "reverse"
-              , "$1":
-                { "type": "++"
-                , "$1":
-                  [ {"type": "FIELD", "name": "PATH"}
-                  , { "type": "let*"
-                    , "bindings": [["provider", "PATH"]]
-                    , "body":
-                      {"type": "CALL_EXPRESSION", "name": "base-provides-++"}
-                    }
-                  ]
+              [ {"type": "FIELD", "name": "PATH"}
+              , { "type": "let*"
+                , "bindings": [["provider", "PATH"]]
+                , "body":
+                  {"type": "CALL_EXPRESSION", "name": "base-provides-++"}
                 }
-              }
+              ]
             }
           }
         ]
@@ -50,6 +44,7 @@
     [ "Run a given linter on the lint information provided by the given targets."
     ]
   , "target_fields": ["linter", "config", "summarizer", "targets"]
+  , "string_fields": ["name"]
   , "tainted": ["lint"]
   , "field_doc":
     { "linter":
@@ -67,6 +62,8 @@
       , "  - at key \"direct deps artifact names\" a list of all input"
       , "    artifacts that come from the target itself or are runfiles of a"
       , "    direct dependency."
+      , "- TMPDIR pointing to a directory location that can be used to"
+      , "  create additional temporary files."
       , "It is supposed to indicate by the exit code whether the file to lint"
       , "complies with the given linting policy, with 0 meaning"
       , "compliant."
@@ -91,14 +88,17 @@
       ]
     , "call_lint": ["Launcher for the linter"]
     , "call_summary": ["Launcher for the summarizer"]
+    , "name":
+      [ "Name of the kind of lint check performed, to be reported"
+      , "when an action is failing."
+      ]
     }
   , "implicit":
     { "defaults": ["defaults"]
     , "call_lint": ["call_lint"]
     , "call_summary": ["call_summary"]
     }
-  , "config_transitions":
-    {"targets": [{"type": "singleton_map", "key": "LINT", "value": true}]}
+  , "config_transitions": {"targets": [{"type": "'", "$1": {"LINT": true}}]}
   , "anonymous":
     {"lint": {"target": "targets", "provider": "lint", "rule_map": {}}}
   , "imports":
@@ -133,6 +133,7 @@
           , "$1": {"type": "CALL_EXPRESSION", "name": "default-PATH"}
           }
         ]
+      , ["name", {"type": "join", "$1": {"type": "FIELD", "name": "name"}}]
       , [ "lint results"
         , { "type": "foreach"
           , "range": {"type": "FIELD", "name": "lint"}
@@ -208,7 +209,12 @@
                 , "may_fail": ["lint"]
                 , "fail_message":
                   { "type": "join"
-                  , "$1": ["lint failed for ", {"type": "var", "name": "src"}]
+                  , "$1":
+                    [ "lint "
+                    , {"type": "var", "name": "name"}
+                    , " failed for "
+                    , {"type": "var", "name": "src"}
+                    ]
                   }
                 }
               }

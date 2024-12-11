@@ -16,26 +16,38 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
+#include <cstdlib>
+#include <functional>
+#include <map>
+#include <memory>
 #include <thread>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "fmt/core.h"
+#include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/base_maps/directory_map.hpp"
-#include "src/buildtool/build_engine/base_maps/entity_name.hpp"
+#include "src/buildtool/build_engine/base_maps/entity_name_data.hpp"
 #include "src/buildtool/build_engine/base_maps/expression_map.hpp"
 #include "src/buildtool/build_engine/base_maps/rule_map.hpp"
 #include "src/buildtool/build_engine/base_maps/source_map.hpp"
 #include "src/buildtool/build_engine/base_maps/targets_file_map.hpp"
+#include "src/buildtool/build_engine/expression/expression.hpp"
+#include "src/buildtool/build_engine/expression/expression_ptr.hpp"
+#include "src/buildtool/build_engine/expression/target_result.hpp"
 #include "src/buildtool/build_engine/target_map/absent_target_map.hpp"
 #include "src/buildtool/build_engine/target_map/target_map.hpp"
+#include "src/buildtool/common/action.hpp"
+#include "src/buildtool/common/action_description.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/logging/log_level.hpp"
-#include "src/buildtool/multithreading/async_map_consumer.hpp"
 #include "src/buildtool/multithreading/async_map_utils.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
+#include "src/buildtool/progress_reporting/base_progress_reporter.hpp"
 #include "src/buildtool/progress_reporting/exports_progress_reporter.hpp"
 #include "src/buildtool/storage/storage.hpp"
-#ifndef BOOTSTRAP_BUILD_TOOL
-#include "src/buildtool/serve_api/remote/config.hpp"
-#endif  // BOOTSTRAP_BUILD_TOOL
 
 namespace {
 
@@ -110,7 +122,6 @@ namespace Target = BuildMaps::Target;
 [[nodiscard]] auto AnalyseTarget(
     gsl::not_null<AnalyseContext*> const& context,
     const Target::ConfiguredTarget& id,
-    gsl::not_null<Target::ResultTargetMap*> const& result_map,
     std::size_t jobs,
     std::optional<std::string> const& request_action_input,
     Logger const* logger,
@@ -136,8 +147,9 @@ namespace Target = BuildMaps::Target;
     auto absent_target_variables_map =
         Target::CreateAbsentTargetVariablesMap(context, jobs);
 
+    BuildMaps::Target::ResultTargetMap result_map{jobs};
     auto absent_target_map = Target::CreateAbsentTargetMap(
-        context, result_map, &absent_target_variables_map, jobs, serve_log);
+        context, &result_map, &absent_target_variables_map, jobs, serve_log);
 
     auto target_map = Target::CreateTargetMap(context,
                                               &source_targets,
@@ -145,7 +157,7 @@ namespace Target = BuildMaps::Target;
                                               &rule_map,
                                               &directory_entries,
                                               &absent_target_map,
-                                              result_map,
+                                              &result_map,
                                               jobs);
     Logger::Log(
         logger, LogLevel::Info, "Requested target is {}", id.ToString());
@@ -229,7 +241,7 @@ namespace Target = BuildMaps::Target;
     if (request_action_input) {
         if (request_action_input->starts_with("%")) {
             auto action_id = request_action_input->substr(1);
-            auto action = result_map->GetAction(action_id);
+            auto action = result_map.GetAction(action_id);
             if (action) {
                 Logger::Log(logger,
                             LogLevel::Info,
@@ -267,7 +279,7 @@ namespace Target = BuildMaps::Target;
             }
         }
         else {
-            auto action = result_map->GetAction(*request_action_input);
+            auto action = result_map.GetAction(*request_action_input);
             if (action) {
                 Logger::Log(logger,
                             LogLevel::Info,
@@ -298,5 +310,8 @@ namespace Target = BuildMaps::Target;
             }
         }
     }
-    return AnalysisResult{.id = id, .target = target, .modified = modified};
+    return AnalysisResult{.id = id,
+                          .target = target,
+                          .result_map = std::move(result_map),
+                          .modified = modified};
 }

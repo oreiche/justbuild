@@ -10,6 +10,10 @@
       ["@", "src", "", "bin/just-deduplicate-repos.py"]
     }
   }
+, "lock-tool-under-test":
+  { "type": "install"
+  , "files": {"bin/lock-tool-under-test": ["@", "src", "", "bin/just-lock.py"]}
+  }
 , "remote tests (unconfigured)":
   { "type": ["@", "rules", "test", "suite"]
   , "arguments_config": ["TEST_COMPATIBLE_REMOTE", "TEST_BOOTSTRAP_JUST_MR"]
@@ -27,7 +31,8 @@
       , { "type": "if"
         , "cond": {"type": "var", "name": "TEST_BOOTSTRAP_JUST_MR"}
         , "then": []
-        , "else": [["./", "serve-service", "TESTS"]]
+        , "else":
+          [["./", "serve-service", "TESTS"], ["./", "computed-roots", "TESTS"]]
         }
       ]
     }
@@ -65,6 +70,7 @@
     , ["./", "gc", "TESTS"]
     , ["./", "generated-binary", "TESTS"]
     , ["./", "git-import", "TESTS"]
+    , ["./", "just-lock", "TESTS"]
     , ["./", "symlinks", "TESTS"]
     , ["./", "target-cache", "TESTS"]
     , ["./", "target-tests", "TESTS"]

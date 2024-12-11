@@ -25,8 +25,8 @@
 #include "src/buildtool/common/artifact.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/repository_config.hpp"
-#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
+#include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
 #include "src/buildtool/storage/config.hpp"
@@ -70,10 +70,13 @@ class MRGitApi final : public IExecutionApi {
     }
 
     /// \brief Not supported.
+    // NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] auto RetrieveToFds(
         std::vector<Artifact::ObjectInfo> const& /*artifacts_info*/,
         std::vector<int> const& /*fds*/,
-        bool /*raw_tree*/) const noexcept -> bool final {
+        bool /*raw_tree*/,
+        IExecutionApi const* /*alternative*/ = nullptr) const noexcept
+        -> bool final {
         // Retrieval to file descriptors not supported.
         return false;
     }
