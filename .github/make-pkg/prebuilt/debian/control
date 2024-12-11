@@ -5,8 +5,8 @@ Maintainer: Oliver Reiche <oliver.reiche@gmail.com>
 Build-Depends: debhelper-compat (= COMPAT_LEVEL), BUILD_DEPENDS
 Standards-Version: 4.7.0
 Homepage: https://github.com/just-buildsystem/justbuild
-Vcs-Browser: https://github.com/just-buildsystem/justbuild
-Vcs-Git: https://github.com/just-buildsystem/justbuild.git
+Vcs-Browser: https://salsa.debian.org/debian/justbuild
+Vcs-Git: https://salsa.debian.org/debian/justbuild.git
 Rules-Requires-Root: no
 
 Package: justbuild
