@@ -134,11 +134,11 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
       # set reproducible build path (for cache hits during package rebuilds)
       sed -i 's|BUILDDIR ?= .*|BUILDDIR ?= /tmp/build|g' ./debian/justbuild.makefile
 
-      # use clang on older platforms
+      # use clang if build depends on it
       if echo ${BUILD_DEPENDS} | grep -q clang; then
-        # overwrite debhelper compile flags and set FAMILY to "clang"
-        sed -i 's/\([C|CXX]FLAGS\) +=/\1 :=/' ./debian/justbuild.makefile
+        # set FAMILY to "clang" and specify reproducibility compile flag
         sed -i 's/{"FAMILY": "gnu"}/{"FAMILY": "clang"}/' ./debian/justbuild.makefile
+        sed -i 's/\([C|CXX]FLAGS +=\)/\1 -fdebug-compilation-dir=./' ./debian/justbuild.makefile
       fi
     fi
 
