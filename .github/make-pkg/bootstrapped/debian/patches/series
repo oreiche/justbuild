@@ -1,2 +1,3 @@
+fix_manpage_whatis_entries.diff
 rename_just_to_justbuild.diff
 avoid_implicit_json_type_conversion.diff

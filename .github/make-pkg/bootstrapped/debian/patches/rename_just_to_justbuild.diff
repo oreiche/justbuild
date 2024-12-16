@@ -107,8 +107,8 @@ Index: b/share/man/just-graph-file.5.md
  NAME
  ====
  
--just graph file - The format of the action graph used by **`just`**(1)
-+just graph file - The format of the action graph used by **`justbuild`**(1)
+-just-graph-file - The format of the action graph used by **`just`**(1)
++just-graph-file - The format of the action graph used by **`justbuild`**(1)
  
  DESCRIPTION
  ===========
@@ -367,7 +367,7 @@ Index: b/share/man/just-repository-config.5.md
 @@ -4,12 +4,12 @@ NAME
  ====
  
- just repository config - The format of the repository config used by
+ just-repository-config - The format of the repository config used by
 -**`just`**(1)
 +**`justbuild`**(1)
  
@@ -404,10 +404,10 @@ Index: b/share/man/just-serve-config.5.md
  NAME
  ====
  
--**`just`** **`serve`** configuration - The format of the configuration used by
--the **`serve`** subcommand of **`just`**(1)
-+**`justbuild`** **`serve`** configuration - The format of the configuration used by
-+the **`serve`** subcommand of **`justbuild`**(1)
+-just-serve-config - The format of the configuration used by the **`serve`**
+-subcommand of **`just`**(1)
++just-serve-config - The format of the configuration used by the **`serve`**
++subcommand of **`justbuild`**(1)
  
  DESCRIPTION
  ===========
