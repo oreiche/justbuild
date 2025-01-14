@@ -94,7 +94,7 @@ auto const kFetchIntoODBParent = CreateFetchIntoODBParent();
 auto GitRepoRemote::Open(GitCASPtr git_cas) noexcept
     -> std::optional<GitRepoRemote> {
     auto repo = GitRepoRemote(std::move(git_cas));
-    if (not repo.GetRepoRef()) {
+    if (not repo.GetGitCAS()) {
         return std::nullopt;
     }
     return repo;
@@ -103,7 +103,7 @@ auto GitRepoRemote::Open(GitCASPtr git_cas) noexcept
 auto GitRepoRemote::Open(std::filesystem::path const& repo_path) noexcept
     -> std::optional<GitRepoRemote> {
     auto repo = GitRepoRemote(repo_path);
-    if (not repo.GetRepoRef()) {
+    if (not repo.GetGitCAS()) {
         return std::nullopt;
     }
     return repo;
@@ -151,12 +151,13 @@ auto GitRepoRemote::GetCommitFromRemote(std::shared_ptr<git_config> cfg,
         }
         // create remote
         git_remote* remote_ptr{nullptr};
-        if (git_remote_create_anonymous(
-                &remote_ptr, GetRepoRef()->Ptr(), repo_url.c_str()) != 0) {
+        if (git_remote_create_anonymous(&remote_ptr,
+                                        GetGitCAS()->GetRepository(),
+                                        repo_url.c_str()) != 0) {
             (*logger)(
                 fmt::format("Creating anonymous remote for git repository {} "
                             "failed with:\n{}",
-                            GetGitPath().string(),
+                            GetGitCAS()->GetPath().string(),
                             GitLastError()),
                 true /*fatal*/);
             git_remote_free(remote_ptr);
@@ -222,7 +223,7 @@ auto GitRepoRemote::GetCommitFromRemote(std::shared_ptr<git_config> cfg,
                 fmt::format("Connecting to remote {} for git repository {} "
                             "failed with:\n{}",
                             repo_url,
-                            GetGitPath().string(),
+                            GetGitCAS()->GetPath().string(),
                             GitLastError()),
                 true /*fatal*/);
             return std::nullopt;
@@ -282,12 +283,13 @@ auto GitRepoRemote::FetchFromRemote(std::shared_ptr<git_config> cfg,
         }
         // create remote from repo
         git_remote* remote_ptr{nullptr};
-        if (git_remote_create_anonymous(
-                &remote_ptr, GetRepoRef()->Ptr(), repo_url.c_str()) != 0) {
+        if (git_remote_create_anonymous(&remote_ptr,
+                                        GetGitCAS()->GetRepository(),
+                                        repo_url.c_str()) != 0) {
             (*logger)(fmt::format("Creating remote {} for git repository {} "
                                   "failed with:\n{}",
                                   repo_url,
-                                  GetGitPath().string(),
+                                  GetGitCAS()->GetPath().string(),
                                   GitLastError()),
                       true /*fatal*/);
             // cleanup resources
@@ -304,8 +306,8 @@ auto GitRepoRemote::FetchFromRemote(std::shared_ptr<git_config> cfg,
         if (not cfg) {
             // get config snapshot of current repo
             git_config* cfg_ptr{nullptr};
-            if (git_repository_config_snapshot(&cfg_ptr, GetRepoRef()->Ptr()) !=
-                0) {
+            if (git_repository_config_snapshot(
+                    &cfg_ptr, GetGitCAS()->GetRepository()) != 0) {
                 (*logger)(fmt::format("Retrieving config object in fetch from "
                                       "remote failed with:\n{}",
                                       GitLastError()),
@@ -375,7 +377,7 @@ auto GitRepoRemote::FetchFromRemote(std::shared_ptr<git_config> cfg,
                 fmt::format("Fetching{} in git repository {} failed "
                             "with:\n{}",
                             branch ? fmt::format(" branch {}", *branch) : "",
-                            GetGitPath().string(),
+                            GetGitCAS()->GetPath().string(),
                             GitLastError()),
                 true /*fatal*/);
             return false;
@@ -459,11 +461,11 @@ auto GitRepoRemote::UpdateCommitViaTmpRepo(
         }
         // set up the system command
         SystemCommand system{repo_url};
-        auto const exit_code =
-            system.Execute(cmdline,
-                           env,
-                           GetGitPath(),  // which path is not actually relevant
-                           tmp_path);
+        auto const exit_code = system.Execute(
+            cmdline,
+            env,
+            GetGitCAS()->GetPath(),  // which path is not actually relevant
+            tmp_path);
 
         if (not exit_code) {
             (*logger)(fmt::format("exec() on command failed."),
@@ -562,9 +564,9 @@ auto GitRepoRemote::FetchViaTmpRepo(StorageConfig const& storage_config,
             }
             // add backend, with max priority
             FetchIntoODBBackend b{.parent = kFetchIntoODBParent,
-                                  .target_odb = GetGitOdb().get()};
+                                  .target_odb = GetGitCAS()->GetODB()};
             if (git_odb_add_backend(
-                    tmp_repo->GetGitOdb().get(),
+                    tmp_repo->GetGitCAS()->GetODB(),
                     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
                     reinterpret_cast<git_odb_backend*>(&b),
                     std::numeric_limits<int>::max()) == 0) {
@@ -620,7 +622,7 @@ auto GitRepoRemote::FetchViaTmpRepo(StorageConfig const& storage_config,
         // run command
         SystemCommand system{repo_url};
         auto const exit_code =
-            system.Execute(cmdline, env, GetGitPath(), tmp_path);
+            system.Execute(cmdline, env, GetGitCAS()->GetPath(), tmp_path);
 
         if (not exit_code) {
             (*logger)(fmt::format("exec() on command failed."),

@@ -18,6 +18,7 @@
 
 #include "fmt/core.h"
 #include "src/buildtool/crypto/hash_info.hpp"
+#include "src/utils/cpp/path.hpp"
 
 auto ParseArchiveContent(ExpressionPtr const& repo_desc,
                          std::string const& origin)
@@ -121,6 +122,13 @@ auto ParseArchiveDescription(ExpressionPtr const& repo_desc,
                                             ? repo_desc_subdir->String()
                                             : "")
                       .lexically_normal();
+    if (not PathIsNonUpwards(subdir)) {
+        (*logger)(fmt::format("ArchiveCheckout: Expected field \"subdir\" to "
+                              "be a non-upwards path, but found {}",
+                              subdir.string()),
+                  /*fatal=*/true);
+        return std::nullopt;
+    }
 
     // check "special" pragma
     auto repo_desc_pragma = repo_desc->At("pragma");

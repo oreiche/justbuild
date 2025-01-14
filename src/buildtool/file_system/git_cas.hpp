@@ -20,10 +20,12 @@
 #include <memory>
 #include <optional>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "gsl/gsl"
 #include "src/buildtool/file_system/git_context.hpp"
 #include "src/buildtool/file_system/git_utils.hpp"
 
@@ -33,8 +35,10 @@ using GitCASPtr = std::shared_ptr<GitCAS const>;
 /// \brief Git CAS that maintains its Git context.
 class GitCAS {
   public:
-    static auto Open(std::filesystem::path const& repo_path) noexcept
-        -> GitCASPtr;
+    [[nodiscard]] static auto Open(
+        std::filesystem::path const& repo_path) noexcept -> GitCASPtr;
+
+    [[nodiscard]] static auto CreateEmpty() noexcept -> GitCASPtr;
 
     GitCAS() noexcept;
     ~GitCAS() noexcept = default;
@@ -44,6 +48,20 @@ class GitCAS {
     GitCAS(GitCAS&& other) = delete;
     auto operator=(GitCAS const&) = delete;
     auto operator=(GitCAS&& other) = delete;
+
+    [[nodiscard]] auto GetODB() const noexcept -> gsl::not_null<git_odb*> {
+        return odb_.get();
+    }
+
+    [[nodiscard]] auto GetRepository() const noexcept
+        -> gsl::not_null<git_repository*> {
+        return repo_.get();
+    }
+
+    [[nodiscard]] auto GetPath() const noexcept
+        -> std::filesystem::path const& {
+        return git_path_;
+    }
 
     /// \brief Read object from CAS.
     /// \param id         The object id.
@@ -63,18 +81,11 @@ class GitCAS {
 
   private:
     std::unique_ptr<git_odb, decltype(&odb_closer)> odb_{nullptr, odb_closer};
+    std::unique_ptr<git_repository, decltype(&repository_closer)> repo_{
+        nullptr,
+        repository_closer};
     // git folder path of repo
     std::filesystem::path git_path_;
-
-    // mutex to guard odb while setting up a "fake" repository; it needs to be
-    // uniquely owned while wrapping the odb, but then git operations are free
-    // to share it.
-    mutable std::shared_mutex mutex_;
-
-    [[nodiscard]] auto OpenODB(std::filesystem::path const& repo_path) noexcept
-        -> bool;
-
-    friend class GitRepo;  // allow access to ODB
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_FILE_SYSTEM_GIT_CAS_HPP

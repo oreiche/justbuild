@@ -104,6 +104,13 @@ void GitCheckout(ExpressionPtr const& repo_desc,
                                             ? repo_desc_subdir->String()
                                             : "")
                       .lexically_normal();
+    if (not PathIsNonUpwards(subdir)) {
+        (*logger)(fmt::format("GitCheckout: Expected field \"subdir\" to be a "
+                              "non-upwards path, but found {}",
+                              subdir.string()),
+                  /*fatal=*/true);
+        return;
+    }
     // check optional mirrors
     auto repo_desc_mirrors = repo_desc->Get("mirrors", Expression::list_t{});
     std::vector<std::string> mirrors{};

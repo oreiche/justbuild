@@ -3,7 +3,7 @@
 NAME
 ====
 
-just-mr repository config - The format of the repository config used by
+just-mr-repository-config - The format of the repository config used by
 **`just-mr`**(1)
 
 DESCRIPTION
@@ -184,7 +184,8 @@ part of a Git repository, its Git tree identifier is used; otherwise,
 the workspace root will be realized as a Git tree in the Git repository
 in **`just`**'s local build root.
 
-For all workspace roots except *`"distdir"`* the pragma key *`"special"`* is
+For all workspace roots except *`"distdir"`*, *`"computed"`*,
+and *`"tree structure"`*, the pragma key *`"special"`* is
 supported. If its value is *`"ignore"`* then it indicates that the workspace
 root should ignore all special (i.e., neither file, executable, nor tree)
 entries. For a *`"file"`* workspace root or for an *`"archive"`* workspace root
@@ -240,7 +241,9 @@ The repository configuration format is structured as a JSON object. The
 following fields are supported:
 
  - *`"main"`* contains a JSON string that determines which of the
-   provided repositories is considered the main repository.
+   provided repositories is considered the main repository. This entry
+   is optional, and if ommitted, it will be ommitted in the generated
+   **`just-repository-config`**.
 
  - *`"repositories"`* contains a JSON object, where each key is the
    global name of a repository and its corresponding value is the
