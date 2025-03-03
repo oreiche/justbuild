@@ -27,7 +27,7 @@
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/file_system/git_types.hpp"
-#include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
+#include "src/buildtool/file_system/symlinks/pragma_special.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/expected.hpp"
 
@@ -37,7 +37,7 @@ class SourceTreeClient {
   public:
     explicit SourceTreeClient(
         ServerAddress const& address,
-        gsl::not_null<HashFunction const*> const& hash_function,
+        HashFunction hash_function,
         gsl::not_null<RemoteContext const*> const& remote_context) noexcept;
 
     struct TreeResult {
@@ -133,8 +133,15 @@ class SourceTreeClient {
     [[nodiscard]] auto GetRemoteTree(
         ArtifactDigest const& digest) const noexcept -> bool;
 
+    /// \brief Compute tree structure of a tree
+    /// \param tree Tree to compute
+    /// \return Git digest of the tree structure computed for tree on
+    /// success or an unexpected error on failure (fatal or content not found).
+    [[nodiscard]] auto ComputeTreeStructure(ArtifactDigest const& tree)
+        const noexcept -> expected<ArtifactDigest, GitLookupError>;
+
   private:
-    HashFunction const& hash_function_;  // hash function of the remote
+    HashFunction hash_function_;  // hash function of the remote
     std::unique_ptr<justbuild::just_serve::SourceTree::Stub> stub_;
     Logger logger_{"RemoteSourceTreeClient"};
 };

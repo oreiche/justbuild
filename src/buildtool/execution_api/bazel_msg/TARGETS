@@ -1,11 +1,7 @@
-{ "bazel_msg":
+{ "execution_config":
   { "type": ["@", "rules", "CC", "library"]
-  , "name": ["bazel_msg"]
-  , "hdrs": ["bazel_blob_container.hpp", "bazel_common.hpp"]
-  , "deps":
-    [ ["src/buildtool/common", "bazel_types"]
-    , ["src/buildtool/execution_api/common", "content_blob_container"]
-    ]
+  , "name": ["execution_config"]
+  , "hdrs": ["execution_config.hpp"]
   , "stage": ["src", "buildtool", "execution_api", "bazel_msg"]
   }
 , "bazel_msg_factory":
@@ -14,13 +10,12 @@
   , "hdrs": ["bazel_msg_factory.hpp"]
   , "srcs": ["bazel_msg_factory.cpp"]
   , "deps":
-    [ "bazel_msg"
-    , "directory_tree"
+    [ "directory_tree"
     , ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/common", "artifact_blob"]
     , ["src/buildtool/common", "bazel_types"]
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/crypto", "hash_function"]
-    , ["src/buildtool/execution_api/common", "artifact_blob_container"]
     , ["src/buildtool/file_system", "object_type"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
@@ -29,8 +24,6 @@
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]
     , ["@", "protoc", "", "libprotobuf"]
-    , ["src/buildtool/common", "artifact_digest_factory"]
-    , ["src/buildtool/execution_api/common", "content_blob_container"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/file_system", "git_repo"]
     , ["src/utils/cpp", "hex_string"]

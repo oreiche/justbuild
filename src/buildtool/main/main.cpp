@@ -97,7 +97,6 @@
 #include "src/buildtool/serve_api/serve_service/serve_server_implementation.hpp"
 #include "src/buildtool/storage/backend_description.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
-#include "src/utils/cpp/gsl.hpp"
 #endif  // BOOTSTRAP_BUILD_TOOL
 
 namespace {
@@ -134,16 +133,22 @@ void SetupLogging(LogArguments const& clargs) {
         builder.SetBuildRoot(*eargs.local_root);
     }
 
+    auto backend_description = BackendDescription::Describe(
+        remote_address, remote_platform_properties, remote_dispatch);
+    if (not backend_description) {
+        Logger::Log(LogLevel::Error, std::move(backend_description).error());
+        return std::nullopt;
+    }
+
     auto config =
         builder.SetHashType(hash_type)
-            .SetRemoteExecutionArgs(
-                remote_address, remote_platform_properties, remote_dispatch)
+            .SetBackendDescription(std::move(backend_description).value())
             .Build();
-    if (config) {
-        return *std::move(config);
+    if (not config) {
+        Logger::Log(LogLevel::Error, std::move(config).error());
+        return std::nullopt;
     }
-    Logger::Log(LogLevel::Error, config.error());
-    return std::nullopt;
+    return *std::move(config);
 }
 
 #ifndef BOOTSTRAP_BUILD_TOOL
@@ -187,6 +192,7 @@ void SetupLogging(LogArguments const& clargs) {
     -> std::optional<RemoteServeConfig> {
     RemoteServeConfig::Builder builder;
     builder.SetRemoteAddress(srvargs.remote_serve_address)
+        .SetClientExecutionAddress(srvargs.client_remote_address)
         .SetKnownRepositories(srvargs.repositories)
         .SetJobs(cargs.jobs)
         .SetActionTimeout(bargs.timeout)
@@ -240,24 +246,6 @@ void SetupLogging(LogArguments const& clargs) {
 
 void SetupFileChunker() {
     FileChunker::Initialize();
-}
-
-/// \brief Write backend description (which determines the target cache shard)
-/// to CAS.
-void StoreTargetCacheShard(
-    StorageConfig const& storage_config,  // NOLINT(misc-unused-parameters)
-    Storage const& storage,
-    RemoteExecutionConfig const& remote_exec_config) noexcept {
-    auto backend_description =
-        DescribeBackend(remote_exec_config.remote_address,
-                        remote_exec_config.platform_properties,
-                        remote_exec_config.dispatch);
-    if (not backend_description) {
-        Logger::Log(LogLevel::Error, backend_description.error());
-        std::exit(kExitFailure);
-    }
-    [[maybe_unused]] auto id = storage.CAS().StoreBlob(*backend_description);
-    EnsuresAudit(id and id->hash() == storage_config.backend_description_id);
 }
 
 #endif  // BOOTSTRAP_BUILD_TOOL
@@ -815,8 +803,6 @@ auto main(int argc, char* argv[]) -> int {
                     return kExitFailure;
                 }
                 auto const storage = Storage::Create(&*storage_config);
-                StoreTargetCacheShard(
-                    *storage_config, storage, remote_exec_config);
 
                 // pack the local context instances to be passed as needed
                 LocalContext const local_context{
@@ -858,11 +844,13 @@ auto main(int argc, char* argv[]) -> int {
         }
 
         if (arguments.cmd == SubCommand::kServe) {
+            std::mutex lock{};
             auto serve_server =
                 ServeServerImpl::Create(arguments.service.interface,
                                         arguments.service.port,
                                         arguments.service.info_file,
-                                        arguments.service.pid_file);
+                                        arguments.service.pid_file,
+                                        &lock);
             if (serve_server) {
                 // Set up remote execution config.
                 auto remote_exec_config = CreateRemoteExecutionConfig(
@@ -882,8 +870,6 @@ auto main(int argc, char* argv[]) -> int {
                     return kExitFailure;
                 }
                 auto const storage = Storage::Create(&*storage_config);
-                StoreTargetCacheShard(
-                    *storage_config, storage, *remote_exec_config);
 
                 // pack the local context instances to be passed as needed
                 LocalContext const local_context{
@@ -964,10 +950,6 @@ auto main(int argc, char* argv[]) -> int {
         }
         auto const storage = Storage::Create(&*storage_config);
 
-#ifndef BOOTSTRAP_BUILD_TOOL
-        StoreTargetCacheShard(*storage_config, storage, *remote_exec_config);
-#endif  // BOOTSTRAP_BUILD_TOOL
-
         auto jobs = arguments.build.build_jobs > 0 ? arguments.build.build_jobs
                                                    : arguments.common.jobs;
 
@@ -1040,25 +1022,15 @@ auto main(int argc, char* argv[]) -> int {
         std::size_t eval_root_jobs =
             std::lround(std::ceil(std::sqrt(arguments.common.jobs)));
 #ifndef BOOTSTRAP_BUILD_TOOL
-        const bool need_rehash =
-            arguments.protocol.hash_type != HashFunction::Type::GitSHA1;
-        const auto git_storage_config =
-            need_rehash ? CreateStorageConfig(arguments.endpoint,
-                                              HashFunction::Type::GitSHA1)
-                        : std::nullopt;
-        if (need_rehash and (not git_storage_config)) {
-            return kExitFailure;
-        }
         std::optional<ServeApi> serve = ServeApi::Create(
             *serve_config, &local_context, &remote_context, &main_apis);
-        if (not EvaluateComputedRoots(&repo_config,
-                                      main_repo,
-                                      serve ? &*serve : nullptr,
-                                      *storage_config,
-                                      git_storage_config,
-                                      traverse_args,
-                                      &exec_context,
-                                      eval_root_jobs)) {
+        if (not EvaluatePrecomputedRoots(&repo_config,
+                                         main_repo,
+                                         serve ? &*serve : nullptr,
+                                         *storage_config,
+                                         traverse_args,
+                                         &exec_context,
+                                         eval_root_jobs)) {
             return kExitFailure;
         }
 #else
@@ -1206,7 +1178,7 @@ auto main(int argc, char* argv[]) -> int {
             }
 #ifndef BOOTSTRAP_BUILD_TOOL
             ReportTaintedness(*analyse_result);
-            auto const& [actions, blobs, trees] =
+            auto [actions, blobs, trees] =
                 analyse_result->result_map.ToResult(&stats, &progress);
 
             // collect cache targets and artifacts for target-level caching
@@ -1234,9 +1206,9 @@ auto main(int argc, char* argv[]) -> int {
             auto build_result =
                 traverser.BuildAndStage(artifacts,
                                         runfiles,
-                                        actions,
-                                        blobs,
-                                        trees,
+                                        std::move(actions),
+                                        std::move(blobs),
+                                        std::move(trees),
                                         std::move(cache_artifacts));
             if (build_result) {
                 WriteTargetCacheEntries(

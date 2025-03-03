@@ -14,6 +14,7 @@
 
 #include "src/buildtool/execution_api/serve/mr_local_api.hpp"
 
+#include <functional>
 #include <utility>
 
 #include "src/buildtool/common/protocol_traits.hpp"
@@ -94,7 +95,7 @@ auto MRLocalApi::RetrieveToCas(
 }
 
 // NOLINTNEXTLINE(google-default-arguments)
-auto MRLocalApi::Upload(ArtifactBlobContainer&& blobs,
+auto MRLocalApi::Upload(std::unordered_set<ArtifactBlob>&& blobs,
                         bool skip_find_missing) const noexcept -> bool {
     // in native mode, dispatch to native local api
     if (compat_local_api_ == nullptr) {
@@ -123,8 +124,9 @@ auto MRLocalApi::IsAvailable(ArtifactDigest const& digest) const noexcept
     return compat_local_api_->IsAvailable(digest);
 }
 
-auto MRLocalApi::IsAvailable(std::vector<ArtifactDigest> const& digests)
-    const noexcept -> std::vector<ArtifactDigest> {
+auto MRLocalApi::GetMissingDigests(
+    std::unordered_set<ArtifactDigest> const& digests) const noexcept
+    -> std::unordered_set<ArtifactDigest> {
     // This method can legitimately be called with both native and
     // compatible digests when in compatible mode, therefore we need to
     // interrogate the hash type of the input.
@@ -134,8 +136,8 @@ auto MRLocalApi::IsAvailable(std::vector<ArtifactDigest> const& digests)
         return {};  // nothing to do
     }
     // native digests get dispatched to native local api
-    if (ProtocolTraits::IsNative(digests[0].GetHashType())) {
-        return native_local_api_->IsAvailable(digests);
+    if (ProtocolTraits::IsNative(digests.begin()->GetHashType())) {
+        return native_local_api_->GetMissingDigests(digests);
     }
     // compatible digests get dispatched to compatible local api
     if (compat_local_api_ == nullptr) {
@@ -143,5 +145,10 @@ auto MRLocalApi::IsAvailable(std::vector<ArtifactDigest> const& digests)
                     "MRLocalApi: Unexpected digest type provided");
         return {};
     }
-    return compat_local_api_->IsAvailable(digests);
+    return compat_local_api_->GetMissingDigests(digests);
+}
+
+auto MRLocalApi::GetHashType() const noexcept -> HashFunction::Type {
+    return compat_local_api_ == nullptr ? native_local_api_->GetHashType()
+                                        : compat_local_api_->GetHashType();
 }

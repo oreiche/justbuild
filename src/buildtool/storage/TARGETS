@@ -6,13 +6,9 @@
     [ "backend_description"
     , ["@", "fmt", "", "fmt"]
     , ["@", "gsl", "", "gsl"]
-    , ["src/buildtool/common", "artifact_digest_factory"]
-    , ["src/buildtool/common", "common"]
     , ["src/buildtool/common", "protocol_traits"]
-    , ["src/buildtool/common/remote", "remote_common"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/file_system", "file_system_manager"]
-    , ["src/buildtool/file_system", "object_type"]
     , ["src/utils/cpp", "expected"]
     , ["src/utils/cpp", "gsl"]
     , ["src/utils/cpp", "tmp_dir"]
@@ -26,7 +22,8 @@
   , "srcs": ["repository_garbage_collector.cpp"]
   , "deps": ["config", ["src/utils/cpp", "file_locking"]]
   , "private-deps":
-    [ ["src/buildtool/execution_api/common", "common"]
+    [ ["@", "fmt", "", "fmt"]
+    , ["src/buildtool/execution_api/common", "ids"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
@@ -52,7 +49,8 @@
     ]
   , "srcs": ["target_cache_entry.cpp", "uplinker.cpp"]
   , "deps":
-    [ "config"
+    [ "backend_description"
+    , "config"
     , "file_chunker"
     , ["@", "fmt", "", "fmt"]
     , ["@", "gsl", "", "gsl"]
@@ -61,7 +59,6 @@
     , ["src/buildtool/build_engine/base_maps", "entity_name_data"]
     , ["src/buildtool/build_engine/expression", "expression"]
     , ["src/buildtool/common", "artifact_description"]
-    , ["src/buildtool/common", "artifact_digest_factory"]
     , ["src/buildtool/common", "bazel_types"]
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/common", "protocol_traits"]
@@ -92,7 +89,7 @@
     , "storage"
     , ["@", "fmt", "", "fmt"]
     , ["src/buildtool/crypto", "hash_function"]
-    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/execution_api/common", "ids"]
     , ["src/buildtool/execution_api/common", "message_limits"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/logging", "log_level"]
@@ -111,7 +108,7 @@
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]
     , ["@", "gsl", "", "gsl"]
-    , ["src/buildtool/common", "artifact_digest_factory"]
+    , ["src/buildtool/common", "common"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/crypto", "hasher"]
     , ["src/buildtool/file_system", "file_storage"]
@@ -135,7 +132,7 @@
     , "storage"
     , ["src/buildtool/common", "user_structs"]
     , ["src/buildtool/crypto", "hash_function"]
-    , ["src/buildtool/file_system/symlinks_map", "pragma_special"]
+    , ["src/buildtool/file_system/symlinks", "pragma_special"]
     ]
   , "stage": ["src", "buildtool", "storage"]
   , "private-deps":
@@ -162,10 +159,16 @@
   , "hdrs": ["backend_description.hpp"]
   , "srcs": ["backend_description.cpp"]
   , "deps":
-    [ ["src/buildtool/common/remote", "remote_common"]
+    [ ["src/buildtool/common", "common"]
+    , ["src/buildtool/common/remote", "remote_common"]
+    , ["src/buildtool/crypto", "hash_function"]
     , ["src/utils/cpp", "expected"]
     ]
   , "stage": ["src", "buildtool", "storage"]
-  , "private-deps": [["@", "fmt", "", "fmt"], ["@", "json", "", "json"]]
+  , "private-deps":
+    [ ["@", "fmt", "", "fmt"]
+    , ["@", "json", "", "json"]
+    , ["src/buildtool/file_system", "object_type"]
+    ]
   }
 }

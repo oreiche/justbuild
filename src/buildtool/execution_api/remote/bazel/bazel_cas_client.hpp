@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <grpcpp/support/status.h>
@@ -29,11 +30,13 @@
 #include "fmt/core.h"
 #include "gsl/gsl"
 #include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/common/artifact_blob.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/common/remote/port.hpp"
 #include "src/buildtool/common/remote/retry_config.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
+#include "src/buildtool/execution_api/remote/bazel/bazel_capabilities_client.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bytestream_client.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
@@ -45,7 +48,9 @@ class BazelCasClient {
         std::string const& server,
         Port port,
         gsl::not_null<Auth const*> const& auth,
-        gsl::not_null<RetryConfig const*> const& retry_config) noexcept;
+        gsl::not_null<RetryConfig const*> const& retry_config,
+        gsl::not_null<BazelCapabilitiesClient const*> const&
+            capabilities) noexcept;
 
     /// \brief Find missing blobs
     /// \param[in] instance_name Name of the CAS instance
@@ -53,40 +58,26 @@ class BazelCasClient {
     /// \returns The digests of blobs not found in CAS
     [[nodiscard]] auto FindMissingBlobs(
         std::string const& instance_name,
-        std::vector<bazel_re::Digest> const& digests) const noexcept
-        -> std::vector<bazel_re::Digest>;
-
-    /// \brief Find missing blobs
-    /// \param[in] instance_name Name of the CAS instance
-    /// \param[in] digests       The blob digests to search for
-    /// \returns The digests of blobs not found in CAS
-    [[nodiscard]] auto FindMissingBlobs(
-        std::string const& instance_name,
-        BazelBlobContainer const& blob_container) const noexcept
-        -> std::vector<bazel_re::Digest>;
+        std::unordered_set<ArtifactDigest> const& digests) const noexcept
+        -> std::unordered_set<ArtifactDigest>;
 
     /// \brief Upload multiple blobs in batch transfer
     /// \param[in] instance_name Name of the CAS instance
-    /// \param[in] begin         Start of the blobs to upload
-    /// \param[in] end           End of the blobs to upload
-    /// \returns The digests of blobs successfully updated
+    /// \param[in] blobs         Blobs to upload
+    /// \returns The count of successfully updated blobs
     [[nodiscard]] auto BatchUpdateBlobs(
         std::string const& instance_name,
-        std::vector<gsl::not_null<BazelBlob const*>>::const_iterator const&
-            begin,
-        std::vector<gsl::not_null<BazelBlob const*>>::const_iterator const& end)
-        const noexcept -> std::size_t;
+        std::unordered_set<ArtifactBlob> const& blobs) const noexcept
+        -> std::size_t;
 
     /// \brief Read multiple blobs in batch transfer
     /// \param[in] instance_name Name of the CAS instance
-    /// \param[in] begin         Start of the blob digests to read
-    /// \param[in] end           End of the blob digests to read
-    /// \returns The blobs sucessfully read
+    /// \param[in] blobs         Blob digests to read
+    /// \returns The blobs successfully read
     [[nodiscard]] auto BatchReadBlobs(
         std::string const& instance_name,
-        std::vector<bazel_re::Digest>::const_iterator const& begin,
-        std::vector<bazel_re::Digest>::const_iterator const& end) const noexcept
-        -> std::vector<BazelBlob>;
+        std::unordered_set<ArtifactDigest> const& blobs) const noexcept
+        -> std::unordered_set<ArtifactBlob>;
 
     [[nodiscard]] auto GetTree(std::string const& instance_name,
                                bazel_re::Digest const& root_digest,
@@ -99,7 +90,7 @@ class BazelCasClient {
     /// \param[in] blob          The blob to upload
     /// \returns Boolean indicating successful upload
     [[nodiscard]] auto UpdateSingleBlob(std::string const& instance_name,
-                                        BazelBlob const& blob) const noexcept
+                                        ArtifactBlob const& blob) const noexcept
         -> bool;
 
     /// \brief Read single blob via incremental bytestream reader
@@ -108,7 +99,7 @@ class BazelCasClient {
     /// \returns Incremental bytestream reader.
     [[nodiscard]] auto IncrementalReadSingleBlob(
         std::string const& instance_name,
-        bazel_re::Digest const& digest) const noexcept
+        ArtifactDigest const& digest) const noexcept
         -> ByteStreamClient::IncrementalReader;
 
     /// \brief Read single blob via bytestream
@@ -116,8 +107,8 @@ class BazelCasClient {
     /// \param[in] digest        Blob digest to read
     /// \returns The blob successfully read
     [[nodiscard]] auto ReadSingleBlob(std::string const& instance_name,
-                                      bazel_re::Digest const& digest)
-        const noexcept -> std::optional<BazelBlob>;
+                                      ArtifactDigest const& digest)
+        const noexcept -> std::optional<ArtifactBlob>;
 
     /// @brief Split single blob into chunks
     /// @param[in] hash_function    Hash function to be used for creation of
@@ -152,31 +143,15 @@ class BazelCasClient {
         HashFunction hash_function,
         std::string const& instance_name) const noexcept -> bool;
 
+    [[nodiscard]] auto GetMaxBatchTransferSize(
+        std::string const& instance_name) const noexcept -> std::size_t;
+
   private:
     std::unique_ptr<ByteStreamClient> stream_;
     RetryConfig const& retry_config_;
+    BazelCapabilitiesClient const& capabilities_;
     std::unique_ptr<bazel_re::ContentAddressableStorage::Stub> stub_;
     Logger logger_{"RemoteCasClient"};
-
-    template <class TOutputIter>
-    [[nodiscard]] auto FindMissingBlobs(std::string const& instance_name,
-                                        TOutputIter const& start,
-                                        TOutputIter const& end) const noexcept
-        -> std::vector<bazel_re::Digest>;
-
-    template <typename TRequest, typename TForwardIter>
-    [[nodiscard]] auto CreateBatchRequestsMaxSize(
-        std::string const& instance_name,
-        TForwardIter const& first,
-        TForwardIter const& last,
-        std::string const& heading,
-        std::function<void(TRequest*,
-                           typename TForwardIter::value_type const&)> const&
-            request_builder) const noexcept -> std::vector<TRequest>;
-
-    [[nodiscard]] static auto CreateUpdateBlobsSingleRequest(
-        BazelBlob const& b) noexcept
-        -> bazel_re::BatchUpdateBlobsRequest_Request;
 
     [[nodiscard]] static auto CreateGetTreeRequest(
         std::string const& instance_name,
@@ -189,9 +164,9 @@ class BazelCasClient {
     template <typename TContent>
     struct RetryProcessBatchResponse {
         bool ok{false};
-        std::vector<TContent> result;
+        std::vector<TContent> result{};
         bool exit_retry_loop{false};
-        std::optional<std::string> error_msg;
+        std::optional<std::string> error_msg{};
     };
 
     // If this function is defined in the .cpp file, clang raises an error
@@ -220,10 +195,6 @@ class BazelCasClient {
         }
         return {.ok = true, .result = std::move(output)};
     }
-
-    template <class TContent, class TResponse>
-    auto ProcessResponseContents(TResponse const& response) const noexcept
-        -> std::vector<TContent>;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_BAZEL_BAZEL_CAS_CLIENT_HPP

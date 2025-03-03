@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -314,6 +315,27 @@ class GitRepo {
     /// Returns nullptr on errors.
     [[nodiscard]] auto GetConfigSnapshot() const noexcept
         -> std::shared_ptr<git_config>;
+
+    /// \brief Import source directory to target git repository
+    /// \param storage_config   Storage where the source must be imported to
+    /// \param source_dir       Directory to import
+    /// \param commit_message   Message of the commit
+    /// \param tagging_lock     Mutex to protect critical git operations
+    /// \return The tree id of the commited directory on success or an
+    /// unexpected error as string on failure.
+    [[nodiscard]] static auto ImportToGit(
+        StorageConfig const& storage_config,
+        std::filesystem::path const& source_dir,
+        std::string const& commit_message,
+        gsl::not_null<std::mutex*> const& tagging_lock) noexcept
+        -> expected<std::string, std::string>;
+
+    /// \brief Check that the given repository contains the given tree
+    /// \returns Flag reflecting whether the tree is present in the repository
+    /// or an error message on failure.
+    [[nodiscard]] static auto IsTreeInRepo(std::filesystem::path const& repo,
+                                           std::string const& tree_id) noexcept
+        -> expected<bool, std::string>;
 
   private:
     GitCASPtr git_cas_;

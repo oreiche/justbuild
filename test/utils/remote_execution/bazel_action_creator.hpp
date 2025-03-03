@@ -16,24 +16,28 @@
 #define INCLUDED_SRC_TEST_UTILS_REMOTE_EXECUTION_ACTION_CREATOR_HPP
 
 #include <algorithm>  // std::transform, std::copy
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "google/protobuf/repeated_ptr_field.h"
 #include "gsl/gsl"
-#include "src/buildtool/common/bazel_digest_factory.hpp"
+#include "src/buildtool/common/artifact_blob.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/common/remote/remote_common.hpp"
 #include "src/buildtool/common/remote/retry_config.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
+#include "src/buildtool/execution_api/remote/bazel/bazel_capabilities_client.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_cas_client.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "src/utils/cpp/expected.hpp"
 #include "test/utils/remote_execution/test_auth_config.hpp"
 #include "test/utils/remote_execution/test_remote_config.hpp"
 
@@ -51,7 +55,7 @@
         *(platform->add_properties()) = property;
     }
 
-    std::vector<BazelBlob> blobs;
+    std::unordered_set<ArtifactBlob> blobs;
 
     bazel_re::Command cmd;
     cmd.set_allocated_platform(platform.release());
@@ -68,26 +72,34 @@
                        return env_var_message;
                    });
 
-    auto cmd_data = cmd.SerializeAsString();
-    auto cmd_id = BazelDigestFactory::HashDataAs<ObjectType::File>(
-        hash_function, cmd_data);
-    blobs.emplace_back(cmd_id, cmd_data, /*is_exec=*/false);
+    auto const cmd_blob = ArtifactBlob::FromMemory(
+        hash_function, ObjectType::File, cmd.SerializeAsString());
+    if (not cmd_blob.has_value()) {
+        return nullptr;
+    }
+    blobs.emplace(*cmd_blob);
 
-    bazel_re::Directory empty_dir;
-    auto dir_data = empty_dir.SerializeAsString();
-    auto dir_id = BazelDigestFactory::HashDataAs<ObjectType::Tree>(
-        hash_function, dir_data);
-    blobs.emplace_back(dir_id, dir_data, /*is_exec=*/false);
+    bazel_re::Directory const empty_dir;
+    auto const dir_blob = ArtifactBlob::FromMemory(
+        hash_function, ObjectType::Tree, empty_dir.SerializeAsString());
+    if (not dir_blob.has_value()) {
+        return nullptr;
+    }
+    blobs.emplace(*dir_blob);
 
     bazel_re::Action action;
-    (*action.mutable_command_digest()) = cmd_id;
+    (*action.mutable_command_digest()) =
+        ArtifactDigestFactory::ToBazel(cmd_blob->GetDigest());
     action.set_do_not_cache(false);
-    (*action.mutable_input_root_digest()) = dir_id;
+    (*action.mutable_input_root_digest()) =
+        ArtifactDigestFactory::ToBazel(dir_blob->GetDigest());
 
-    auto action_data = action.SerializeAsString();
-    auto action_id = BazelDigestFactory::HashDataAs<ObjectType::File>(
-        hash_function, action_data);
-    blobs.emplace_back(action_id, action_data, /*is_exec=*/false);
+    auto const action_blob = ArtifactBlob::FromMemory(
+        hash_function, ObjectType::File, action.SerializeAsString());
+    if (not action_blob.has_value()) {
+        return nullptr;
+    }
+    blobs.emplace(*action_blob);
 
     auto auth_config = TestAuthConfig::ReadFromEnvironment();
     if (not auth_config) {
@@ -101,22 +113,19 @@
 
     RetryConfig retry_config{};  // default retry config
 
+    BazelCapabilitiesClient capabilities(remote_config->remote_address->host,
+                                         remote_config->remote_address->port,
+                                         &*auth_config,
+                                         &retry_config);
     BazelCasClient cas_client(remote_config->remote_address->host,
                               remote_config->remote_address->port,
                               &*auth_config,
-                              &retry_config);
+                              &retry_config,
+                              &capabilities);
 
-    std::vector<gsl::not_null<BazelBlob const*>> blob_ptrs;
-    blob_ptrs.reserve(blobs.size());
-    std::transform(blobs.begin(),
-                   blobs.end(),
-                   std::back_inserter(blob_ptrs),
-                   [](BazelBlob const& b) { return &b; });
-
-    if (cas_client.BatchUpdateBlobs(instance_name,
-                                    blob_ptrs.begin(),
-                                    blob_ptrs.end()) == blobs.size()) {
-        return std::make_unique<bazel_re::Digest>(action_id);
+    if (cas_client.BatchUpdateBlobs(instance_name, blobs) == blobs.size()) {
+        return std::make_unique<bazel_re::Digest>(
+            ArtifactDigestFactory::ToBazel(action_blob->GetDigest()));
     }
     return nullptr;
 }

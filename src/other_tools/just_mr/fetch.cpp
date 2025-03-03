@@ -34,7 +34,7 @@
 #include "src/buildtool/common/remote/remote_common.hpp"
 #include "src/buildtool/common/user_structs.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
+#include "src/buildtool/execution_api/bazel_msg/execution_config.hpp"
 #include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/local/context.hpp"
@@ -358,8 +358,7 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
     std::optional<LockFile> compat_lock = std::nullopt;
     IExecutionApi::Ptr compat_local_api = nullptr;
     if (common_args.compatible) {
-        auto config = StorageConfig::Builder{}
-                          .SetBuildRoot(native_storage_config.build_root)
+        auto config = StorageConfig::Builder::Rebuild(native_storage_config)
                           .SetHashType(HashFunction::Type::PlainSHA256)
                           .Build();
         if (not config) {
@@ -412,12 +411,13 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
     }
 
     // create the remote api
-    auto const hash_fct =
-        compat_local_context != nullptr
-            ? compat_local_context->storage_config->hash_function
-            : native_local_context.storage_config->hash_function;
     IExecutionApi::Ptr remote_api = nullptr;
     if (auto const address = remote_exec_config->remote_address) {
+        auto const hash_fct =
+            compat_local_context != nullptr
+                ? compat_local_context->storage_config->hash_function
+                : native_local_context.storage_config->hash_function;
+
         ExecutionConfiguration config;
         config.skip_cache_lookup = false;
         remote_api = std::make_shared<BazelApi>("remote-execution",
@@ -426,7 +426,7 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
                                                 &*auth_config,
                                                 &*retry_config,
                                                 config,
-                                                &hash_fct);
+                                                hash_fct);
     }
     bool const has_remote_api = remote_api != nullptr;
 
@@ -442,8 +442,7 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
         return kExitConfigError;
     }
     auto const apis =
-        ApiBundle{.hash_function = hash_fct,
-                  .local = mr_local_api,
+        ApiBundle{.local = mr_local_api,
                   .remote = has_remote_api ? remote_api : mr_local_api};
     auto serve = ServeApi::Create(
         *serve_config,
@@ -524,10 +523,10 @@ auto MultiRepoFetch(std::shared_ptr<Configuration> const& config,
         &import_to_git_map,
         common_args.git_path->string(),
         *common_args.local_launcher,
+        common_args.alternative_mirrors,
         serve ? &*serve : nullptr,
         &native_storage_config,
         compat_storage_config != nullptr ? &*compat_storage_config : nullptr,
-        compat_storage != nullptr ? &*compat_storage : nullptr,
         &(*apis.local),
         has_remote_api ? &*apis.remote : nullptr,
         fetch_args.backup_to_remote,

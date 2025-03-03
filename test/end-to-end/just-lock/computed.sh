@@ -98,8 +98,11 @@ cat > repos.in.json <<EOF
 }
 EOF
 
-"${JUST_LOCK}" -C repos.in.json -o repos.json
+echo
+"${JUST_LOCK}" -C repos.in.json -o repos.json --local-build-root "${LBR}" 2>&1
+echo
 cat repos.json
+echo
 
 cat > generate.py <<'EOF'
 import json
@@ -150,7 +153,7 @@ git checkout --orphan barmaster
 git config user.name 'N.O.Body'
 git config user.email 'nobody@example.org'
 git add .
-git commit -m 'Add foo.txt' 2>&1
+git commit -m 'Add bar.txt' 2>&1
 
 # Set up repo to build
 mkdir -p "${WRKDIR}"
@@ -198,14 +201,17 @@ cat > repos.in.json <<EOF
   ]
 }
 EOF
-"${JUST_LOCK}" -C repos.in.json -o repos.json
-
+echo
+"${JUST_LOCK}" -C repos.in.json -o repos.json --local-build-root "${LBR}" 2>&1
 echo
 cat repos.json
-grep DoNotImport && exit 1 || :  # we should not bring in unneeded bindings
 echo
+
+grep DoNotImport && exit 1 || :  # we should not bring in unneeded bindings
+
 "${JUST_MR}" -C repos.json --norc --just "${JUST}" \
              --local-build-root "${LBR}" analyse \
              -L '["env", "PATH='"${PATH}"'"]' 2>&1
+echo
 
 echo "OK"

@@ -20,23 +20,18 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include "fmt/core.h"
 #include "gsl/gsl"
-#include "src/buildtool/common/artifact_digest.hpp"
-#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/protocol_traits.hpp"
-#include "src/buildtool/common/remote/remote_common.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
-#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/storage/backend_description.hpp"
 #include "src/utils/cpp/expected.hpp"
 #include "src/utils/cpp/gsl.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
-class StorageConfig;
+struct StorageConfig;
 
 struct GenerationConfig final {
     gsl::not_null<StorageConfig const*> const storage_config;
@@ -67,7 +62,7 @@ struct StorageConfig final {
     HashFunction const hash_function{HashFunction::Type::GitSHA1};
 
     // Hash of the execution backend description
-    std::string const backend_description_id = DefaultBackendDescriptionId();
+    BackendDescription const backend_description;
 
     /// \brief Root directory of all storage generations.
     [[nodiscard]] auto CacheRoot() const noexcept -> std::filesystem::path {
@@ -152,21 +147,24 @@ struct StorageConfig final {
         bool is_native) -> std::filesystem::path {
         return dir / (is_native ? "git-sha1" : "compatible-sha256");
     };
-
-    [[nodiscard]] auto DefaultBackendDescriptionId() noexcept -> std::string {
-        try {
-            return ArtifactDigestFactory::HashDataAs<ObjectType::File>(
-                       hash_function,
-                       DescribeBackend(std::nullopt, {}, {}).value())
-                .hash();
-        } catch (...) {
-            return std::string();
-        }
-    }
 };
 
 class StorageConfig::Builder final {
   public:
+    explicit Builder() = default;
+
+    /// \brief Create a configurable builder from an existing config.
+    /// Useful, for example, to make a copy of an existing config and change
+    /// the hash type.
+    [[nodiscard]] static auto Rebuild(StorageConfig const& config) noexcept
+        -> Builder {
+        return Builder{}
+            .SetBuildRoot(config.build_root)
+            .SetNumGenerations(config.num_generations)
+            .SetHashType(config.hash_function.GetType())
+            .SetBackendDescription(config.backend_description);
+    }
+
     auto SetBuildRoot(std::filesystem::path value) noexcept -> Builder& {
         build_root_ = std::move(value);
         return *this;
@@ -184,13 +182,8 @@ class StorageConfig::Builder final {
         return *this;
     }
 
-    auto SetRemoteExecutionArgs(std::optional<ServerAddress> address,
-                                ExecutionProperties properties,
-                                std::vector<DispatchEndpoint> dispatch) noexcept
-        -> Builder& {
-        remote_address_ = std::move(address);
-        remote_platform_properties_ = std::move(properties);
-        remote_dispatch_ = std::move(dispatch);
+    auto SetBackendDescription(BackendDescription value) noexcept -> Builder& {
+        backend_description_ = std::move(value);
         return *this;
     }
 
@@ -224,35 +217,23 @@ class StorageConfig::Builder final {
                                        : default_config.hash_function;
 
         // Hash the execution backend description
-        auto backend_description_id = default_config.backend_description_id;
-        auto desc = DescribeBackend(
-            remote_address_, remote_platform_properties_, remote_dispatch_);
-        if (desc) {
-            backend_description_id =
-                ArtifactDigestFactory::HashDataAs<ObjectType::File>(
-                    hash_function, *desc)
-                    .hash();
-        }
-        else {
-            return unexpected{desc.error()};
+        auto backend_description = default_config.backend_description;
+        if (backend_description_) {
+            backend_description = *backend_description_;
         }
 
         return StorageConfig{
             .build_root = std::move(build_root),
             .num_generations = num_generations,
             .hash_function = hash_function,
-            .backend_description_id = std::move(backend_description_id)};
+            .backend_description = std::move(backend_description)};
     }
 
   private:
     std::optional<std::filesystem::path> build_root_;
     std::optional<std::size_t> num_generations_;
     std::optional<HashFunction::Type> hash_type_;
-
-    // Fields for computing remote execution backend description
-    std::optional<ServerAddress> remote_address_;
-    ExecutionProperties remote_platform_properties_;
-    std::vector<DispatchEndpoint> remote_dispatch_;
+    std::optional<BackendDescription> backend_description_;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_STORAGE_CONFIG_HPP

@@ -16,32 +16,20 @@
 #define INCLUDED_SRC_BUILDTOOL_EXECUTION_API_COMMON_COMMON_API_HPP
 
 #include <cstdio>
-#include <exception>
 #include <functional>
-#include <iterator>
 #include <optional>
-#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact.hpp"
+#include "src/buildtool/common/artifact_blob.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
 #include "src/buildtool/execution_api/bazel_msg/directory_tree.hpp"
 #include "src/buildtool/execution_api/common/blob_tree.hpp"
-#include "src/buildtool/execution_api/common/content_blob_container.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
-#include "src/buildtool/execution_api/common/message_limits.hpp"
-#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
-
-/// \brief Stores a list of missing artifact digests, as well as a back-mapping
-/// to some given original type.
-template <typename T>
-struct MissingArtifactsInfo {
-    std::vector<ArtifactDigest> digests;
-    std::unordered_map<ArtifactDigest, T> back_map;
-};
 
 /// \brief Common logic for RetrieveToFds.
 /// \param dump_to_stream Dumps the artifact to the respective open stream.
@@ -54,38 +42,6 @@ struct MissingArtifactsInfo {
                        gsl::not_null<FILE*> const&)> const& dump_to_stream,
     std::optional<std::function<bool(Artifact::ObjectInfo const&, int)>> const&
         fallback) noexcept -> bool;
-
-/// \brief Get the missing artifacts from a given input list, needed, e.g., to
-/// be uploaded.
-/// \returns A struct storing the missing artifacts and a back-mapping to the
-/// original given type, or nullopt in case of exceptions.
-template <typename TValue, typename TIterator>
-    requires(std::is_same_v<
-                TValue,
-                typename std::iterator_traits<TIterator>::value_type>)
-[[nodiscard]] auto GetMissingArtifactsInfo(
-    IExecutionApi const& api,
-    TIterator const& begin,
-    TIterator const& end,
-    typename std::function<ArtifactDigest(TValue const&)> const&
-        converter) noexcept -> std::optional<MissingArtifactsInfo<TValue>> {
-    std::vector<ArtifactDigest> digests;
-    digests.reserve(std::distance(begin, end));
-    MissingArtifactsInfo<TValue> res{};
-    for (auto it = begin; it != end; ++it) {
-        try {
-            auto const inserted =
-                res.back_map.insert({std::invoke(converter, *it), *it});
-            if (inserted.second) {
-                digests.emplace_back(inserted.first->first);
-            }
-        } catch (...) {
-            return std::nullopt;
-        }
-    }
-    res.digests = api.IsAvailable(digests);
-    return res;
-}
 
 /// \brief Upload missing blobs from a given BlobTree.
 [[nodiscard]] auto CommonUploadBlobTree(BlobTreePtr const& blob_tree,
@@ -119,48 +75,11 @@ template <typename TValue, typename TIterator>
 /// \param logger Use this instance for any logging. If nullptr, use the default
 /// logger. This value is used only if exception_is_fatal==true.
 /// \returns Returns true on success, false otherwise (failures or exceptions).
-template <typename TDigest>
-auto UpdateContainerAndUpload(
-    gsl::not_null<ContentBlobContainer<TDigest>*> const& container,
-    ContentBlob<TDigest>&& blob,
+[[nodiscard]] auto UpdateContainerAndUpload(
+    gsl::not_null<std::unordered_set<ArtifactBlob>*> const& container,
+    ArtifactBlob&& blob,
     bool exception_is_fatal,
-    std::function<bool(ContentBlobContainer<TDigest>&&)> const& uploader,
-    Logger const* logger = nullptr) noexcept -> bool {
-    // Optimize upload of blobs with respect to the maximum transfer limit, such
-    // that we never store unnecessarily more data in the container than we need
-    // per remote transfer.
-    try {
-        if (blob.data->size() > kMaxBatchTransferSize) {
-            // large blobs use individual stream upload
-            if (not uploader(ContentBlobContainer<TDigest>{{blob}})) {
-                return false;
-            }
-        }
-        else {
-            if (container->ContentSize() + blob.data->size() >
-                kMaxBatchTransferSize) {
-                // swap away from original container to allow move during upload
-                ContentBlobContainer<TDigest> tmp_container{};
-                std::swap(*container, tmp_container);
-                // if we would surpass the transfer limit, upload the current
-                // container and clear it before adding more blobs
-                if (not uploader(std::move(tmp_container))) {
-                    return false;
-                }
-            }
-            // add current blob to container
-            container->Emplace(std::move(blob));
-        }
-    } catch (std::exception const& ex) {
-        if (exception_is_fatal) {
-            Logger::Log(logger,
-                        LogLevel::Error,
-                        "failed to emplace blob with\n:{}",
-                        ex.what());
-        }
-        return false;
-    }
-    return true;  // success!
-}
+    std::function<bool(std::unordered_set<ArtifactBlob>&&)> const& uploader,
+    Logger const* logger = nullptr) noexcept -> bool;
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_COMMON_COMMON_API_HPP

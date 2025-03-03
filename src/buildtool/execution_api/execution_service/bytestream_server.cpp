@@ -14,24 +14,23 @@
 
 #include "src/buildtool/execution_api/execution_service/bytestream_server.hpp"
 
-#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "fmt/core.h"
 #include "google/protobuf/stubs/port.h"
 #include "src/buildtool/common/artifact_digest.hpp"
-#include "src/buildtool/common/artifact_digest_factory.hpp"
-#include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/bytestream_utils.hpp"
 #include "src/buildtool/execution_api/execution_service/cas_utils.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/utils/cpp/expected.hpp"
+#include "src/utils/cpp/incremental_reader.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
 auto BytestreamServiceImpl::Read(
@@ -48,8 +47,8 @@ auto BytestreamServiceImpl::Read(
         logger_.Emit(LogLevel::Error, "{}", str);
         return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, str};
     }
-    auto const read_digest = ArtifactDigestFactory::FromBazel(
-        storage_config_.hash_function.GetType(), read_request->GetDigest());
+    auto const read_digest =
+        read_request->GetDigest(storage_config_.hash_function.GetType());
     if (not read_digest) {
         logger_.Emit(LogLevel::Debug, "{}", read_digest.error());
         return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT,
@@ -74,26 +73,29 @@ auto BytestreamServiceImpl::Read(
         return ::grpc::Status{::grpc::StatusCode::NOT_FOUND, str};
     }
 
-    std::ifstream stream{*path, std::ios::binary};
-    stream.seekg(request->read_offset(), std::ios::beg);
+    auto const to_read =
+        IncrementalReader::FromFile(ByteStreamUtils::kChunkSize, *path);
+    if (not to_read.has_value()) {
+        auto const str = fmt::format("Failed to create reader for {}:\n{}",
+                                     read_digest->hash(),
+                                     to_read.error());
+        logger_.Emit(LogLevel::Error, str);
+        return grpc::Status{grpc::StatusCode::INTERNAL, str};
+    }
 
     ::google::bytestream::ReadResponse response;
-    std::string& buffer = *response.mutable_data();
-    buffer.resize(ByteStreamUtils::kChunkSize);
-
-    while (not stream.eof()) {
-        stream.read(buffer.data(), ByteStreamUtils::kChunkSize);
-        if (stream.bad()) {
-            auto const str =
-                fmt::format("Failed to read data for {}", read_digest->hash());
+    for (auto it = to_read->make_iterator(request->read_offset());
+         it != to_read->end();
+         ++it) {
+        auto const chunk = *it;
+        if (not chunk.has_value()) {
+            auto const str = fmt::format("Failed to read data for {}:\n{}",
+                                         read_digest->hash(),
+                                         chunk.error());
             logger_.Emit(LogLevel::Error, str);
             return grpc::Status{grpc::StatusCode::INTERNAL, str};
         }
-
-        if (stream.eof()) {
-            // do not send random bytes
-            buffer.resize(static_cast<std::size_t>(stream.gcount()));
-        }
+        *response.mutable_data() = *chunk;
         writer->Write(response);
     }
     return ::grpc::Status::OK;
@@ -115,8 +117,8 @@ auto BytestreamServiceImpl::Write(
         return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT, str};
     }
 
-    auto const write_digest = ArtifactDigestFactory::FromBazel(
-        storage_config_.hash_function.GetType(), write_request->GetDigest());
+    auto const write_digest =
+        write_request->GetDigest(storage_config_.hash_function.GetType());
     if (not write_digest) {
         logger_.Emit(LogLevel::Debug, "{}", write_digest.error());
         return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT,

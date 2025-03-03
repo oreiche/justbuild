@@ -34,6 +34,12 @@
   , "test": ["git-cas-p.sh"]
   , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
   }
+, "git cas fallback":
+  { "type": ["end-to-end", "with remote"]
+  , "name": ["git-cas-fallback"]
+  , "test": ["git-cas-fallback.sh"]
+  , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
+  }
 , "just-mr reporting":
   { "type": ["@", "rules", "shell/test", "script"]
   , "name": ["just-mr-reporting"]
@@ -80,6 +86,12 @@
   , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
   , "keep": ["log"]
   }
+, "cas-resolve-special":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["cas-resolve-special"]
+  , "test": ["cas-resolve-special.sh"]
+  , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
+  }
 , "TESTS":
   { "type": ["@", "rules", "test", "suite"]
   , "arguments_config": ["TEST_BOOTSTRAP_JUST_MR"]
@@ -93,6 +105,7 @@
         , "build -P"
         , "analyse"
         , "git cas -P"
+        , "git cas fallback"
         , "install --archive"
         , "install archived repo"
         , "conflict report"
@@ -101,7 +114,8 @@
       , { "type": "if"
         , "cond": {"type": "var", "name": "TEST_BOOTSTRAP_JUST_MR"}
         , "then": []
-        , "else": ["just-mr reporting", "log limit", "output"]
+        , "else":
+          ["just-mr reporting", "log limit", "output", "cas-resolve-special"]
         }
       ]
     }

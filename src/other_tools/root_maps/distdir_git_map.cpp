@@ -31,7 +31,6 @@
 #include "src/buildtool/multithreading/task_system.hpp"
 #include "src/buildtool/storage/fs_utils.hpp"
 #include "src/other_tools/git_operations/git_ops_types.hpp"
-#include "src/other_tools/root_maps/root_utils.hpp"
 #include "src/utils/cpp/expected.hpp"
 #include "src/utils/cpp/hex_string.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
@@ -147,9 +146,7 @@ auto CreateDistdirGitMap(
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
     gsl::not_null<Storage const*> const& native_storage,
-    Storage const* compat_storage,
     gsl::not_null<IExecutionApi const*> const& local_api,
     IExecutionApi const* remote_api,
     std::size_t jobs) -> DistdirGitMap {
@@ -158,9 +155,7 @@ auto CreateDistdirGitMap(
                            critical_git_op_map,
                            serve,
                            native_storage_config,
-                           compat_storage_config,
                            native_storage,
-                           compat_storage,
                            local_api,
                            remote_api](auto ts,
                                        auto setter,
@@ -199,10 +194,6 @@ auto CreateDistdirGitMap(
                  key,
                  serve,
                  native_storage_config,
-                 compat_storage_config,
-                 compat_storage,
-                 local_api,
-                 remote_api,
                  setter,
                  logger](auto const& values) {
                     GitOpValue op_result = *values[0];
@@ -217,9 +208,14 @@ auto CreateDistdirGitMap(
                     if (key.absent) {
                         if (serve != nullptr) {
                             // check if serve endpoint has this root
-                            auto has_tree = CheckServeHasAbsentRoot(
-                                *serve, distdir_tree_id, logger);
+                            auto const has_tree =
+                                serve->CheckRootTree(distdir_tree_id);
                             if (not has_tree) {
+                                (*logger)(fmt::format("Checking that the serve "
+                                                      "endpoint knows tree "
+                                                      "{} failed.",
+                                                      distdir_tree_id),
+                                          /*fatal=*/true);
                                 return;
                             }
                             if (not *has_tree) {
@@ -258,32 +254,29 @@ auto CreateDistdirGitMap(
                                             /*fatal=*/true);
                                         return;
                                     }
-                                    if (remote_api == nullptr) {
-                                        (*logger)(
-                                            fmt::format(
-                                                "Missing or incompatible "
-                                                "remote-execution endpoint "
-                                                "needed to sync workspace root "
-                                                "{} with the serve endpoint.",
-                                                distdir_tree_id),
-                                            /*fatal=*/true);
+
+                                    auto digest = ArtifactDigestFactory::Create(
+                                        HashFunction::Type::GitSHA1,
+                                        distdir_tree_id,
+                                        /*size_unknown=*/0,
+                                        /*is_tree=*/true);
+                                    if (not digest.has_value()) {
+                                        (*logger)(std::move(digest).error(),
+                                                  /*fatal=*/true);
                                         return;
                                     }
+
                                     // the tree is known locally, so we upload
                                     // it to remote CAS for the serve endpoint
                                     // to retrieve it and set up the root
-                                    if (not EnsureAbsentRootOnServe(
-                                            *serve,
-                                            distdir_tree_id,
-                                            native_storage_config
-                                                ->GitRoot(), /*repo_root*/
-                                            native_storage_config,
-                                            compat_storage_config,
-                                            compat_storage,
-                                            &*local_api,
-                                            remote_api,
-                                            logger,
-                                            true /*no_sync_is_fatal*/)) {
+                                    auto uploaded = serve->UploadTree(
+                                        *digest,
+                                        native_storage_config->GitRoot());
+                                    if (not uploaded.has_value()) {
+                                        (*logger)(std::move(uploaded)
+                                                      .error()
+                                                      .Message(),
+                                                  /*fatal=*/true);
                                         return;
                                     }
                                 }
@@ -361,9 +354,13 @@ auto CreateDistdirGitMap(
             if (key.absent) {
                 if (serve != nullptr) {
                     // first check if serve endpoint has tree
-                    auto has_tree =
-                        CheckServeHasAbsentRoot(*serve, tree_id, logger);
+                    auto const has_tree = serve->CheckRootTree(tree_id);
                     if (not has_tree) {
+                        (*logger)(fmt::format("Checking that the serve "
+                                              "endpoint knows tree "
+                                              "{} failed.",
+                                              tree_id),
+                                  /*fatal=*/true);
                         return;
                     }
                     if (*has_tree) {
@@ -419,20 +416,10 @@ auto CreateDistdirGitMap(
                     }
                     // try to supply the serve endpoint with the tree via the
                     // remote CAS
-                    if (digest and remote_api->IsAvailable({*digest})) {
+                    if (digest and remote_api->IsAvailable(*digest)) {
                         // tell serve to set up the root from the remote CAS
-                        // tree; upload can be skipped
-                        if (EnsureAbsentRootOnServe(
-                                *serve,
-                                tree_id,
-                                /*repo_path=*/"",
-                                native_storage_config,
-                                /*compat_storage_config=*/nullptr,
-                                /*compat_storage=*/nullptr,
-                                /*local_api=*/nullptr,
-                                /*remote_api=*/nullptr,
-                                logger,
-                                /*no_sync_is_fatal=*/true)) {
+                        // tree
+                        if (serve->GetTreeFromRemote(*digest)) {
                             // set workspace root as absent
                             (*setter)(std::pair(
                                 nlohmann::json::array(
@@ -449,7 +436,7 @@ auto CreateDistdirGitMap(
                     }
                     // check if we have the tree in local CAS; if yes, upload it
                     // to remote for the serve endpoint to find it
-                    if (digest and local_api->IsAvailable({*digest})) {
+                    if (digest and local_api->IsAvailable(*digest)) {
                         if (not local_api->RetrieveToCas(
                                 {Artifact::ObjectInfo{
                                     .digest = *digest,
@@ -462,18 +449,8 @@ auto CreateDistdirGitMap(
                             return;
                         }
                         // tell serve to set up the root from the remote CAS
-                        // tree; upload can be skipped
-                        if (EnsureAbsentRootOnServe(
-                                *serve,
-                                tree_id,
-                                /*repo_path=*/"",
-                                native_storage_config,
-                                /*compat_storage_config=*/nullptr,
-                                /*compat_storage=*/nullptr,
-                                /*local_api=*/nullptr,
-                                /*remote_api=*/nullptr,
-                                logger,
-                                /*no_sync_is_fatal=*/true)) {
+                        // tree
+                        if (serve->GetTreeFromRemote(*digest)) {
                             // set workspace root as absent
                             (*setter)(std::pair(
                                 nlohmann::json::array(
@@ -504,7 +481,7 @@ auto CreateDistdirGitMap(
 
             // if the root is not-absent, the order of checks is different;
             // first, look in the local CAS
-            if (digest and local_api->IsAvailable({*digest})) {
+            if (digest and local_api->IsAvailable(*digest)) {
                 ImportFromCASAndSetRoot(key,
                                         *native_storage_config,
                                         *native_storage,

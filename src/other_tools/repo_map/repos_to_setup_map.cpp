@@ -26,14 +26,15 @@
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/crypto/hash_info.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
-#include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
+#include "src/buildtool/file_system/precomputed_root.hpp"
+#include "src/buildtool/file_system/symlinks/pragma_special.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
 #include "src/other_tools/just_mr/utils.hpp"
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
 #include "src/other_tools/ops_maps/git_tree_fetch_map.hpp"
 #include "src/other_tools/utils/parse_archive.hpp"
-#include "src/other_tools/utils/parse_computed_root.hpp"
 #include "src/other_tools/utils/parse_git_tree.hpp"
+#include "src/other_tools/utils/parse_precomputed_root.hpp"
 #include "src/utils/cpp/expected.hpp"
 #include "src/utils/cpp/path.hpp"
 
@@ -111,6 +112,13 @@ void GitCheckout(ExpressionPtr const& repo_desc,
                                             ? repo_desc_subdir->String()
                                             : "")
                       .lexically_normal();
+    if (not PathIsNonUpwards(subdir)) {
+        (*logger)(fmt::format("GitCheckout: Expected field \"subdir\" to be a "
+                              "non-upwards path, but found {}",
+                              subdir.string()),
+                  /*fatal=*/true);
+        return;
+    }
     // check optional mirrors
     auto repo_desc_mirrors = repo_desc->Get("mirrors", Expression::list_t{});
     std::vector<std::string> mirrors{};
@@ -636,39 +644,54 @@ void GitTreeCheckout(ExpressionPtr const& repo_desc,
         });
 }
 
-void ComputedRootCheckout(ExpressionPtr const& repo_desc,
-                          std::string const& repo_name,
-                          ReposToSetupMap::SetterPtr const& setter,
-                          ReposToSetupMap::SubCallerPtr const& subcaller,
-                          ReposToSetupMap::LoggerPtr const& logger) {
-    auto const parser = ComputedRootParser::Create(&repo_desc);
-    if (not parser) {
-        (*logger)(
-            fmt::format("ComputedRootCheckout: Not a computed repository: {}",
-                        nlohmann::json(repo_name).dump()),
-            /*fatal=*/true);
-        return;
-    }
-    auto result_root = parser->GetResult();
-    if (not result_root) {
-        (*logger)(fmt::format("ComputedRootCheckout: parsing repository {} "
-                              "failed with:\n{}",
+void PrecomputedRootCheckout(ExpressionPtr const& repo_desc,
+                             ExpressionPtr&& repos,
+                             std::string const& repo_name,
+                             ReposToSetupMap::SetterPtr const& setter,
+                             ReposToSetupMap::SubCallerPtr const& subcaller,
+                             ReposToSetupMap::LoggerPtr const& logger) {
+    auto precomputed = ParsePrecomputedRoot(repo_desc);
+    if (not precomputed) {
+        (*logger)(fmt::format("Checkout of precomputed root {} failed:\n{}",
                               nlohmann::json(repo_name).dump(),
-                              std::move(result_root).error()),
+                              std::move(precomputed).error()),
                   /*fatal=*/true);
         return;
     }
-    std::string target_repo = result_root->repository;
+
+    std::string target_repo = precomputed->GetReferencedRepository();
     (*subcaller)(
         {std::move(target_repo)},
-        [setter, result = *std::move(result_root)](auto const& /*unused*/) {
+        [setter,
+         repos = std::move(repos),
+         repo_name,
+         result = *std::move(precomputed)](auto const& /*unused*/) {
             nlohmann::json cfg{};
             auto& ws_root = cfg["workspace_root"];
-            ws_root.push_back("computed");
-            ws_root.push_back(result.repository);
-            ws_root.push_back(result.target_module);
-            ws_root.push_back(result.target_name);
-            ws_root.push_back(result.config);
+            SetReposTakeOver(&cfg, repos, repo_name);
+
+            bool absent = false;
+            if (auto computed = result.AsComputed()) {
+                ws_root.push_back(ComputedRoot::kMarker);
+                ws_root.push_back(computed->repository);
+                ws_root.push_back(computed->target_module);
+                ws_root.push_back(computed->target_name);
+                ws_root.push_back(computed->config);
+                absent = computed->absent;
+            }
+            else if (auto tree_structure = result.AsTreeStructure()) {
+                ws_root.push_back(TreeStructureRoot::kMarker);
+                ws_root.push_back(tree_structure->repository);
+
+                absent = tree_structure->absent;
+            }
+
+            if (absent) {
+                auto pragma = nlohmann::json::object();
+                pragma["absent"] = true;
+                ws_root.push_back(pragma);
+            }
+
             std::invoke(*setter, std::move(cfg));
         },
         logger);
@@ -859,12 +882,13 @@ auto CreateReposToSetupMap(
                                     wrapped_logger);
                     break;
                 }
-                case CheckoutType::Computed: {
-                    ComputedRootCheckout(*resolved_repo_desc,
-                                         key,
-                                         setter,
-                                         subcaller,
-                                         wrapped_logger);
+                case CheckoutType::Precomputed: {
+                    PrecomputedRootCheckout(*resolved_repo_desc,
+                                            std::move(repos),
+                                            key,
+                                            setter,
+                                            subcaller,
+                                            wrapped_logger);
                     break;
                 }
             }

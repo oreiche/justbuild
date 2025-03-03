@@ -21,11 +21,13 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "src/buildtool/common/artifact.hpp"  // Artifact::ObjectInfo
+#include "src/buildtool/common/artifact_blob.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
-#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
 
@@ -118,7 +120,7 @@ class IExecutionApi {
     /// \param skip_find_missing    Skip finding missing blobs, just upload all.
     /// NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] virtual auto Upload(
-        ArtifactBlobContainer&& blobs,
+        std::unordered_set<ArtifactBlob>&& blobs,
         bool skip_find_missing = false) const noexcept -> bool = 0;
 
     [[nodiscard]] virtual auto UploadTree(
@@ -128,9 +130,9 @@ class IExecutionApi {
     [[nodiscard]] virtual auto IsAvailable(
         ArtifactDigest const& digest) const noexcept -> bool = 0;
 
-    [[nodiscard]] virtual auto IsAvailable(
-        std::vector<ArtifactDigest> const& digests) const noexcept
-        -> std::vector<ArtifactDigest> = 0;
+    [[nodiscard]] virtual auto GetMissingDigests(
+        std::unordered_set<ArtifactDigest> const& digests) const noexcept
+        -> std::unordered_set<ArtifactDigest> = 0;
 
     [[nodiscard]] virtual auto SplitBlob(ArtifactDigest const& /*blob_digest*/)
         const noexcept -> std::optional<std::vector<ArtifactDigest>> {
@@ -151,6 +153,9 @@ class IExecutionApi {
     [[nodiscard]] virtual auto BlobSpliceSupport() const noexcept -> bool {
         return false;
     }
+
+    [[nodiscard]] virtual auto GetHashType() const noexcept
+        -> HashFunction::Type = 0;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_COMMON_EXECUTION_APIHPP

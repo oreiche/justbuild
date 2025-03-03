@@ -214,6 +214,18 @@
   , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
   , "keep": ["log/log-1", "log/log-2"]
   }
+, "repeated-gc":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["repeated-gc"]
+  , "test": ["repeated-gc.sh"]
+  , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
+  }
+, "gc-drop":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["gc-drop"]
+  , "test": ["gc-drop.sh"]
+  , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
+  }
 , "TESTS":
   { "type": ["@", "rules", "test", "suite"]
   , "arguments_config": ["TEST_BOOTSTRAP_JUST_MR", "TEST_COMPATIBLE_REMOTE"]
@@ -239,6 +251,8 @@
               , "foreign-file"
               , "reporting-verbosity"
               , "gc-repo"
+              , "repeated-gc"
+              , "gc-drop"
               ]
             , { "type": "if"
               , "cond": {"type": "var", "name": "TEST_COMPATIBLE_REMOTE"}

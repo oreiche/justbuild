@@ -1,0 +1,35 @@
+{ "resolve_symlinks_map":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["resolve_symlinks_map"]
+  , "hdrs": ["resolve_symlinks_map.hpp"]
+  , "srcs": ["resolve_symlinks_map.cpp"]
+  , "deps":
+    [ "pragma_special"
+    , ["src/buildtool/file_system", "git_cas"]
+    , ["src/buildtool/file_system", "git_repo"]
+    , ["src/buildtool/file_system", "object_type"]
+    , ["src/buildtool/multithreading", "async_map_consumer"]
+    , ["src/utils/cpp", "hash_combine"]
+    , ["src/utils/cpp", "path"]
+    , ["src/utils/cpp", "path_hash"]
+    ]
+  , "stage": ["src", "buildtool", "file_system", "symlinks"]
+  , "private-deps":
+    [ ["@", "fmt", "", "fmt"]
+    , ["src/utils/cpp", "gsl"]
+    , ["src/utils/cpp", "hex_string"]
+    ]
+  }
+, "pragma_special":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["pragma_special"]
+  , "hdrs": ["pragma_special.hpp"]
+  , "stage": ["src", "buildtool", "file_system", "symlinks"]
+  }
+, "resolve_special":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["resolve_special"]
+  , "hdrs": ["resolve_special.hpp"]
+  , "stage": ["src", "buildtool", "file_system", "symlinks"]
+  }
+}

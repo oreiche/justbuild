@@ -11,7 +11,7 @@
   , "hdrs": ["file_storage.hpp"]
   , "deps":
     [ "object_type"
-    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/execution_api/common", "ids"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
@@ -26,7 +26,6 @@
     [ "file_storage"
     , "object_type"
     , ["@", "gsl", "", "gsl"]
-    , ["src/buildtool/common", "artifact_digest_factory"]
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/file_system", "file_system_manager"]
@@ -48,6 +47,7 @@
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/system", "system"]
     , ["src/utils/cpp", "expected"]
+    , ["src/utils/cpp", "incremental_reader"]
     , ["src/utils/cpp", "path"]
     ]
   , "stage": ["src", "buildtool", "file_system"]
@@ -139,7 +139,6 @@
     [ "git_context"
     , ["@", "fmt", "", "fmt"]
     , ["", "libgit2"]
-    , ["src/buildtool/common", "artifact_digest_factory"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/logging", "log_level"]
@@ -180,11 +179,11 @@
     , "git_cas"
     , "git_tree"
     , "object_type"
+    , "precomputed_root"
     , ["@", "fmt", "", "fmt"]
     , ["@", "gsl", "", "gsl"]
     , ["@", "json", "", "json"]
     , ["src/buildtool/common", "artifact_description"]
-    , ["src/buildtool/common", "artifact_digest_factory"]
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/common", "git_hashes_converter"]
     , ["src/buildtool/common", "protocol_traits"]
@@ -193,8 +192,20 @@
     , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "concepts"]
     , ["src/utils/cpp", "expected"]
-    , ["src/utils/cpp", "hash_combine"]
     , ["src/utils/cpp", "json"]
+    ]
+  , "stage": ["src", "buildtool", "file_system"]
+  }
+, "precomputed_root":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["precomputed_root"]
+  , "hdrs": ["precomputed_root.hpp"]
+  , "srcs": ["precomputed_root.cpp"]
+  , "deps": [["@", "json", "", "json"], ["src/utils/cpp", "expected"]]
+  , "private-deps":
+    [ ["@", "fmt", "", "fmt"]
+    , ["@", "gsl", "", "gsl"]
+    , ["src/utils/cpp", "hash_combine"]
     ]
   , "stage": ["src", "buildtool", "file_system"]
   }

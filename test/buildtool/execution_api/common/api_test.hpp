@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -31,11 +32,11 @@
 #include "fmt/core.h"
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact.hpp"
+#include "src/buildtool/common/artifact_blob.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
-#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/common/execution_response.hpp"
@@ -240,12 +241,13 @@ using ExecProps = std::map<std::string, std::string>;
 
     HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
 
-    auto test_digest = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
-        hash_function, test_content);
+    auto const test_blob =
+        ArtifactBlob::FromMemory(hash_function, ObjectType::File, test_content);
+    REQUIRE(test_blob.has_value());
 
-    auto input_artifact_opt =
-        ArtifactDescription::CreateKnown(test_digest, ObjectType::File)
-            .ToArtifact();
+    auto input_artifact_opt = ArtifactDescription::CreateKnown(
+                                  test_blob->GetDigest(), ObjectType::File)
+                                  .ToArtifact();
     auto input_artifact =
         DependencyGraph::ArtifactNode{std::move(input_artifact_opt)};
 
@@ -253,9 +255,7 @@ using ExecProps = std::map<std::string, std::string>;
     std::string output_path{"output_file"};
 
     auto api = api_factory();
-    CHECK(api->Upload(ArtifactBlobContainer{{ArtifactBlob{
-                          test_digest, test_content, /*is_exec=*/false}}},
-                      false));
+    CHECK(api->Upload({*test_blob}, false));
 
     auto action =
         api->CreateAction(*api->UploadTree({{input_path, &input_artifact}}),
@@ -277,7 +277,8 @@ using ExecProps = std::map<std::string, std::string>;
         auto const artifacts = response->Artifacts();
         REQUIRE(artifacts.has_value());
         REQUIRE(artifacts.value()->contains(output_path));
-        CHECK(artifacts.value()->at(output_path).digest == test_digest);
+        CHECK(artifacts.value()->at(output_path).digest ==
+              test_blob->GetDigest());
 
         if (is_hermetic) {
             CHECK(not response->IsCached());
@@ -291,7 +292,8 @@ using ExecProps = std::map<std::string, std::string>;
                 auto const artifacts = response->Artifacts();
                 REQUIRE(artifacts.has_value());
                 REQUIRE(artifacts.value()->contains(output_path));
-                CHECK(artifacts.value()->at(output_path).digest == test_digest);
+                CHECK(artifacts.value()->at(output_path).digest ==
+                      test_blob->GetDigest());
                 CHECK(response->IsCached());
             }
         }
@@ -308,7 +310,8 @@ using ExecProps = std::map<std::string, std::string>;
         auto const artifacts = response->Artifacts();
         REQUIRE(artifacts.has_value());
         REQUIRE(artifacts.value()->contains(output_path));
-        CHECK(artifacts.value()->at(output_path).digest == test_digest);
+        CHECK(artifacts.value()->at(output_path).digest ==
+              test_blob->GetDigest());
         CHECK(not response->IsCached());
 
         SECTION("Rerun execution to verify caching") {
@@ -320,7 +323,8 @@ using ExecProps = std::map<std::string, std::string>;
             auto const artifacts = response->Artifacts();
             REQUIRE(artifacts.has_value());
             REQUIRE(artifacts.value()->contains(output_path));
-            CHECK(artifacts.value()->at(output_path).digest == test_digest);
+            CHECK(artifacts.value()->at(output_path).digest ==
+                  test_blob->GetDigest());
             CHECK(not response->IsCached());
         }
     }

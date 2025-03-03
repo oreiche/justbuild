@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "src/buildtool/file_system/symlinks_map/resolve_symlinks_map.hpp"
+#include "src/buildtool/file_system/symlinks/resolve_symlinks_map.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
@@ -27,7 +28,7 @@
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/git_cas.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
-#include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
+#include "src/buildtool/file_system/symlinks/pragma_special.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
 #include "test/utils/shell_quoting.hpp"
 
@@ -150,7 +151,7 @@ TEST_CASE("Resolve symlinks", "[resolve_symlinks_map]") {
                                     source_cas,
                                     source_cas)},
                 [&expected, &source_cas](auto const& values) {
-                    for (auto i = 0; i < kNumCases; ++i) {
+                    for (std::size_t i = 0; i < kNumCases; ++i) {
                         auto const& res = ResolvedGitObject{*values[i]};
                         CHECK(res.id == expected[i].id);
                         CHECK(res.type == expected[i].type);
@@ -206,7 +207,7 @@ TEST_CASE("Resolve symlinks", "[resolve_symlinks_map]") {
                                     source_cas,
                                     target_cas)},
                 [&expected, &target_cas](auto const& values) {
-                    for (auto i = 0; i < kNumCases; ++i) {
+                    for (std::size_t i = 0; i < kNumCases; ++i) {
                         auto const& res = ResolvedGitObject{*values[i]};
                         CHECK(res.id == expected[i].id);
                         CHECK(res.type == expected[i].type);

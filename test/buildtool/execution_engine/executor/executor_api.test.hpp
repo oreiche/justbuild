@@ -33,15 +33,14 @@
 #include "src/buildtool/common/action.hpp"
 #include "src/buildtool/common/action_description.hpp"
 #include "src/buildtool/common/artifact.hpp"
+#include "src/buildtool/common/artifact_blob.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
-#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/remote/retry_config.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/common/tree.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
-#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
@@ -51,6 +50,7 @@
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/progress_reporting/progress.hpp"
+#include "src/utils/cpp/expected.hpp"
 #include "test/utils/executor/test_api_bundle.hpp"
 #include "test/utils/hermeticity/test_hash_function_type.hpp"
 #include "test/utils/remote_execution/test_remote_config.hpp"
@@ -70,12 +70,10 @@ static inline void RunBlobUpload(RepositoryConfig* repo_config,
     auto api = factory();
     HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
 
-    std::string const blob = "test";
-    CHECK(api->Upload(ArtifactBlobContainer{
-        {ArtifactBlob{ArtifactDigestFactory::HashDataAs<ObjectType::File>(
-                          hash_function, blob),
-                      blob,
-                      /*is_exec=*/false}}}));
+    auto const blob =
+        ArtifactBlob::FromMemory(hash_function, ObjectType::File, "test");
+    REQUIRE(blob.has_value());
+    CHECK(api->Upload({*blob}));
 }
 
 [[nodiscard]] static inline auto GetTestDir() -> std::filesystem::path {
@@ -154,10 +152,8 @@ static inline void RunHelloWorldCompilation(
                                        .retry_config = &retry_config,
                                        .exec_config = &*remote_config};
 
-    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
-
     auto api = factory();
-    auto const apis = CreateTestApiBundle(&hash_function, api);
+    auto const apis = CreateTestApiBundle(api);
 
     ExecutionContext const exec_context{.repo_config = repo_config,
                                         .apis = &apis,
@@ -287,10 +283,8 @@ static inline void RunGreeterCompilation(
                                        .retry_config = &retry_config,
                                        .exec_config = &*remote_config};
 
-    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
-
     auto api = factory();
-    auto const apis = CreateTestApiBundle(&hash_function, api);
+    auto const apis = CreateTestApiBundle(api);
 
     ExecutionContext const exec_context{.repo_config = repo_config,
                                         .apis = &apis,
@@ -428,24 +422,22 @@ static inline void TestUploadAndDownloadTrees(
 
     HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
 
-    auto foo = std::string{"foo"};
-    auto bar = std::string{"bar"};
-    auto const foo_digest =
-        ArtifactDigestFactory::HashDataAs<ObjectType::File>(hash_function, foo);
-    auto const bar_digest =
-        ArtifactDigestFactory::HashDataAs<ObjectType::File>(hash_function, bar);
+    auto const foo =
+        ArtifactBlob::FromMemory(hash_function, ObjectType::File, "foo");
+    REQUIRE(foo.has_value());
+    auto const bar =
+        ArtifactBlob::FromMemory(hash_function, ObjectType::File, "bar");
+    REQUIRE(bar.has_value());
 
     // upload blobs
     auto api = factory();
-    REQUIRE(api->Upload(ArtifactBlobContainer{
-        {ArtifactBlob{foo_digest, foo, /*is_exec=*/false},
-         ArtifactBlob{bar_digest, bar, /*is_exec=*/false}}}));
+    REQUIRE(api->Upload({*foo, *bar}));
 
     // define known artifacts
     auto foo_desc =
-        ArtifactDescription::CreateKnown(foo_digest, ObjectType::File);
+        ArtifactDescription::CreateKnown(foo->GetDigest(), ObjectType::File);
     auto bar_desc =
-        ArtifactDescription::CreateKnown(bar_digest, ObjectType::Symlink);
+        ArtifactDescription::CreateKnown(bar->GetDigest(), ObjectType::Symlink);
 
     DependencyGraph g{};
     auto foo_id = g.AddArtifact(foo_desc);
@@ -459,7 +451,7 @@ static inline void TestUploadAndDownloadTrees(
                                        .retry_config = &retry_config,
                                        .exec_config = &*remote_config};
 
-    auto const apis = CreateTestApiBundle(&hash_function, api);
+    auto const apis = CreateTestApiBundle(api);
 
     ExecutionContext const exec_context{.repo_config = repo_config,
                                         .apis = &apis,
@@ -580,8 +572,6 @@ static inline void TestRetrieveOutputDirectories(
     int /*expected_cached*/ = 0) {
     SetupConfig(repo_config);
 
-    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
-
     auto const make_tree_id = std::string{"make_tree"};
     auto const* make_tree_cmd =
         "mkdir -p baz/baz/\n"
@@ -633,7 +623,7 @@ static inline void TestRetrieveOutputDirectories(
 
         // run action
         auto api = factory();
-        auto const apis = CreateTestApiBundle(&hash_function, api);
+        auto const apis = CreateTestApiBundle(api);
 
         ExecutionContext const exec_context{.repo_config = repo_config,
                                             .apis = &apis,
@@ -687,7 +677,7 @@ static inline void TestRetrieveOutputDirectories(
 
         // run action
         auto api = factory();
-        auto const apis = CreateTestApiBundle(&hash_function, api);
+        auto const apis = CreateTestApiBundle(api);
 
         ExecutionContext const exec_context{.repo_config = repo_config,
                                             .apis = &apis,
@@ -758,7 +748,7 @@ static inline void TestRetrieveOutputDirectories(
 
         // run action
         auto api = factory();
-        auto const apis = CreateTestApiBundle(&hash_function, api);
+        auto const apis = CreateTestApiBundle(api);
 
         ExecutionContext const exec_context{.repo_config = repo_config,
                                             .apis = &apis,
@@ -831,7 +821,7 @@ static inline void TestRetrieveOutputDirectories(
 
             // run action
             auto api = factory();
-            auto const apis = CreateTestApiBundle(&hash_function, api);
+            auto const apis = CreateTestApiBundle(api);
 
             ExecutionContext const exec_context{
                 .repo_config = repo_config,
@@ -858,7 +848,7 @@ static inline void TestRetrieveOutputDirectories(
 
             // run action
             auto api = factory();
-            auto const apis = CreateTestApiBundle(&hash_function, api);
+            auto const apis = CreateTestApiBundle(api);
 
             ExecutionContext const exec_context{
                 .repo_config = repo_config,

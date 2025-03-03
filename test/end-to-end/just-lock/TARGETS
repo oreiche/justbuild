@@ -48,6 +48,98 @@
     ]
   , "keep": ["repos.json", "actions.json"]
   }
+, "file-imports":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["file-imports"]
+  , "test": ["file-imports.sh"]
+  , "deps":
+    [ ["", "mr-tool-under-test"]
+    , ["", "tool-under-test"]
+    , ["end-to-end", "lock-tool-under-test"]
+    ]
+  }
+, "archive-imports":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["archive-imports"]
+  , "test": ["archive-imports.sh"]
+  , "deps":
+    [ ["", "mr-tool-under-test"]
+    , ["", "tool-under-test"]
+    , ["end-to-end", "lock-tool-under-test"]
+    ]
+  }
+, "git-tree-imports":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["git-tree-imports"]
+  , "test": ["git-tree-imports.sh"]
+  , "deps":
+    [ ["", "mr-tool-under-test"]
+    , ["", "tool-under-test"]
+    , ["end-to-end", "lock-tool-under-test"]
+    ]
+  }
+, "plain-imports":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["plain-imports"]
+  , "test": ["plain-imports.sh"]
+  , "deps":
+    [ ["", "mr-tool-under-test"]
+    , ["", "tool-under-test"]
+    , ["end-to-end", "lock-tool-under-test"]
+    ]
+  }
+, "generic-imports":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["generic-imports"]
+  , "test": ["generic-imports.sh"]
+  , "deps":
+    [ ["", "mr-tool-under-test"]
+    , ["", "tool-under-test"]
+    , ["end-to-end", "git-import-under-test"]
+    , ["end-to-end", "lock-tool-under-test"]
+    ]
+  }
+, "clone-file":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["clone-file"]
+  , "test": ["clone/file-repos.sh"]
+  , "deps":
+    [ ["", "mr-tool-under-test"]
+    , ["", "tool-under-test"]
+    , ["end-to-end", "lock-tool-under-test"]
+    ]
+  }
+, "clone-git":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["clone-git"]
+  , "test": ["clone/git-repos.sh"]
+  , "deps":
+    [ ["", "mr-tool-under-test"]
+    , ["", "tool-under-test"]
+    , ["end-to-end", "lock-tool-under-test"]
+    ]
+  }
+, "clone-archive":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["clone-archive"]
+  , "test": ["clone/archive-repos.sh"]
+  , "deps":
+    [ ["", "mr-tool-under-test"]
+    , ["", "tool-under-test"]
+    , ["end-to-end", "lock-tool-under-test"]
+    , ["end-to-end/just-mr", "create_test_archives"]
+    ]
+  }
+, "clone-git-tree":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["clone-git-tree"]
+  , "test": ["clone/git-tree-repos.sh"]
+  , "deps":
+    [ ["", "mr-tool-under-test"]
+    , ["", "tool-under-test"]
+    , ["end-to-end", "lock-tool-under-test"]
+    ]
+  }
 , "TESTS":
   { "type": ["@", "rules", "test", "suite"]
   , "arguments_config": ["TEST_BOOTSTRAP_JUST_MR"]
@@ -59,7 +151,19 @@
       , { "type": "if"
         , "cond": {"type": "var", "name": "TEST_BOOTSTRAP_JUST_MR"}
         , "then": []
-        , "else": ["git-imports", "computed"]
+        , "else":
+          [ "git-imports"
+          , "computed"
+          , "file-imports"
+          , "archive-imports"
+          , "git-tree-imports"
+          , "plain-imports"
+          , "generic-imports"
+          , "clone-file"
+          , "clone-git"
+          , "clone-archive"
+          , "clone-git-tree"
+          ]
         }
       ]
     }

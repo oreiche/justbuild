@@ -31,6 +31,7 @@
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/git_cas.hpp"
 #include "src/buildtool/file_system/git_tree.hpp"
+#include "src/buildtool/file_system/precomputed_root.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/multithreading/atomic_value.hpp"
 #include "src/buildtool/storage/storage.hpp"
@@ -43,7 +44,7 @@ class RepositoryConfig {
         FileRoot target_root{workspace_root};
         FileRoot rule_root{target_root};
         FileRoot expression_root{rule_root};
-        std::map<std::string, std::string> name_mapping;
+        std::map<std::string, std::string> name_mapping{};
         std::string target_file_name{"TARGETS"};
         std::string rule_file_name{"RULES"};
         std::string expression_file_name{"EXPRESSIONS"};
@@ -68,8 +69,10 @@ class RepositoryConfig {
         return static_cast<bool>(git_cas_);
     }
 
-    void SetComputedRoot(FileRoot::ComputedRoot const& root,
-                         FileRoot const& value);
+    /// \brief Replace all entries of the precomputed root with an exact root.
+    /// \param root     Root to be replaced.
+    /// \param value    Root to be used as a replacement.
+    void SetPrecomputedRoot(PrecomputedRoot const& root, FileRoot const& value);
 
     [[nodiscard]] auto Info(std::string const& repo) const noexcept
         -> RepositoryInfo const* {
@@ -79,9 +82,12 @@ class RepositoryConfig {
         return nullptr;
     }
 
-    [[nodiscard]] auto ReadBlobFromGitCAS(std::string const& hex_id)
-        const noexcept -> std::optional<std::string> {
-        return git_cas_ ? git_cas_->ReadObject(hex_id, /*is_hex_id=*/true)
+    [[nodiscard]] auto ReadBlobFromGitCAS(
+        std::string const& hex_id,
+        LogLevel log_failure = LogLevel::Warning) const noexcept
+        -> std::optional<std::string> {
+        return git_cas_ ? git_cas_->ReadObject(
+                              hex_id, /*is_hex_id=*/true, log_failure)
                         : std::nullopt;
     }
 

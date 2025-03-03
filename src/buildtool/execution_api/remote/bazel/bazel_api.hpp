@@ -27,12 +27,12 @@
 #include "gsl/gsl"
 #include "src/buildtool/auth/authentication.hpp"
 #include "src/buildtool/common/artifact.hpp"
+#include "src/buildtool/common/artifact_blob.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/remote/port.hpp"
 #include "src/buildtool/common/remote/retry_config.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
-#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
+#include "src/buildtool/execution_api/bazel_msg/execution_config.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
@@ -49,7 +49,7 @@ class BazelApi final : public IExecutionApi {
              gsl::not_null<Auth const*> const& auth,
              gsl::not_null<RetryConfig const*> const& retry_config,
              ExecutionConfiguration const& exec_config,
-             gsl::not_null<HashFunction const*> const& hash_function) noexcept;
+             HashFunction hash_function) noexcept;
     BazelApi(BazelApi const&) = delete;
     BazelApi(BazelApi&& other) noexcept;
     auto operator=(BazelApi const&) -> BazelApi& = delete;
@@ -91,7 +91,7 @@ class BazelApi final : public IExecutionApi {
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         IExecutionApi const& api) const noexcept -> bool final;
 
-    [[nodiscard]] auto Upload(ArtifactBlobContainer&& blobs,
+    [[nodiscard]] auto Upload(std::unordered_set<ArtifactBlob>&& blobs,
                               bool skip_find_missing) const noexcept
         -> bool final;
 
@@ -102,8 +102,9 @@ class BazelApi final : public IExecutionApi {
     [[nodiscard]] auto IsAvailable(ArtifactDigest const& digest) const noexcept
         -> bool final;
 
-    [[nodiscard]] auto IsAvailable(std::vector<ArtifactDigest> const& digests)
-        const noexcept -> std::vector<ArtifactDigest> final;
+    [[nodiscard]] auto GetMissingDigests(
+        std::unordered_set<ArtifactDigest> const& digests) const noexcept
+        -> std::unordered_set<ArtifactDigest> final;
 
     [[nodiscard]] auto RetrieveToMemory(
         Artifact::ObjectInfo const& artifact_info) const noexcept
@@ -120,6 +121,8 @@ class BazelApi final : public IExecutionApi {
         -> std::optional<ArtifactDigest> final;
 
     [[nodiscard]] auto BlobSpliceSupport() const noexcept -> bool final;
+
+    [[nodiscard]] auto GetHashType() const noexcept -> HashFunction::Type final;
 
   private:
     std::shared_ptr<BazelNetwork> network_;

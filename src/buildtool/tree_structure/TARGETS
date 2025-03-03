@@ -1,0 +1,54 @@
+{ "tree_structure_cache":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["tree_structure_cache"]
+  , "hdrs": ["tree_structure_cache.hpp"]
+  , "srcs": ["tree_structure_cache.cpp"]
+  , "deps":
+    [ ["@", "gsl", "", "gsl"]
+    , ["@", "json", "", "json"]
+    , ["src/buildtool/common", "common"]
+    , ["src/buildtool/file_system", "file_storage"]
+    , ["src/buildtool/file_system", "object_type"]
+    , ["src/buildtool/storage", "config"]
+    ]
+  , "stage": ["src", "buildtool", "tree_structure"]
+  , "private-deps":
+    [ ["src/buildtool/crypto", "hash_function"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/storage", "storage"]
+    , ["src/utils/cpp", "expected"]
+    ]
+  }
+, "tree_structure_utils":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["tree_structure_utils"]
+  , "hdrs": ["tree_structure_utils.hpp"]
+  , "srcs": ["tree_structure_utils.cpp"]
+  , "deps":
+    [ "tree_structure_cache"
+    , ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/common", "common"]
+    , ["src/buildtool/execution_api/common", "common"]
+    , ["src/buildtool/storage", "config"]
+    , ["src/buildtool/storage", "storage"]
+    , ["src/utils/cpp", "expected"]
+    ]
+  , "stage": ["src", "buildtool", "tree_structure"]
+  , "private-deps":
+    [ ["@", "fmt", "", "fmt"]
+    , ["src/buildtool/common", "config"]
+    , ["src/buildtool/common", "protocol_traits"]
+    , ["src/buildtool/crypto", "hash_function"]
+    , ["src/buildtool/execution_api/git", "git_api"]
+    , ["src/buildtool/execution_api/local", "config"]
+    , ["src/buildtool/execution_api/local", "context"]
+    , ["src/buildtool/execution_api/local", "local_api"]
+    , ["src/buildtool/file_system", "file_system_manager"]
+    , ["src/buildtool/file_system", "git_repo"]
+    , ["src/buildtool/file_system", "object_type"]
+    , ["src/utils/cpp", "hex_string"]
+    , ["src/utils/cpp", "path"]
+    , ["src/utils/cpp", "tmp_dir"]
+    ]
+  }
+}

@@ -3,7 +3,7 @@
 NAME
 ====
 
-just-mr repository config - The format of the repository config used by
+just-mr-repository-config - The format of the repository config used by
 **`just-mr`**(1)
 
 DESCRIPTION
@@ -87,7 +87,7 @@ The following fields are supported.
   the archive content for an *`"archive"`* repository.
 
 - *`"name"`* specifies the name the content should have in the defined root.
-  It has to be a plain file name without implicitly specified sudirs. This
+  It has to be a plain file name without implicitly specified subdirs. This
   field is mandatory.
 
 - *`"executable"`* is a boolean indicating whether the fetched file should
@@ -190,6 +190,19 @@ The following fields are supported:
    the export target. This entry is optional and defaults to the
    empty map.
 
+### *`"tree structure"`*
+
+It evaluates to the given root but with all files and symlinks
+replaced by empty blobs. A tree structure root is given by a
+content-fixed workspace of a repository. Tree structure roots
+themselves are content fixed; the dependency of tree structure
+roots on one another must be cycle free.
+
+The following fields are supported:
+
+ - *`"repo"`* specifies the repository whose workspace root must
+   be evaluated. This entry is mandatory.
+
 ### Additional keys
 
 The key *`"pragma"`* is reserved for type-specific repository directives
@@ -204,7 +217,8 @@ part of a Git repository, its Git tree identifier is used; otherwise,
 the workspace root will be realized as a Git tree in the Git repository
 in **`just`**'s local build root.
 
-For all workspace roots except *`"distdir"`* the pragma key *`"special"`* is
+For all workspace roots except *`"distdir"`*, *`"computed"`*,
+and *`"tree structure"`*, the pragma key *`"special"`* is
 supported. If its value is *`"ignore"`* then it indicates that the workspace
 root should ignore all special (i.e., neither file, executable, nor tree)
 entries. For a *`"file"`* workspace root or for an *`"archive"`* workspace root
@@ -261,7 +275,7 @@ following fields are supported:
 
  - *`"main"`* contains a JSON string that determines which of the
    provided repositories is considered the main repository. This entry
-   is optional, and if ommitted, it will be ommitted in the generated
+   is optional, and if omitted, it will be omitted in the generated
    **`just-repository-config`**.
 
  - *`"repositories"`* contains a JSON object, where each key is the

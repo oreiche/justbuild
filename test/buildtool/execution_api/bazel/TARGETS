@@ -5,20 +5,15 @@
   , "private-deps":
     [ ["@", "catch2", "", "catch2"]
     , ["@", "gsl", "", "gsl"]
-    , ["@", "src", "src/buildtool/common", "bazel_digest_factory"]
-    , ["@", "src", "src/buildtool/common", "bazel_types"]
+    , ["@", "src", "src/buildtool/common", "artifact_blob"]
+    , ["@", "src", "src/buildtool/common", "common"]
     , ["@", "src", "src/buildtool/common/remote", "remote_common"]
     , ["@", "src", "src/buildtool/common/remote", "retry_config"]
     , ["@", "src", "src/buildtool/crypto", "hash_function"]
-    , ["@", "src", "src/buildtool/execution_api/bazel_msg", "bazel_msg"]
-    , [ "@"
-      , "src"
-      , "src/buildtool/execution_api/common"
-      , "content_blob_container"
-      ]
     , ["@", "src", "src/buildtool/execution_api/remote", "bazel_network"]
     , ["@", "src", "src/buildtool/execution_api/remote", "config"]
     , ["@", "src", "src/buildtool/file_system", "object_type"]
+    , ["@", "src", "src/utils/cpp", "expected"]
     , ["utils", "catch-main-remote-execution"]
     , ["utils", "test_auth_config"]
     , ["utils", "test_hash_function_type"]
@@ -38,7 +33,7 @@
     , ["@", "src", "src/buildtool/common/remote", "remote_common"]
     , ["@", "src", "src/buildtool/common/remote", "retry_config"]
     , ["@", "src", "src/buildtool/crypto", "hash_function"]
-    , ["@", "src", "src/buildtool/execution_api/bazel_msg", "bazel_msg"]
+    , ["@", "src", "src/buildtool/execution_api/bazel_msg", "execution_config"]
     , ["@", "src", "src/buildtool/execution_api/remote", "bazel_network"]
     , ["@", "src", "src/buildtool/execution_api/remote", "config"]
     , ["@", "src", "src/buildtool/file_system", "object_type"]
@@ -58,14 +53,15 @@
     [ ["@", "catch2", "", "catch2"]
     , ["@", "grpc", "", "grpc"]
     , ["@", "gsl", "", "gsl"]
-    , ["@", "src", "src/buildtool/common", "bazel_digest_factory"]
+    , ["@", "src", "src/buildtool/common", "artifact_blob"]
     , ["@", "src", "src/buildtool/common/remote", "remote_common"]
     , ["@", "src", "src/buildtool/crypto", "hash_function"]
-    , ["@", "src", "src/buildtool/execution_api/common", "bytestream_utils"]
     , ["@", "src", "src/buildtool/execution_api/common", "common"]
+    , ["@", "src", "src/buildtool/execution_api/common", "ids"]
     , ["@", "src", "src/buildtool/execution_api/remote", "bazel_network"]
     , ["@", "src", "src/buildtool/execution_api/remote", "config"]
     , ["@", "src", "src/buildtool/file_system", "object_type"]
+    , ["@", "src", "src/utils/cpp", "expected"]
     , ["utils", "catch-main-remote-execution"]
     , ["utils", "execution_bazel"]
     , ["utils", "test_auth_config"]
@@ -82,26 +78,17 @@
     [ ["@", "catch2", "", "catch2"]
     , ["@", "grpc", "", "grpc"]
     , ["@", "gsl", "", "gsl"]
-    , ["@", "src", "src/buildtool/common", "bazel_digest_factory"]
-    , ["@", "src", "src/buildtool/common", "bazel_types"]
+    , ["@", "src", "src/buildtool/common", "artifact_blob"]
+    , ["@", "src", "src/buildtool/common", "common"]
     , ["@", "src", "src/buildtool/common", "protocol_traits"]
     , ["@", "src", "src/buildtool/common/remote", "remote_common"]
     , ["@", "src", "src/buildtool/common/remote", "retry_config"]
     , ["@", "src", "src/buildtool/crypto", "hash_function"]
-    , ["@", "src", "src/buildtool/execution_api/bazel_msg", "bazel_msg"]
-    , [ "@"
-      , "src"
-      , "src/buildtool/execution_api/common"
-      , "artifact_blob_container"
-      ]
-    , [ "@"
-      , "src"
-      , "src/buildtool/execution_api/common"
-      , "content_blob_container"
-      ]
+    , ["@", "src", "src/buildtool/crypto", "hash_info"]
     , ["@", "src", "src/buildtool/execution_api/remote", "bazel_network"]
     , ["@", "src", "src/buildtool/execution_api/remote", "config"]
     , ["@", "src", "src/buildtool/file_system", "object_type"]
+    , ["@", "src", "src/utils/cpp", "expected"]
     , ["utils", "catch-main-remote-execution"]
     , ["utils", "execution_bazel"]
     , ["utils", "test_auth_config"]
@@ -117,8 +104,8 @@
   , "data": [["buildtool/storage", "test_data"]]
   , "private-deps":
     [ ["@", "catch2", "", "catch2"]
+    , ["@", "src", "src/buildtool/common", "artifact_blob"]
     , ["@", "src", "src/buildtool/common", "artifact_description"]
-    , ["@", "src", "src/buildtool/common", "artifact_digest_factory"]
     , ["@", "src", "src/buildtool/common", "common"]
     , ["@", "src", "src/buildtool/crypto", "hash_function"]
     , [ "@"
@@ -127,20 +114,11 @@
       , "bazel_msg_factory"
       ]
     , ["@", "src", "src/buildtool/execution_api/bazel_msg", "directory_tree"]
-    , [ "@"
-      , "src"
-      , "src/buildtool/execution_api/common"
-      , "artifact_blob_container"
-      ]
     , ["@", "src", "src/buildtool/execution_api/common", "common"]
-    , [ "@"
-      , "src"
-      , "src/buildtool/execution_api/common"
-      , "content_blob_container"
-      ]
     , ["@", "src", "src/buildtool/execution_engine/dag", "dag"]
     , ["@", "src", "src/buildtool/file_system", "file_system_manager"]
     , ["@", "src", "src/buildtool/file_system", "object_type"]
+    , ["@", "src", "src/utils/cpp", "expected"]
     , ["", "catch-main"]
     , ["utils", "test_hash_function_type"]
     ]
@@ -158,7 +136,7 @@
     , ["@", "src", "src/buildtool/common/remote", "retry_config"]
     , ["@", "src", "src/buildtool/crypto", "hash_function"]
     , ["@", "src", "src/buildtool/execution_api/common", "common"]
-    , ["@", "src", "src/buildtool/execution_api/remote", "bazel"]
+    , ["@", "src", "src/buildtool/execution_api/remote", "bazel_api"]
     , ["@", "src", "src/buildtool/execution_api/remote", "config"]
     , ["buildtool/execution_api/common", "api_test"]
     , ["utils", "catch-main-remote-execution"]

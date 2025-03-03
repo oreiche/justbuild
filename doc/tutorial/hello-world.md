@@ -30,7 +30,7 @@ Second, we also need to create the multi-repository configuration
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "b8ae7e38c0c51467ead55361362a0fd0da3666d5"
+      , "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -46,7 +46,7 @@ Second, we also need to create the multi-repository configuration
 In that configuration, two repositories are defined:
 
 1. The `"rules-cc"` repository located in the subdirectory `rules` of
-   [just-buildsystem/rules-cc:b8ae7e38c0c51467ead55361362a0fd0da3666d5](https://github.com/just-buildsystem/rules-cc/tree/b8ae7e38c0c51467ead55361362a0fd0da3666d5),
+   [just-buildsystem/rules-cc:3a5f0f0f50c59495ffc3b198df59e6edb8416450](https://github.com/just-buildsystem/rules-cc/tree/3a5f0f0f50c59495ffc3b198df59e6edb8416450),
    which contains the high-level concepts for building C/C++ binaries
    and libraries.
 
@@ -202,21 +202,27 @@ In that module, we need to create the file
 `tutorial-defaults/CC/TARGETS` that contains the target `"defaults"` and
 specifies which toolchain and compile flags to use; it has to specify
 the complete toolchain, but can specify a `"base"` toolchain to inherit
-from. In our case, we don't use any base, but specify all the required
-fields directly.
+from. In our case, we don't use any base.
 
 ``` {.jsonc srcname="tutorial-defaults/CC/TARGETS"}
 { "defaults":
   { "type": ["CC", "defaults"]
   , "CC": ["cc"]
   , "CXX": ["c++"]
-  , "CFLAGS": ["-O2", "-Wall"]
-  , "CXXFLAGS": ["-O2", "-Wall"]
+  , "ADD_COMPILE_FLAGS": ["-O2", "-Wall"]
   , "AR": ["ar"]
   , "PATH": ["/bin", "/usr/bin"]
   }
 }
 ```
+
+Here we used `"ADD_COMPILE_FLAGS"` to add flags for both, `C` and
+`C++` compilation. Those flags are added to the ones inherited
+from `"base"`, in our case (as we did not specify a `"base"`) the
+empty list. There are also `"ADD_CFLAGS"` and `"ADD_CXXFLAGS"` if
+we want to add flags for just `C` or just `C++`. Finally, there
+is also the possibility to explicitly specify `"CFLAGS"` and
+`"CXXFLAGS"` (completely ignoring anything inherited).
 
 To use the project defaults, modify the existing `repos.json` to reflect
 the following content:
@@ -228,7 +234,7 @@ the following content:
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "b8ae7e38c0c51467ead55361362a0fd0da3666d5"
+      , "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -277,7 +283,7 @@ INFO: Artifacts built, logical paths are:
 $
 ```
 
-Note that the output binary may have changed due to different defaults.
+Note that the output binary has changed due to different defaults.
 
 In this tutorial we simply set the correct parameters of the defaults target.
 It is, however, not necessary to remember all the fields of a rule; we can
@@ -306,7 +312,7 @@ Modeling target dependencies
 
 For demonstration purposes, we will separate the print statements into a
 static library `greet`, which will become a dependency to our binary.
-Therefore, we create a new subdirectory `greet` 
+Therefore, we create a new subdirectory `greet`
 
 ``` sh
 $ mkdir -p ./greet
@@ -420,5 +426,54 @@ INFO: Processed 2 actions, 2 cache hits.
 INFO: Artifacts built, logical paths are:
         greet/libgreet.a [83ed406e21f285337b0c9bd5011f56f656bba683:2992:f]
       (1 runfiles omitted.)
+$
+```
+
+The ommitted (i.e., not shown but still built) runfile is the header file. As
+mentioned in the introduction to `just analyse` this is a typical use of that
+second artifact arrangement. We can also have a look at the other information
+that library provides.
+
+``` sh
+$ just-mr analyse greet greet
+INFO: Performing repositories setup
+INFO: Found 3 repositories to set up
+INFO: Setup finished, exec ["just","analyse","-C","...","greet","greet"]
+INFO: Requested target is [["@","tutorial","greet","greet"],{}]
+INFO: Analysed target [["@","tutorial","greet","greet"],{}]
+INFO: Result of target [["@","tutorial","greet","greet"],{}]: {
+        "artifacts": {
+          "greet/libgreet.a": {"data":{"id":"c4ba32e2fc1ce267b4245d8885ae7b53405d41a709f853061549ca93aa73a6ac","path":"work/greet/libgreet.a"},"type":"ACTION"}
+        },
+        "provides": {
+          "compile-args": [
+          ],
+          "compile-deps": {
+          },
+          "debug-hdrs": {
+          },
+          "debug-srcs": {
+          },
+          "link-args": [
+            "greet/libgreet.a"
+          ],
+          "link-deps": {
+          },
+          "lint": [
+          ],
+          "package": {
+            "cflags-files": {},
+            "ldflags-files": {},
+            "name": "greet"
+          },
+          "run-libs": {
+          },
+          "run-libs-args": [
+          ]
+        },
+        "runfiles": {
+          "greet/greet.hpp": {"data":{"path":"greet/greet.hpp","repository":"tutorial"},"type":"LOCAL"}
+        }
+      }
 $
 ```

@@ -22,9 +22,9 @@
 #include <vector>
 
 #include "gsl/gsl"
+#include "src/buildtool/common/artifact_blob.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/execution_api/bazel_msg/directory_tree.hpp"
-#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
 
 class BlobTree;
 using BlobTreePtr = gsl::not_null<std::shared_ptr<BlobTree>>;
@@ -38,7 +38,7 @@ class BlobTree {
 
     [[nodiscard]] auto Blob() const noexcept -> ArtifactBlob { return blob_; }
     [[nodiscard]] auto IsTree() const noexcept -> bool {
-        return blob_.digest.IsTree();
+        return blob_.GetDigest().IsTree();
     }
 
     /// \brief Create a `BlobTree` from a `DirectoryTree`.

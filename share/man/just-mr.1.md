@@ -12,6 +12,7 @@ SYNOPSIS
 **`just-mr`** \[*`OPTION`*\]... {**`setup`**|**`setup-env`**} \[**`--all`**\] \[*`main-repo`*\]  
 **`just-mr`** \[*`OPTION`*\]... **`fetch`** \[**`--all`**\] \[**`--backup-to-remote`**] \[**`-o`** *`fetch-dir`*\] \[*`main-repo`*\]  
 **`just-mr`** \[*`OPTION`*\]... **`update`** \[*`repo`*\]...  
+**`just-mr`** \[*`OPTION`*\]... **`gc-repo`** \[**`--drop-only`**\]  
 **`just-mr`** \[*`OPTION`*\]... **`do`** \[*`JUST_ARG`*\]...  
 **`just-mr`** \[*`OPTION`*\]... {**`version`**|**`describe`**|**`analyse`**|**`build`**|**`install`**|**`install-cas`**|**`add-to-cas`**|**`rebuild`**|**`gc`**} \[*`JUST_ARG`*\]...  
 
@@ -89,6 +90,13 @@ This file contains a JSON object with several known keys:
    specifying known hostnames. When fetching from a non-local mirror, URLs
    with hostnames in the given list are preferred (in the order given)
    over URLs with other hostnames.
+ - the key *`"extra inherit env"`*, if given, is a list of strings
+   specifying additional variable names to be inherited from the
+   environment (besides the ones specified in *`"inherit env"`*
+   of the respective repository definition). This can be useful,
+   if the local git mirrors use a different protocol (like `ssh`
+   instead of `https`) and hence require different variables to
+   pass the credentials.
 
 This options overwrites any values set in the **`just-mrrc`**(5) file.  
 Default: file path *`".just-local.json"`* in user's home directory.
@@ -288,6 +296,18 @@ For Git repositories, the subcommand will replace the value for the
 remote repository in the specified branch. The output configuration file
 will otherwise remain the same at the JSON level with the input
 configuration file.
+
+gc-repo
+-------
+
+This subcommand rotates the generations of the repository cache.
+Every root used is added to the youngest generation. Therefore upon
+a call to **`gc-repo`** all roots are cleaned up that were not used
+since the last **`gc-repo`**.
+
+If **`--drop-only`** is given, only the old generations are cleaned up,
+without rotation. In this way, storage can be reclaimed; this might be
+necessary as no perfect sharing happens between the repository generations.
 
 do
 --

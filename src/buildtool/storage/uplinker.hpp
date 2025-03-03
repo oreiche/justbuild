@@ -15,13 +15,12 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_STORAGE_UPLINKER_HPP
 #define INCLUDED_SRC_BUILDTOOL_STORAGE_UPLINKER_HPP
 
-#include <optional>
-#include <string>
 #include <type_traits>
 #include <vector>
 
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/storage/backend_description.hpp"
 #include "src/buildtool/storage/config.hpp"
 
 template <bool>
@@ -74,12 +73,11 @@ class GlobalUplinker final {
     /// \brief Uplink entry from target cache across all generations to latest.
     /// Note that the entry will be uplinked including all referenced items.
     /// \param key  Target cache key to uplink entry for.
-    /// \param shard Optional explicit shard, if the default is not intended.
+    /// \param backend_description Explicit backend description.
     /// \returns true if cache entry was found and successfully uplinked.
     [[nodiscard]] auto UplinkTargetCacheEntry(
         TargetCacheKey const& key,
-        std::optional<std::string> const& shard = std::nullopt) const noexcept
-        -> bool;
+        BackendDescription const& backend_description) const noexcept -> bool;
 
   private:
     StorageConfig const& storage_config_;

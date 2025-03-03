@@ -76,9 +76,10 @@ auto TryWrite(std::string const& file, T const& content) noexcept -> bool {
 auto ServeServerImpl::Create(std::optional<std::string> interface,
                              std::optional<int> port,
                              std::optional<std::string> info_file,
-                             std::optional<std::string> pid_file) noexcept
+                             std::optional<std::string> pid_file,
+                             gsl::not_null<std::mutex*> const& lock) noexcept
     -> std::optional<ServeServerImpl> {
-    ServeServerImpl server;
+    auto server = ServeServerImpl(lock);
     if (interface) {
         server.interface_ = std::move(*interface);
     }
@@ -98,7 +99,7 @@ auto ServeServerImpl::Create(std::optional<std::string> interface,
     if (pid_file) {
         server.pid_file_ = std::move(*pid_file);
     }
-    return std::move(server);
+    return server;
 }
 
 auto ServeServerImpl::Run(
@@ -135,8 +136,10 @@ auto ServeServerImpl::Run(
                      local_context,
                      remote_context,
                      &apis,
+                     lock_,
                      serve ? &*serve : nullptr};
-    ConfigurationService cs{hash_type, remote_context->exec_config};
+    ConfigurationService cs{
+        hash_type, remote_context->exec_config, &serve_config};
 
     // For the SourceTreeService we need to always have access to a native
     // storage. In compatible mode, this requires creating a second local
@@ -148,8 +151,7 @@ auto ServeServerImpl::Run(
     auto const is_compat = not ProtocolTraits::IsNative(hash_type);
     if (is_compat) {
         auto config =
-            StorageConfig::Builder{}
-                .SetBuildRoot(local_context->storage_config->build_root)
+            StorageConfig::Builder::Rebuild(*local_context->storage_config)
                 .SetHashType(HashFunction::Type::GitSHA1)
                 .Build();
         if (not config) {
@@ -175,15 +177,15 @@ auto ServeServerImpl::Run(
         is_compat ? &*local_context : nullptr,
         is_compat ? &*apis.local : nullptr);
     // setup the apis to pass to SourceTreeService
-    auto const mr_apis = ApiBundle{.hash_function = apis.hash_function,
-                                   .local = mr_local_api,
-                                   .remote = apis.remote};
+    auto const mr_apis =
+        ApiBundle{.local = mr_local_api, .remote = apis.remote};
 
     SourceTreeService sts{
         &serve_config,
         &mr_apis,
         is_compat ? &*secondary_local_context
-                  : local_context,             // native_context
+                  : local_context,  // native_context
+        lock_,
         is_compat ? &*local_context : nullptr  // compat_context
     };
 

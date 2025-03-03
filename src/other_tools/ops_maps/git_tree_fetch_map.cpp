@@ -43,7 +43,6 @@ namespace {
 void BackupToRemote(ArtifactDigest const& digest,
                     StorageConfig const& native_storage_config,
                     StorageConfig const* compat_storage_config,
-                    Storage const* compat_storage,
                     gsl::not_null<IExecutionApi const*> const& local_api,
                     IExecutionApi const& remote_api,
                     GitTreeFetchMap::LoggerPtr const& logger) {
@@ -54,25 +53,18 @@ void BackupToRemote(ArtifactDigest const& digest,
             MRGitApi{&repo,
                      &native_storage_config,
                      compat_storage_config,
-                     compat_storage,
                      compat_storage_config != nullptr ? &*local_api : nullptr};
-        if (not git_api.RetrieveToCas(
+        if (git_api.RetrieveToCas(
                 {Artifact::ObjectInfo{.digest = digest,
                                       .type = ObjectType::Tree}},
                 remote_api)) {
-            // give a warning
-            (*logger)(fmt::format(
-                          "Failed to back up tree {} from local CAS to remote",
-                          digest.hash()),
-                      /*fatal=*/false);
+            return;
         }
     }
-    else {
-        // give a warning
-        (*logger)(fmt::format("Failed to SetGitCAS at {}",
-                              native_storage_config.GitRoot().string()),
-                  /*fatal=*/false);
-    }
+    // give a warning
+    (*logger)(fmt::format("Failed to back up tree {} from local CAS to remote",
+                          digest.hash()),
+              /*fatal=*/false);
 }
 
 /// \brief Moves the root tree from local CAS to the Git cache and sets the
@@ -83,7 +75,6 @@ void MoveCASTreeToGit(
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
     StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
     gsl::not_null<IExecutionApi const*> const& local_api,
     IExecutionApi const* remote_api,
     bool backup_to_remote,
@@ -117,7 +108,6 @@ void MoveCASTreeToGit(
          tree_hash,
          native_storage_config,
          compat_storage_config,
-         compat_storage,
          local_api,
          remote_api,
          backup_to_remote,
@@ -135,7 +125,6 @@ void MoveCASTreeToGit(
                 BackupToRemote(native_digest,
                                *native_storage_config,
                                compat_storage_config,
-                               compat_storage,
                                local_api,
                                *remote_api,
                                logger);
@@ -156,7 +145,6 @@ void TagAndSetRoot(
     ArtifactDigest const& digest,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
     StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     gsl::not_null<IExecutionApi const*> const& local_api,
     IExecutionApi const* remote_api,
@@ -179,7 +167,6 @@ void TagAndSetRoot(
          backup_to_remote,
          native_storage_config,
          compat_storage_config,
-         compat_storage,
          local_api,
          remote_api,
          logger,
@@ -195,7 +182,6 @@ void TagAndSetRoot(
                 BackupToRemote(digest,
                                *native_storage_config,
                                compat_storage_config,
-                               compat_storage,
                                local_api,
                                *remote_api,
                                logger);
@@ -217,7 +203,6 @@ void TakeTreeFromOlderGeneration(
     ArtifactDigest const& digest,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
     StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
     GitCASPtr const& git_cas,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     gsl::not_null<IExecutionApi const*> const& local_api,
@@ -248,8 +233,7 @@ void TakeTreeFromOlderGeneration(
          logger,
          source,
          native_storage_config,
-         compat_storage_config,
-         compat_storage](auto const& values) {
+         compat_storage_config](auto const& values) {
             GitOpValue op_result = *values[0];
             if (not op_result.result) {
                 (*logger)("Tree tagging failed", /*fatal=*/true);
@@ -277,7 +261,6 @@ void TakeTreeFromOlderGeneration(
             TagAndSetRoot(digest,
                           native_storage_config,
                           compat_storage_config,
-                          compat_storage,
                           critical_git_op_map,
                           local_api,
                           remote_api,
@@ -303,10 +286,10 @@ auto CreateGitTreeFetchMap(
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     std::string const& git_bin,
     std::vector<std::string> const& launcher,
+    MirrorsPtr const& mirrors,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
     StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
     gsl::not_null<IExecutionApi const*> const& local_api,
     IExecutionApi const* remote_api,
     bool backup_to_remote,
@@ -316,10 +299,10 @@ auto CreateGitTreeFetchMap(
                           import_to_git_map,
                           git_bin,
                           launcher,
+                          mirrors,
                           serve,
                           native_storage_config,
                           compat_storage_config,
-                          compat_storage,
                           local_api,
                           remote_api,
                           backup_to_remote,
@@ -347,10 +330,10 @@ auto CreateGitTreeFetchMap(
              import_to_git_map,
              git_bin,
              launcher,
+             mirrors,
              serve,
              native_storage_config,
              compat_storage_config,
-             compat_storage,
              local_api,
              remote_api,
              backup_to_remote,
@@ -397,7 +380,6 @@ auto CreateGitTreeFetchMap(
                         BackupToRemote(ArtifactDigest{key.tree_hash, 0},
                                        *native_storage_config,
                                        compat_storage_config,
-                                       compat_storage,
                                        local_api,
                                        *remote_api,
                                        logger);
@@ -427,7 +409,6 @@ auto CreateGitTreeFetchMap(
                                     ArtifactDigest{key.tree_hash, 0},
                                     native_storage_config,
                                     compat_storage_config,
-                                    compat_storage,
                                     op_result.git_cas,
                                     critical_git_op_map,
                                     local_api,
@@ -451,7 +432,6 @@ auto CreateGitTreeFetchMap(
                                      import_to_git_map,
                                      native_storage_config,
                                      compat_storage_config,
-                                     compat_storage,
                                      local_api,
                                      remote_api,
                                      backup_to_remote,
@@ -481,7 +461,6 @@ auto CreateGitTreeFetchMap(
                                          import_to_git_map,
                                          native_storage_config,
                                          compat_storage_config,
-                                         compat_storage,
                                          local_api,
                                          remote_api,
                                          false,  // tree already on remote,
@@ -506,7 +485,6 @@ auto CreateGitTreeFetchMap(
                                      import_to_git_map,
                                      native_storage_config,
                                      compat_storage_config,
-                                     compat_storage,
                                      local_api,
                                      remote_api,
                                      false,  // tree already on remote,
@@ -543,8 +521,10 @@ auto CreateGitTreeFetchMap(
                 std::copy(key.command.begin(),
                           key.command.end(),
                           std::back_inserter(cmdline));
+                auto inherit_env =
+                    MirrorsUtils::GetInheritEnv(mirrors, key.inherit_env);
                 std::map<std::string, std::string> env{key.env_vars};
-                for (auto const& k : key.inherit_env) {
+                for (auto const& k : inherit_env) {
                     const char* v = std::getenv(k.c_str());
                     if (v != nullptr) {
                         env[k] = std::string(v);
@@ -590,9 +570,9 @@ auto CreateGitTreeFetchMap(
                      key,
                      git_bin,
                      launcher,
+                     mirrors,
                      native_storage_config,
                      compat_storage_config,
-                     compat_storage,
                      local_api,
                      remote_api,
                      backup_to_remote,
@@ -734,7 +714,6 @@ auto CreateGitTreeFetchMap(
                             [remote_api,
                              native_storage_config,
                              compat_storage_config,
-                             compat_storage,
                              local_api,
                              backup_to_remote,
                              key,
@@ -756,7 +735,6 @@ auto CreateGitTreeFetchMap(
                                         ArtifactDigest{key.tree_hash, 0},
                                         *native_storage_config,
                                         compat_storage_config,
-                                        compat_storage,
                                         local_api,
                                         *remote_api,
                                         logger);

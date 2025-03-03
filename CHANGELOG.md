@@ -2,18 +2,77 @@
 
 A feature release on top of `1.4.0`, backwards compatible.
 
+### Major new features
+
+- Added two new root types: `"computed"` and `"tree structure"`.
+  This allows to define roots as the artifacts of an export target
+  of an earlier-defined content-fixed repository, as well as the
+  underlying tree structure of an earlier-defined content-fixed
+  root. Both new root types are themselves content fixed.
+
+### New features
+
+- A new tool `just-lock` has been added that allows to define
+  `just-mr` repository configurations out of an abstract configuration
+  defining base repositories and a sequence of imports.
+- An option `-p` was added to the building subcommands to show the
+  unique artifact (if there is precisely one) on stdout.
+- The checkout-locations file now additionally allows to specify
+  extra environment variables to inherit.
+- `just add-to-cas` now supports the `--resolve-special` option, which
+  defines how special entries (e.g., symlinks) are to be handled when
+  adding directories to CAS.
+- `just serve` accepts a new subkey `"client address"` for the key
+  `"execution endpoint"` in the configuration file. It informs the
+  `serve` instance that the client will access the remote-execution
+  endpoint via the given `"client address"` and not using the one
+  listed in the subkey `"address"`. This feature allows to position
+  `just serve` next to the remote-execution endpoint behind some
+  form of address translation.
+
 ### Fixes
 
+- `just-import-git` now correctly inherits pragmas for imported
+  file-type repositories during description rewrite.
+- `just-mr` repository garbage collection now properly removes
+  no longer needed directories.
+- The "generic" rule now properly detects staging conflicts.
 - Fixes ensuring proper pointer life time and access check.
 - A race condition in the use of `libgit2` was fixed that could
   result in a segmentation fault.
 - Git operations are now properly locked against each other, also
   between processes where necessary.
+- The Git cache root repository on a `just serve` endpoint is now
+  ensured to always exist and be initialized before being operated on.
 - `just install-cas` correctly exits with non-zero exit code on
-  failure, also if isntallation to stdout is requested.
+  failure, also if installation to stdout is requested.
 - `just traverse` now exits unconditionally after traversal, also
   in case of failure.
+- `just-mr` properly enforces that repository `subdir` entries are
+  non-upwards relative paths.
+- The local api correctly handles not-found blobs, even in the absence
+  of a local git api.
+- For remote execution, the server capability `max_batch_total_size_bytes`
+  is now correctly honored, if announced by the server.
 - Missing entries in the documentation have been added.
+
+## Release `1.5.0~beta2` (2025-02-28)
+
+Second beta release for the upcoming `1.5.0` release; see release
+notes there.
+
+### Changes since `1.5.0~beta1`
+
+- New configuration option `"client address"` for `just serve`.
+- `just-lock` now fetches and clones repositories in parallel.
+- Blob content is not any more kept in memory unecessarily at
+  various places.
+- Various internal clean up of the code base.
+
+## Release `1.5.0~beta1` (2025-02-24)
+
+First beta release for the upcoming `1.5.0` release; see release
+notes there.
 
 ## Release `1.4.0` (2024-11-04)
 

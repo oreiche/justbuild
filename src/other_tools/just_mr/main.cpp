@@ -82,6 +82,13 @@ void SetupUpdateCommandArguments(
     SetupMultiRepoUpdateArguments(app, &clargs->update);
 }
 
+/// \brief Setup arguments for subcommand "just-mr gc-repo".
+void SetupUpdateGcArguments(
+    gsl::not_null<CLI::App*> const& app,
+    gsl::not_null<CommandLineArguments*> const& clargs) {
+    SetupMultiRepoGcArguments(app, &clargs->gc);
+}
+
 /// \brief Setup arguments for subcommand "just-mr setup" and
 /// "just-mr setup-env".
 void SetupSetupCommandArguments(
@@ -133,6 +140,7 @@ void SetupSetupCommandArguments(
     SetupSetupCommandArguments(cmd_setup_env, &clargs);
     SetupFetchCommandArguments(cmd_fetch, &clargs);
     SetupUpdateCommandArguments(cmd_update, &clargs);
+    SetupUpdateGcArguments(cmd_gc_repo, &clargs);
 
     // for 'just' calls, allow extra arguments
     cmd_do->allow_extras();
@@ -307,6 +315,9 @@ auto main(int argc, char* argv[]) -> int {
                 arguments.common.alternative_mirrors->preferred_hostnames =
                     checkout_locations_json.value("preferred hostnames",
                                                   nlohmann::json::array());
+                arguments.common.alternative_mirrors->extra_inherit_env =
+                    checkout_locations_json.value("extra inherit env",
+                                                  nlohmann::json::array());
             } catch (std::exception const& e) {
                 Logger::Log(
                     LogLevel::Error,
@@ -336,7 +347,7 @@ auto main(int argc, char* argv[]) -> int {
 
         if (arguments.cmd == SubCommand::kGcRepo) {
             return RepositoryGarbageCollector::TriggerGarbageCollection(
-                       *native_storage_config)
+                       *native_storage_config, arguments.gc.drop_only)
                        ? kExitSuccess
                        : kExitBuiltinCommandFailure;
         }

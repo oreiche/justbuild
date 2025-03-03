@@ -59,7 +59,9 @@ cat > repos.in.json <<EOF
   ]
 }
 EOF
-"${JUST_LOCK}" -C repos.in.json -o repos.json
+echo
+"${JUST_LOCK}" -C repos.in.json -o repos.json --local-build-root "${LBR}" 2>&1
+echo
 cat repos.json
 echo
 cat > TARGETS <<'EOF'
@@ -76,7 +78,7 @@ git checkout --orphan barmaster
 git config user.name 'N.O.Body'
 git config user.email 'nobody@example.org'
 git add .
-git commit -m 'Add foo.txt' 2>&1
+git commit -m 'Add bar.txt' 2>&1
 
 mkdir -p "${WRKDIR}"
 cd "${WRKDIR}"
@@ -114,7 +116,9 @@ cat > repos.in.json <<EOF
 , "keep": ["foo", "bar/foo"]
 }
 EOF
-"${JUST_LOCK}" -C repos.in.json -o repos-keep.json
+echo
+"${JUST_LOCK}" -C repos.in.json -o repos-keep.json --local-build-root "${LBR}" 2>&1
+echo
 cat repos-keep.json
 echo
 "${JUST_MR}" -C repos-keep.json --norc --just "${JUST}" \
@@ -144,7 +148,9 @@ cat > repos.in.json <<EOF
   ]
 }
 EOF
-"${JUST_LOCK}" -C repos.in.json -o repos.json
+echo
+"${JUST_LOCK}" -C repos.in.json -o repos.json --local-build-root "${LBR}" 2>&1
+echo
 cat repos.json
 echo
 "${JUST_MR}" -C repos.json --norc --just "${JUST}" \

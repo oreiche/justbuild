@@ -23,6 +23,8 @@
 
 #include "fmt/core.h"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/crypto/hash_info.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
@@ -33,8 +35,8 @@
 #include "src/buildtool/storage/fs_utils.hpp"
 #include "src/other_tools/git_operations/git_ops_types.hpp"
 #include "src/other_tools/git_operations/git_repo_remote.hpp"
-#include "src/other_tools/root_maps/root_utils.hpp"
 #include "src/utils/archive/archive_ops.hpp"
+#include "src/utils/cpp/expected.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
 namespace {
@@ -65,23 +67,24 @@ void EnsureRootAsAbsent(
     ArchiveRepoInfo const& key,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
-    IExecutionApi const* local_api,
-    IExecutionApi const* remote_api,
     bool is_cache_hit,
     ContentGitMap::SetterPtr const& ws_setter,
     ContentGitMap::LoggerPtr const& logger) {
     // this is an absent root
     if (serve != nullptr) {
         // check if the serve endpoint has this root
-        auto has_tree = CheckServeHasAbsentRoot(*serve, tree_id, logger);
+        auto const has_tree = serve->CheckRootTree(tree_id);
         if (not has_tree) {
+            (*logger)(fmt::format("Checking that the serve endpoint knows tree "
+                                  "{} failed.",
+                                  tree_id),
+                      /*fatal=*/true);
             return;
         }
         if (not *has_tree) {
             // try to see if serve endpoint has the information to prepare the
             // root itself; this is redundant if root is not already cached
+            bool on_serve = false;
             if (is_cache_hit) {
                 auto const serve_result = serve->RetrieveTreeFromArchive(
                     key.archive.content_hash.Hash(),
@@ -100,72 +103,40 @@ void EnsureRootAsAbsent(
                                   /*fatal=*/true);
                         return;
                     }
+                    on_serve = true;
                 }
-                else {
-                    // check if serve failure was due to archive content not
-                    // being found or it is otherwise fatal
-                    if (serve_result.error() == GitLookupError::Fatal) {
-                        (*logger)(
-                            fmt::format("Serve endpoint failed to set up "
-                                        "root from known archive content {}",
-                                        key.archive.content_hash.Hash()),
-                            /*fatal=*/true);
-                        return;
-                    }
-                    if (remote_api == nullptr) {
-                        (*logger)(
-                            fmt::format(
-                                "Missing or incompatible remote-execution "
-                                "endpoint needed to sync workspace root {} "
-                                "with the serve endpoint.",
-                                tree_id),
-                            /*fatal=*/true);
-                        return;
-                    }
-                    // the tree is known locally, so we can upload it to remote
-                    // CAS for the serve endpoint to retrieve it and set up the
-                    // root
-                    if (not EnsureAbsentRootOnServe(
-                            *serve,
-                            tree_id,
-                            native_storage_config->GitRoot(), /*repo_path*/
-                            native_storage_config,
-                            compat_storage_config,
-                            compat_storage,
-                            local_api,
-                            remote_api,
-                            logger,
-                            /*no_sync_is_fatal=*/true)) {
-                        return;
-                    }
-                }
-            }
-            else {
-                // the tree is known locally, so we can upload it to remote CAS
-                // for the serve endpoint to retrieve it and set up the root
-                if (remote_api == nullptr) {
-                    (*logger)(
-                        fmt::format("Missing or incompatible remote-execution "
-                                    "endpoint needed to sync workspace root {} "
-                                    "with the serve endpoint.",
-                                    tree_id),
-                        /*fatal=*/true);
+
+                if (not serve_result.has_value() and
+                    serve_result.error() == GitLookupError::Fatal) {
+                    (*logger)(fmt::format("Serve endpoint failed to set up "
+                                          "root from known archive content {}",
+                                          key.archive.content_hash.Hash()),
+                              /*fatal=*/true);
                     return;
                 }
+            }
+
+            if (not on_serve) {
+                // the tree is known locally, so we can upload it to remote CAS
+                // for the serve endpoint to retrieve it and set up the root
+                auto digest =
+                    ArtifactDigestFactory::Create(HashFunction::Type::GitSHA1,
+                                                  tree_id,
+                                                  /*size_unknown=*/0,
+                                                  /*is_tree=*/true);
+                if (not digest.has_value()) {
+                    (*logger)(std::move(digest).error(), /*fatal=*/true);
+                    return;
+                }
+
                 // the tree is known locally, so we can upload it to remote
                 // CAS for the serve endpoint to retrieve it and set up the
                 // root
-                if (not EnsureAbsentRootOnServe(
-                        *serve,
-                        tree_id,
-                        native_storage_config->GitRoot(), /*repo_root*/
-                        native_storage_config,
-                        compat_storage_config,
-                        compat_storage,
-                        local_api,
-                        remote_api,
-                        logger,
-                        /*no_sync_is_fatal=*/true)) {
+                auto uploaded = serve->UploadTree(
+                    *digest, native_storage_config->GitRoot());
+                if (not uploaded.has_value()) {
+                    (*logger)(std::move(uploaded).error().Message(),
+                              /*fatal=*/true);
                     return;
                 }
             }
@@ -195,10 +166,6 @@ void ResolveContentTree(
     bool is_absent,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
-    IExecutionApi const* local_api,
-    IExecutionApi const* remote_api,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<TaskSystem*> const& ts,
@@ -224,10 +191,6 @@ void ResolveContentTree(
                                    key,
                                    serve,
                                    native_storage_config,
-                                   compat_storage_config,
-                                   compat_storage,
-                                   local_api,
-                                   remote_api,
                                    is_cache_hit,
                                    ws_setter,
                                    logger);
@@ -251,8 +214,7 @@ void ResolveContentTree(
                                     /*known_info=*/std::nullopt,
                                     just_git_cas,
                                     just_git_cas)},
-                [resolve_symlinks_map,
-                 critical_git_op_map,
+                [critical_git_op_map,
                  tree_hash,
                  tree_id_file,
                  is_cache_hit,
@@ -260,10 +222,6 @@ void ResolveContentTree(
                  is_absent,
                  serve,
                  native_storage_config,
-                 compat_storage_config,
-                 compat_storage,
-                 local_api,
-                 remote_api,
                  ts,
                  ws_setter,
                  logger](auto const& hashes) {
@@ -287,10 +245,6 @@ void ResolveContentTree(
                          is_absent,
                          serve,
                          native_storage_config,
-                         compat_storage_config,
-                         compat_storage,
-                         local_api,
-                         remote_api,
                          is_cache_hit,
                          ws_setter,
                          logger](auto const& values) {
@@ -317,10 +271,6 @@ void ResolveContentTree(
                                                    key,
                                                    serve,
                                                    native_storage_config,
-                                                   compat_storage_config,
-                                                   compat_storage,
-                                                   local_api,
-                                                   remote_api,
                                                    is_cache_hit,
                                                    ws_setter,
                                                    logger);
@@ -363,10 +313,6 @@ void ResolveContentTree(
                                key,
                                serve,
                                native_storage_config,
-                               compat_storage_config,
-                               compat_storage,
-                               local_api,
-                               remote_api,
                                is_cache_hit,
                                ws_setter,
                                logger);
@@ -393,10 +339,6 @@ void WriteIdFileAndSetWSRoot(
     bool is_absent,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
-    IExecutionApi const* local_api,
-    IExecutionApi const* remote_api,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<TaskSystem*> const& ts,
@@ -441,10 +383,6 @@ void WriteIdFileAndSetWSRoot(
                        is_absent,
                        serve,
                        native_storage_config,
-                       compat_storage_config,
-                       compat_storage,
-                       local_api,
-                       remote_api,
                        critical_git_op_map,
                        resolve_symlinks_map,
                        ts,
@@ -462,10 +400,6 @@ void ExtractAndImportToGit(
     bool is_absent,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
-    IExecutionApi const* local_api,
-    IExecutionApi const* remote_api,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
@@ -503,10 +437,6 @@ void ExtractAndImportToGit(
          is_absent,
          serve,
          native_storage_config,
-         compat_storage_config,
-         compat_storage,
-         local_api,
-         remote_api,
          critical_git_op_map,
          resolve_symlinks_map,
          ts,
@@ -528,10 +458,6 @@ void ExtractAndImportToGit(
                                     is_absent,
                                     serve,
                                     native_storage_config,
-                                    compat_storage_config,
-                                    compat_storage,
-                                    local_api,
-                                    remote_api,
                                     critical_git_op_map,
                                     resolve_symlinks_map,
                                     ts,
@@ -571,12 +497,8 @@ void HandleLocallyKnownTree(
     bool fetch_absent,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
-    IExecutionApi const* local_api,
-    IExecutionApi const* remote_api,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
     ContentGitMap::LoggerPtr const& logger) {
@@ -607,10 +529,6 @@ void HandleLocallyKnownTree(
          fetch_absent,
          serve,
          native_storage_config,
-         compat_storage_config,
-         compat_storage,
-         local_api,
-         remote_api,
          critical_git_op_map,
          resolve_symlinks_map,
          ts,
@@ -653,10 +571,6 @@ void HandleLocallyKnownTree(
                 /*is_absent = */ (key.absent and not fetch_absent),
                 serve,
                 native_storage_config,
-                compat_storage_config,
-                compat_storage,
-                local_api,
-                remote_api,
                 critical_git_op_map,
                 resolve_symlinks_map,
                 ts,
@@ -680,12 +594,8 @@ void HandleKnownInOlderGenerationAfterImport(
     bool fetch_absent,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
-    IExecutionApi const* local_api,
-    IExecutionApi const* remote_api,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
     ContentGitMap::LoggerPtr const& logger) {
@@ -706,12 +616,8 @@ void HandleKnownInOlderGenerationAfterImport(
                            fetch_absent,
                            serve,
                            native_storage_config,
-                           compat_storage_config,
-                           compat_storage,
                            resolve_symlinks_map,
                            critical_git_op_map,
-                           local_api,
-                           remote_api,
                            ts,
                            setter,
                            logger);
@@ -726,12 +632,8 @@ void HandleKnownInOlderGenerationAfterTaggingAndInit(
     bool fetch_absent,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
-    IExecutionApi const* local_api,
-    IExecutionApi const* remote_api,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
     ContentGitMap::LoggerPtr const& logger) {
@@ -769,12 +671,8 @@ void HandleKnownInOlderGenerationAfterTaggingAndInit(
          fetch_absent,
          serve,
          native_storage_config,
-         compat_storage_config,
-         compat_storage,
          resolve_symlinks_map,
          critical_git_op_map,
-         local_api,
-         remote_api,
          ts,
          setter,
          logger](auto const& values) {
@@ -790,12 +688,8 @@ void HandleKnownInOlderGenerationAfterTaggingAndInit(
                                                     fetch_absent,
                                                     serve,
                                                     native_storage_config,
-                                                    compat_storage_config,
-                                                    compat_storage,
                                                     resolve_symlinks_map,
                                                     critical_git_op_map,
-                                                    local_api,
-                                                    remote_api,
                                                     ts,
                                                     setter,
                                                     logger);
@@ -816,12 +710,8 @@ void HandleKnownInOlderGenerationAfterTagging(
     bool fetch_absent,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
-    IExecutionApi const* local_api,
-    IExecutionApi const* remote_api,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
     ContentGitMap::LoggerPtr const& logger) {
@@ -844,12 +734,8 @@ void HandleKnownInOlderGenerationAfterTagging(
          fetch_absent,
          serve,
          native_storage_config,
-         compat_storage_config,
-         compat_storage,
          resolve_symlinks_map,
          critical_git_op_map,
-         local_api,
-         remote_api,
          ts,
          setter,
          logger](auto const& values) {
@@ -868,12 +754,8 @@ void HandleKnownInOlderGenerationAfterTagging(
                 fetch_absent,
                 serve,
                 native_storage_config,
-                compat_storage_config,
-                compat_storage,
                 resolve_symlinks_map,
                 critical_git_op_map,
-                local_api,
-                remote_api,
                 ts,
                 setter,
                 logger);
@@ -894,12 +776,8 @@ void HandleKnownInOlderGeneration(
     bool fetch_absent,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
-    Storage const* compat_storage,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
-    IExecutionApi const* local_api,
-    IExecutionApi const* remote_api,
     gsl::not_null<TaskSystem*> const& ts,
     ContentGitMap::SetterPtr const& setter,
     ContentGitMap::LoggerPtr const& logger) {
@@ -933,12 +811,8 @@ void HandleKnownInOlderGeneration(
          fetch_absent,
          serve,
          native_storage_config,
-         compat_storage_config,
-         compat_storage,
          resolve_symlinks_map,
          critical_git_op_map,
-         local_api,
-         remote_api,
          ts,
          setter,
          logger](auto const& values) {
@@ -955,12 +829,8 @@ void HandleKnownInOlderGeneration(
                                                      fetch_absent,
                                                      serve,
                                                      native_storage_config,
-                                                     compat_storage_config,
-                                                     compat_storage,
                                                      resolve_symlinks_map,
                                                      critical_git_op_map,
-                                                     local_api,
-                                                     remote_api,
                                                      ts,
                                                      setter,
                                                      logger);
@@ -981,17 +851,11 @@ auto CreateContentGitMap(
     gsl::not_null<ContentCASMap*> const& content_cas_map,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     LocalPathsPtr const& just_mr_paths,
-    MirrorsPtr const& additional_mirrors,
-    CAInfoPtr const& ca_info,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
     gsl::not_null<Storage const*> const& native_storage,
-    Storage const* compat_storage,
-    IExecutionApi const* local_api,
-    IExecutionApi const* remote_api,
     bool fetch_absent,
     gsl::not_null<JustMRProgress*> const& progress,
     std::size_t jobs) -> ContentGitMap {
@@ -1000,15 +864,9 @@ auto CreateContentGitMap(
                            resolve_symlinks_map,
                            critical_git_op_map,
                            just_mr_paths,
-                           additional_mirrors,
-                           ca_info,
                            serve,
                            native_storage_config,
-                           compat_storage_config,
                            native_storage,
-                           compat_storage,
-                           local_api,
-                           remote_api,
                            fetch_absent,
                            progress](auto ts,
                                      auto setter,
@@ -1025,12 +883,8 @@ auto CreateContentGitMap(
                                    fetch_absent,
                                    serve,
                                    native_storage_config,
-                                   compat_storage_config,
-                                   compat_storage,
                                    resolve_symlinks_map,
                                    critical_git_op_map,
-                                   local_api,
-                                   remote_api,
                                    ts,
                                    setter,
                                    logger);
@@ -1042,12 +896,8 @@ auto CreateContentGitMap(
                                          fetch_absent,
                                          serve,
                                          native_storage_config,
-                                         compat_storage_config,
-                                         compat_storage,
                                          resolve_symlinks_map,
                                          critical_git_op_map,
-                                         local_api,
-                                         remote_api,
                                          ts,
                                          setter,
                                          logger);
@@ -1099,10 +949,6 @@ auto CreateContentGitMap(
                                           /*is_absent = */ true,
                                           serve,
                                           native_storage_config,
-                                          compat_storage_config,
-                                          compat_storage,
-                                          local_api,
-                                          remote_api,
                                           critical_git_op_map,
                                           import_to_git_map,
                                           resolve_symlinks_map,
@@ -1135,15 +981,9 @@ auto CreateContentGitMap(
                      import_to_git_map,
                      resolve_symlinks_map,
                      just_mr_paths,
-                     additional_mirrors,
-                     ca_info,
                      serve,
                      native_storage_config,
-                     compat_storage_config,
                      native_storage,
-                     compat_storage,
-                     local_api,
-                     remote_api,
                      progress,
                      ts,
                      setter,
@@ -1203,10 +1043,6 @@ auto CreateContentGitMap(
                                                       /*is_absent=*/true,
                                                       serve,
                                                       native_storage_config,
-                                                      compat_storage_config,
-                                                      compat_storage,
-                                                      local_api,
-                                                      remote_api,
                                                       critical_git_op_map,
                                                       import_to_git_map,
                                                       resolve_symlinks_map,
@@ -1244,10 +1080,6 @@ auto CreateContentGitMap(
                                                   /*is_absent=*/true,
                                                   serve,
                                                   native_storage_config,
-                                                  compat_storage_config,
-                                                  compat_storage,
-                                                  local_api,
-                                                  remote_api,
                                                   critical_git_op_map,
                                                   import_to_git_map,
                                                   resolve_symlinks_map,
@@ -1303,10 +1135,6 @@ auto CreateContentGitMap(
                                               /*is_absent=*/false,
                                               /*serve=*/nullptr,
                                               native_storage_config,
-                                              /*compat_storage_config=*/nullptr,
-                                              /*compat_storage=*/nullptr,
-                                              /*local_api=*/nullptr,
-                                              /*remote_api=*/nullptr,
                                               critical_git_op_map,
                                               import_to_git_map,
                                               resolve_symlinks_map,

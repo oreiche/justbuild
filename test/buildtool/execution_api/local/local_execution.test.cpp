@@ -14,23 +14,25 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "catch2/catch_test_macros.hpp"
 #include "fmt/core.h"
 #include "gsl/gsl"
+#include "src/buildtool/common/artifact_blob.hpp"
 #include "src/buildtool/common/artifact_description.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
-#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_response.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
@@ -271,20 +273,19 @@ TEST_CASE("LocalExecution: One input copied to output", "[execution_api]") {
     auto api = LocalApi(&local_context, &repo_config);
 
     std::string test_content("test");
-    auto test_digest = ArtifactDigestFactory::HashDataAs<ObjectType::File>(
-        storage_config.Get().hash_function, test_content);
-    REQUIRE(api.Upload(ArtifactBlobContainer{{ArtifactBlob{
-                           test_digest, test_content, /*is_exec=*/false}}},
-                       false));
+    auto const test_blob = ArtifactBlob::FromMemory(
+        storage_config.Get().hash_function, ObjectType::File, test_content);
+    REQUIRE(test_blob);
+    REQUIRE(api.Upload({*test_blob}, false));
 
     std::string input_path{"dir/subdir/input"};
     std::string output_path{"output_file"};
 
     std::vector<std::string> const cmdline = {"cp", input_path, output_path};
 
-    auto local_artifact_opt =
-        ArtifactDescription::CreateKnown(test_digest, ObjectType::File)
-            .ToArtifact();
+    auto local_artifact_opt = ArtifactDescription::CreateKnown(
+                                  test_blob->GetDigest(), ObjectType::File)
+                                  .ToArtifact();
     auto local_artifact =
         DependencyGraph::ArtifactNode{std::move(local_artifact_opt)};
 
@@ -309,7 +310,8 @@ TEST_CASE("LocalExecution: One input copied to output", "[execution_api]") {
         auto const artifacts = output->Artifacts();
         REQUIRE(artifacts.has_value());
         REQUIRE(artifacts.value()->contains(output_path));
-        CHECK(artifacts.value()->at(output_path).digest == test_digest);
+        CHECK(artifacts.value()->at(output_path).digest ==
+              test_blob->GetDigest());
 
         // ensure result IS in cache
         output = action->Execute(nullptr);
@@ -328,7 +330,8 @@ TEST_CASE("LocalExecution: One input copied to output", "[execution_api]") {
         auto const artifacts = output->Artifacts();
         REQUIRE(artifacts.has_value());
         REQUIRE(artifacts.value()->contains(output_path));
-        CHECK(artifacts.value()->at(output_path).digest == test_digest);
+        CHECK(artifacts.value()->at(output_path).digest ==
+              test_blob->GetDigest());
 
         // ensure result IS STILL NOT in cache
         output = action->Execute(nullptr);

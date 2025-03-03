@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <compare>
 #include <cstddef>
-#include <cstdio>
 #include <deque>
 #include <memory>
 #include <stack>
@@ -37,6 +36,7 @@
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/utils/cpp/expected.hpp"
+#include "src/utils/cpp/incremental_reader.hpp"
 #include "src/utils/cpp/path.hpp"
 
 namespace {
@@ -120,11 +120,10 @@ auto LocalCasReader::ReadGitTree(ArtifactDigest const& digest) const noexcept
 
             // Git-SHA1 hashing is used for reading from git.
             HashFunction const hash_function{HashFunction::Type::GitSHA1};
-            return GitRepo::ReadTreeData(
-                *content,
-                hash_function.HashTreeData(*content).Bytes(),
-                check_symlinks,
-                /*is_hex_id=*/false);
+            return GitRepo::ReadTreeData(*content,
+                                         digest.hash(),
+                                         check_symlinks,
+                                         /*is_hex_id=*/true);
         }
     }
     Logger::Log(LogLevel::Debug, "Tree {} not found in CAS", digest.hash());
@@ -145,31 +144,36 @@ auto LocalCasReader::DumpBlob(Artifact::ObjectInfo const& info,
     return path ? DumpRaw(*path, dumper) : false;
 }
 
+auto LocalCasReader::StageBlobTo(
+    Artifact::ObjectInfo const& info,
+    std::filesystem::path const& output) const noexcept -> bool {
+    if (not IsBlobObject(info.type)) {
+        return false;
+    }
+    auto const blob_path =
+        cas_.BlobPath(info.digest, IsExecutableObject(info.type));
+    if (not blob_path) {
+        return false;
+    }
+    return FileSystemManager::CreateDirectory(output.parent_path()) and
+           FileSystemManager::CopyFileAs</*kSetEpochTime=*/true,
+                                         /*kSetWritable=*/true>(
+               *blob_path, output, info.type);
+}
+
 auto LocalCasReader::DumpRaw(std::filesystem::path const& path,
                              DumpCallback const& dumper) noexcept -> bool {
-    auto closer = [](gsl::owner<FILE*> file) -> void {
-        if (file != nullptr) {
-            std::fclose(file);
-        }
-    };
-    auto in = std::shared_ptr<FILE>{std::fopen(path.c_str(), "rb"), closer};
-    if (not in) {
+    constexpr std::size_t kChunkSize{512};
+    auto to_read = IncrementalReader::FromFile(kChunkSize, path);
+    if (not to_read.has_value()) {
         return false;
     }
 
-    constexpr std::size_t kChunkSize{512};
-    std::string buffer(kChunkSize, '\0');
-    while (auto size = std::fread(buffer.data(), 1, buffer.size(), in.get())) {
-        try {
-            buffer.resize(size);
-            if (not std::invoke(dumper, buffer)) {
-                return false;
-            }
-        } catch (...) {
-            return false;
-        }
-    }
-    return true;
+    return std::all_of(
+        to_read->begin(), to_read->end(), [&dumper](auto const& chunk) {
+            return chunk.has_value() and
+                   std::invoke(dumper, std::string{chunk.value()});
+        });
 }
 
 auto LocalCasReader::IsNativeProtocol() const noexcept -> bool {

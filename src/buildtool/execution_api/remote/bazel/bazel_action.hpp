@@ -20,11 +20,12 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
+#include "src/buildtool/common/artifact_blob.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_response.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_network.hpp"
@@ -65,10 +66,10 @@ class BazelAction final : public IExecutionAction {
         std::map<std::string, std::string> const& env_vars,
         std::map<std::string, std::string> const& properties) noexcept;
 
-    [[nodiscard]] auto CreateBundlesForAction(BazelBlobContainer* blobs,
-                                              ArtifactDigest const& exec_dir,
-                                              bool do_not_cache) const noexcept
-        -> std::optional<bazel_re::Digest>;
+    [[nodiscard]] auto CreateBundlesForAction(
+        std::unordered_set<ArtifactBlob>* blobs,
+        ArtifactDigest const& exec_dir,
+        bool do_not_cache) const noexcept -> std::optional<bazel_re::Digest>;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_BAZEL_BAZEL_ACTION_HPP

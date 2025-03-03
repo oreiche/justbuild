@@ -21,13 +21,11 @@
 #include "gsl/gsl"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/common/user_structs.hpp"
-#include "src/buildtool/execution_api/common/execution_api.hpp"
-#include "src/buildtool/file_system/symlinks_map/resolve_symlinks_map.hpp"
+#include "src/buildtool/file_system/symlinks/resolve_symlinks_map.hpp"
 #include "src/buildtool/multithreading/async_map_consumer.hpp"
 #include "src/buildtool/serve_api/remote/serve_api.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
-#include "src/other_tools/just_mr/mirrors.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/ops_maps/content_cas_map.hpp"
 #include "src/other_tools/ops_maps/critical_git_op_map.hpp"
@@ -43,17 +41,11 @@ using ContentGitMap =
     gsl::not_null<ContentCASMap*> const& content_cas_map,
     gsl::not_null<ImportToGitMap*> const& import_to_git_map,
     LocalPathsPtr const& just_mr_paths,
-    MirrorsPtr const& additional_mirrors,
-    CAInfoPtr const& ca_info,
     gsl::not_null<ResolveSymlinksMap*> const& resolve_symlinks_map,
     gsl::not_null<CriticalGitOpMap*> const& critical_git_op_map,
     ServeApi const* serve,
     gsl::not_null<StorageConfig const*> const& native_storage_config,
-    StorageConfig const* compat_storage_config,
     gsl::not_null<Storage const*> const& native_storage,
-    Storage const* compat_storage,
-    IExecutionApi const* local_api,
-    IExecutionApi const* remote_api,
     bool fetch_absent,
     gsl::not_null<JustMRProgress*> const& progress,
     std::size_t jobs) -> ContentGitMap;

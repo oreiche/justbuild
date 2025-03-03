@@ -3,8 +3,8 @@
 NAME
 ====
 
-**`just`** **`serve`** configuration - The format of the configuration used by
-the **`serve`** subcommand of **`just`**(1)
+just-serve-config - The format of the configuration used by the **`serve`**
+subcommand of **`just`**(1)
 
 DESCRIPTION
 ===========
@@ -82,6 +82,9 @@ The configuration file is given by a JSON object.
    **`serve`**.  
    For subkey *`"address"`* the value is a string specifying the remote
    execution address in a NAME:PORT format.  
+   For subkey *`"client address"`* the value is a string specifying
+   the remote execution address used by the client in a NAME:PORT
+   format. If not provided, it defaults to *`"address"`*.  
    For subkey *`"compatible"`* the value is a flag which specifies whether
    the remote endpoint uses the original remote execution protocol.  
    If the key *`"execution endpoint"`* is given, the following three keys will

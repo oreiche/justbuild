@@ -487,11 +487,17 @@ element per failure, where the element is a pair (array of length
 2) consisting of the configured target (serialized, as usual, as a
 pair of qualified target name an configuration) and a string with
 the hex representation of the blob identifier of the log; the log
-itself is guaranteed to be available on the remote-execution side.
+itself is guaranteed to be available on the remote-execution side.  
 Supported by: analyse|build|install.
 
 **`-P`**, **`--print-to-stdout`** *`LOGICAL_PATH`*  
 After building, print the specified artifact to stdout.  
+Supported by: build|install|rebuild|traverse.
+
+**`-p`**, **`--print-unique-artifact`**  
+After building, print the unique artifact to stdout, if any. If
+the option **`-P`** is given or the number of artifacts is not
+precisely one, this option has no effect.  
 Supported by: build|install|rebuild|traverse.
 
 **`-s`**, **`--show-runfiles`**  
@@ -749,6 +755,20 @@ Dump flaky actions to file.
 Resolve the positional argument to not be a symbolic link by following
 symbolic links. The default is to add the link itself, i.e., the string
 obtained by **`readlink`**(2), as blob.
+
+**`--resolve-special`** *`TEXT`*  
+When adding a directory to CAS, resolve any special filesystem entries based on
+the strategy denoted by the string value specified. Special entries are all
+those which are neither file, executables, or directories. If option is missing
+or a non-supported value is provided, the default behavior is used, in which
+only non-upwards symlinks are accepted and stored unresolved.  
+Currently accepted values:
+ - *`"ignore"`*: all special entries are ignored
+ - *`"tree-upwards"`*: accept only symlinks with a target path pointing inside
+   the location directory and resolve the ones that are upwards
+ - *`"tree-all"`*: accept only symlinks with a target path pointing inside the
+   location directory and resolve all of them
+ - *`"all"`*: unconditionally accept and resolve all symlinks
 
 **`traverse`** specific options
 -------------------------------

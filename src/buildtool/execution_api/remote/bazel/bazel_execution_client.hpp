@@ -31,7 +31,7 @@
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/common/remote/port.hpp"
 #include "src/buildtool/common/remote/retry_config.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
+#include "src/buildtool/execution_api/bazel_msg/execution_config.hpp"
 #include "src/buildtool/logging/logger.hpp"
 
 /// Implements client side for service defined here:
@@ -41,9 +41,9 @@ class BazelExecutionClient {
     struct ExecutionOutput {
         bazel_re::ActionResult action_result;
         bool cached_result{};
-        grpc::Status status;
-        std::unordered_map<std::string, bazel_re::Digest> server_logs;
-        std::string message;
+        grpc::Status status{};
+        std::unordered_map<std::string, bazel_re::Digest> server_logs{};
+        std::string message{};
     };
 
     struct ExecutionResponse {

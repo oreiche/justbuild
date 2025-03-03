@@ -43,10 +43,6 @@
 #include "test/utils/large_objects/large_object_utils.hpp"
 
 namespace {
-[[nodiscard]] auto GetTypedStorageConfig(StorageConfig const& config,
-                                         HashFunction::Type hash_type)
-    -> expected<StorageConfig, std::string>;
-
 [[nodiscard]] auto GenerateTestDirectory() -> std::optional<TmpDirPtr>;
 
 /// \brief Deeply hash a local tree and add it to the storage.
@@ -66,13 +62,16 @@ TEST_CASE("Rehash tree", "[common]") {
     auto const env_config = TestStorageConfig::Create();
 
     // Deploy native storage:
-    auto const native_config =
-        GetTypedStorageConfig(env_config.Get(), HashFunction::Type::GitSHA1);
+    auto const native_config = StorageConfig::Builder::Rebuild(env_config.Get())
+                                   .SetHashType(HashFunction::Type::GitSHA1)
+                                   .Build();
     REQUIRE(native_config);
 
     // Deploy compatible storage:
-    auto const compatible_config = GetTypedStorageConfig(
-        env_config.Get(), HashFunction::Type::PlainSHA256);
+    auto const compatible_config =
+        StorageConfig::Builder::Rebuild(env_config.Get())
+            .SetHashType(HashFunction::Type::PlainSHA256)
+            .Build();
     REQUIRE(compatible_config);
 
     // Randomize test directory:
@@ -169,7 +168,6 @@ TEST_CASE("Rehash tree", "[common]") {
                                           .storage_config = &*remote_config,
                                           .storage = &remote_storage};
         ApiBundle const apis{
-            .hash_function = local_context.storage_config->hash_function,
             .local = std::make_shared<LocalApi>(&local_context),
             .remote = std::make_shared<LocalApi>(&remote_context)};
 
@@ -187,15 +185,6 @@ TEST_CASE("Rehash tree", "[common]") {
 }
 
 namespace {
-[[nodiscard]] auto GetTypedStorageConfig(StorageConfig const& config,
-                                         HashFunction::Type hash_type)
-    -> expected<StorageConfig, std::string> {
-    return StorageConfig::Builder{}
-        .SetBuildRoot(config.build_root)
-        .SetHashType(hash_type)
-        .Build();
-}
-
 [[nodiscard]] auto GenerateTestDirectory() -> std::optional<TmpDirPtr> {
     auto const test_dir = FileSystemManager::GetCurrentDirectory() / "tmp";
     auto head_temp_directory = TmpDir::Create(test_dir / "head_dir");

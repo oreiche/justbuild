@@ -15,12 +15,12 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_BAZEL_BYTESTREAM_CLIENT_HPP
 #define INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_BAZEL_BYTESTREAM_CLIENT_HPP
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>  // std::move
 
 #include <grpcpp/grpcpp.h>
@@ -29,11 +29,18 @@
 #include "google/bytestream/bytestream.pb.h"
 #include "gsl/gsl"
 #include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/common/artifact_blob.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/common/remote/port.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/bytestream_utils.hpp"
+#include "src/buildtool/execution_api/common/ids.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/utils/cpp/expected.hpp"
+#include "src/utils/cpp/incremental_reader.hpp"
 
 /// Implements client side for google.bytestream.ByteStream service.
 class ByteStreamClient {
@@ -73,11 +80,13 @@ class ByteStreamClient {
 
         IncrementalReader(
             gsl::not_null<google::bytestream::ByteStream::Stub*> const& stub,
-            ByteStreamUtils::ReadRequest&& read_request,
+            std::string const& instance_name,
+            ArtifactDigest const& digest,
             Logger const* logger)
             : logger_{logger} {
             google::bytestream::ReadRequest request{};
-            request.set_resource_name(std::move(read_request).ToString());
+            request.set_resource_name(
+                ByteStreamUtils::ReadRequest::ToString(instance_name, digest));
             reader_ = stub->Read(&ctx_, request);
         }
     };
@@ -89,14 +98,16 @@ class ByteStreamClient {
             CreateChannelWithCredentials(server, port, auth));
     }
 
-    [[nodiscard]] auto IncrementalRead(ByteStreamUtils::ReadRequest&& request)
-        const noexcept -> IncrementalReader {
-        return IncrementalReader{stub_.get(), std::move(request), &logger_};
+    [[nodiscard]] auto IncrementalRead(
+        std::string const& instance_name,
+        ArtifactDigest const& digest) const noexcept -> IncrementalReader {
+        return IncrementalReader{stub_.get(), instance_name, digest, &logger_};
     }
 
-    [[nodiscard]] auto Read(ByteStreamUtils::ReadRequest&& request)
-        const noexcept -> std::optional<std::string> {
-        auto reader = IncrementalRead(std::move(request));
+    [[nodiscard]] auto Read(std::string const& instance_name,
+                            ArtifactDigest const& digest) const noexcept
+        -> std::optional<ArtifactBlob> {
+        auto reader = IncrementalRead(instance_name, digest);
         std::string output{};
         auto data = reader.Next();
         while (data and not data->empty()) {
@@ -106,29 +117,74 @@ class ByteStreamClient {
         if (not data) {
             return std::nullopt;
         }
-        return output;
+
+        auto blob = ArtifactBlob::FromMemory(
+            HashFunction{digest.GetHashType()},
+            digest.IsTree() ? ObjectType::Tree : ObjectType::File,
+            std::move(output));
+        if (not blob.has_value() or blob->GetDigest() != digest) {
+            return std::nullopt;
+        }
+        return *std::move(blob);
     }
 
-    [[nodiscard]] auto Write(ByteStreamUtils::WriteRequest&& write_request,
-                             std::string const& data) const noexcept -> bool {
+    [[nodiscard]] auto Write(std::string const& instance_name,
+                             ArtifactBlob const& blob) const noexcept -> bool {
+        thread_local static std::string uuid{};
+        if (uuid.empty()) {
+            auto id = CreateProcessUniqueId();
+            if (not id) {
+                logger_.Emit(LogLevel::Debug,
+                             "Failed creating process unique id.");
+                return false;
+            }
+            uuid = CreateUUIDVersion4(*id);
+        }
+
         try {
             grpc::ClientContext ctx;
             google::bytestream::WriteResponse response{};
             auto writer = stub_->Write(&ctx, &response);
 
+            auto const resource_name = ByteStreamUtils::WriteRequest::ToString(
+                instance_name, uuid, blob.GetDigest());
+
             google::bytestream::WriteRequest request{};
-            request.set_resource_name(std::move(write_request).ToString());
-            request.mutable_data()->resize(ByteStreamUtils::kChunkSize, '\0');
+            request.set_resource_name(resource_name);
+            request.mutable_data()->reserve(ByteStreamUtils::kChunkSize);
+
+            auto const to_read =
+                blob.ReadIncrementally(ByteStreamUtils::kChunkSize);
+            if (not to_read.has_value()) {
+                logger_.Emit(
+                    LogLevel::Error,
+                    "ByteStreamClient: Failed to create a reader for {}:\n{}",
+                    request.resource_name(),
+                    to_read.error());
+                return false;
+            }
 
             std::size_t pos = 0;
-            do {  // NOLINT(cppcoreguidelines-avoid-do-while)
-                auto const size =
-                    std::min(data.size() - pos, ByteStreamUtils::kChunkSize);
-                request.mutable_data()->resize(size);
-                data.copy(request.mutable_data()->data(), size, pos);
+            for (auto it = to_read->begin(); it != to_read->end();) {
+                auto const chunk = *it;
+                if (not chunk.has_value()) {
+                    logger_.Emit(
+                        LogLevel::Error,
+                        "ByteStreamClient: Failed to read data for {}:\n{}",
+                        request.resource_name(),
+                        chunk.error());
+                    return false;
+                }
+                *request.mutable_data() = *chunk;
+
                 request.set_write_offset(static_cast<int>(pos));
-                request.set_finish_write(pos + size >= data.size());
-                if (not writer->Write(request)) {
+                request.set_finish_write(pos + chunk->size() >=
+                                         blob.GetContentSize());
+                if (writer->Write(request)) {
+                    pos += chunk->size();
+                    ++it;
+                }
+                else {
                     // According to the docs, quote:
                     // If there is an error or the connection is broken during
                     // the `Write()`, the client should check the status of the
@@ -144,11 +200,9 @@ class ByteStreamClient {
                         return false;
                     }
                     pos = gsl::narrow<std::size_t>(committed_size);
+                    it = to_read->make_iterator(pos);
                 }
-                else {
-                    pos += ByteStreamUtils::kChunkSize;
-                }
-            } while (pos < data.size());
+            }
             if (not writer->WritesDone()) {
                 logger_.Emit(LogLevel::Warning,
                              "broken stream for upload to resource name {}",
@@ -162,12 +216,12 @@ class ByteStreamClient {
                 return false;
             }
             if (gsl::narrow<std::size_t>(response.committed_size()) !=
-                data.size()) {
+                blob.GetContentSize()) {
                 logger_.Emit(
                     LogLevel::Warning,
                     "Commited size {} is different from the original one {}.",
                     response.committed_size(),
-                    data.size());
+                    blob.GetContentSize());
                 return false;
             }
             return true;

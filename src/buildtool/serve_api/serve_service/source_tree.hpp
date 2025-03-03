@@ -23,6 +23,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 
 #include <grpcpp/grpcpp.h>
 
@@ -33,8 +34,8 @@
 #include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/file_system/git_types.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
-#include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
-#include "src/buildtool/file_system/symlinks_map/resolve_symlinks_map.hpp"
+#include "src/buildtool/file_system/symlinks/pragma_special.hpp"
+#include "src/buildtool/file_system/symlinks/resolve_symlinks_map.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/serve_api/remote/config.hpp"
 #include "src/utils/cpp/expected.hpp"
@@ -58,14 +59,18 @@ class SourceTreeService final
         ::justbuild::just_serve::CheckRootTreeResponse;
     using GetRemoteTreeResponse =
         ::justbuild::just_serve::GetRemoteTreeResponse;
+    using ComputeTreeStructureResponse =
+        ::justbuild::just_serve::ComputeTreeStructureResponse;
 
     explicit SourceTreeService(
         gsl::not_null<RemoteServeConfig const*> const& serve_config,
         gsl::not_null<ApiBundle const*> const& apis,
         gsl::not_null<LocalContext const*> const& native_context,
+        gsl::not_null<std::mutex*> const& lock,
         LocalContext const* compat_context = nullptr) noexcept
         : serve_config_{*serve_config},
           apis_{*apis},
+          lock_{lock},
           native_context_{native_context},
           compat_context_{compat_context} {}
 
@@ -132,15 +137,29 @@ class SourceTreeService final
         const ::justbuild::just_serve::GetRemoteTreeRequest* request,
         GetRemoteTreeResponse* response) -> ::grpc::Status override;
 
+    // Compute the tree structure of the given tree and return the Git tree
+    // identifier of the resulting structure.
+    //
+    // There are no method-specific errors.
+    auto ComputeTreeStructure(
+        ::grpc::ServerContext* context,
+        const ::justbuild::just_serve::ComputeTreeStructureRequest* request,
+        ComputeTreeStructureResponse* response) -> ::grpc::Status override;
+
   private:
     RemoteServeConfig const& serve_config_;
     ApiBundle const& apis_;
+    gsl::not_null<std::mutex*> lock_;
     gsl::not_null<LocalContext const*> native_context_;
     LocalContext const* compat_context_;
-    mutable std::mutex mutex_;
     std::shared_ptr<Logger> logger_{std::make_shared<Logger>("serve-service")};
     // symlinks resolver map
     ResolveSymlinksMap resolve_symlinks_map_{CreateResolveSymlinksMap()};
+
+    /// \brief Ensure that the Git cache repository exists.
+    /// \returns Error message on failure.
+    [[nodiscard]] auto EnsureGitCacheRoot()
+        -> expected<std::monostate, std::string>;
 
     /// \brief Check if commit exists and tries to get the subtree if found.
     /// \returns The subtree hash on success or an unexpected error (fatal or
@@ -204,13 +223,6 @@ class SourceTreeService final
         bool sync_tree,
         ServeArchiveTreeResponse* response) -> ::grpc::Status;
 
-    /// \brief Common import-to-git utility, used by both archives and distdirs.
-    /// \returns The root tree id on of the committed directory on success or an
-    /// unexpected error as string.
-    [[nodiscard]] auto CommonImportToGit(std::filesystem::path const& root_path,
-                                         std::string const& commit_message)
-        -> expected<std::string, std::string>;
-
     [[nodiscard]] auto ArchiveImportToGit(
         std::filesystem::path const& unpack_path,
         std::filesystem::path const& archive_tree_id_file,
@@ -220,14 +232,6 @@ class SourceTreeService final
         std::optional<PragmaSpecial> const& resolve_special,
         bool sync_tree,
         ServeArchiveTreeResponse* response) -> ::grpc::Status;
-
-    /// \brief Checks if a given tree is a repository.
-    /// \returns A status of tree presence, or nullopt if non-check-related
-    /// failure.
-    [[nodiscard]] static auto IsTreeInRepo(
-        std::string const& tree_id,
-        std::filesystem::path const& repo_path,
-        std::shared_ptr<Logger> const& logger) -> std::optional<bool>;
 
     [[nodiscard]] auto DistdirImportToGit(
         std::string const& tree_id,

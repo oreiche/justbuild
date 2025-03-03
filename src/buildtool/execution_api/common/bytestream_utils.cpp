@@ -14,11 +14,13 @@
 
 #include "src/buildtool/execution_api/common/bytestream_utils.hpp"
 
+#include <cstdint>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "fmt/core.h"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
 
 namespace {
@@ -49,28 +51,23 @@ namespace {
 }
 
 [[nodiscard]] inline auto ToBazelDigest(std::string hash,
-                                        std::int64_t size) noexcept
+                                        std::size_t size) noexcept
     -> bazel_re::Digest {
     bazel_re::Digest digest{};
     digest.set_hash(std::move(hash));
-    digest.set_size_bytes(size);
+    digest.set_size_bytes(static_cast<std::int64_t>(size));
     return digest;
 }
 }  // namespace
 
-ByteStreamUtils::ReadRequest::ReadRequest(
+auto ByteStreamUtils::ReadRequest::ToString(
     std::string instance_name,
-    bazel_re::Digest const& digest) noexcept
-    : instance_name_{std::move(instance_name)},
-      hash_{digest.hash()},
-      size_{digest.size_bytes()} {}
-
-auto ByteStreamUtils::ReadRequest::ToString() && noexcept -> std::string {
+    ArtifactDigest const& digest) noexcept -> std::string {
     return fmt::format("{}/{}/{}/{}",
-                       std::move(instance_name_),
+                       std::move(instance_name),
                        ByteStreamUtils::kBlobs,
-                       std::move(hash_),
-                       size_);
+                       ArtifactDigestFactory::ToBazel(digest).hash(),
+                       digest.size());
 }
 
 auto ByteStreamUtils::ReadRequest::FromString(
@@ -98,28 +95,23 @@ auto ByteStreamUtils::ReadRequest::FromString(
     return result;
 }
 
-auto ByteStreamUtils::ReadRequest::GetDigest() const noexcept
-    -> bazel_re::Digest {
-    return ToBazelDigest(hash_, size_);
+auto ByteStreamUtils::ReadRequest::GetDigest(HashFunction::Type hash_type)
+    const noexcept -> expected<ArtifactDigest, std::string> {
+    auto bazel_digest = ToBazelDigest(hash_, size_);
+    return ArtifactDigestFactory::FromBazel(hash_type, bazel_digest);
 }
 
-ByteStreamUtils::WriteRequest::WriteRequest(
+auto ByteStreamUtils::WriteRequest::ToString(
     std::string instance_name,
     std::string uuid,
-    bazel_re::Digest const& digest) noexcept
-    : instance_name_{std::move(instance_name)},
-      uuid_{std::move(uuid)},
-      hash_{digest.hash()},
-      size_{digest.size_bytes()} {}
-
-auto ByteStreamUtils::WriteRequest::ToString() && noexcept -> std::string {
+    ArtifactDigest const& digest) noexcept -> std::string {
     return fmt::format("{}/{}/{}/{}/{}/{}",
-                       std::move(instance_name_),
+                       std::move(instance_name),
                        ByteStreamUtils::kUploads,
-                       std::move(uuid_),
+                       std::move(uuid),
                        ByteStreamUtils::kBlobs,
-                       std::move(hash_),
-                       size_);
+                       ArtifactDigestFactory::ToBazel(digest).hash(),
+                       digest.size());
 }
 
 auto ByteStreamUtils::WriteRequest::FromString(
@@ -144,14 +136,15 @@ auto ByteStreamUtils::WriteRequest::FromString(
     result.uuid_ = std::string(parts.at(kUUIDIndex));
     result.hash_ = std::string(parts.at(kHashIndex));
     try {
-        result.size_ = std::stoi(std::string(parts.at(kSizeIndex)));
+        result.size_ = std::stoul(std::string(parts.at(kSizeIndex)));
     } catch (...) {
         return std::nullopt;
     }
     return result;
 }
 
-auto ByteStreamUtils::WriteRequest::GetDigest() const noexcept
-    -> bazel_re::Digest {
-    return ToBazelDigest(hash_, size_);
+auto ByteStreamUtils::WriteRequest::GetDigest(HashFunction::Type hash_type)
+    const noexcept -> expected<ArtifactDigest, std::string> {
+    auto bazel_digest = ToBazelDigest(hash_, size_);
+    return ArtifactDigestFactory::FromBazel(hash_type, bazel_digest);
 }

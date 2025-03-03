@@ -30,7 +30,9 @@
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/file_system/file_storage.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
+#include "src/buildtool/storage/backend_description.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/local_cas.hpp"
 #include "src/buildtool/storage/target_cache_entry.hpp"
@@ -56,21 +58,26 @@ class TargetCache {
         gsl::not_null<LocalCAS<kDoGlobalUplink> const*> const& cas,
         GenerationConfig const& config,
         gsl::not_null<Uplinker<kDoGlobalUplink> const*> const& uplinker)
-        : cas_{*cas},
-          file_store_{config.target_cache /
-                      config.storage_config->backend_description_id},
-          uplinker_{*uplinker},
-          explicit_shard_{std::nullopt} {}
+        : TargetCache(cas,
+                      config.target_cache,
+                      uplinker,
+                      config.storage_config->backend_description) {}
 
     /// \brief Returns a new TargetCache backed by the same CAS, but the
-    /// FileStorage uses the given \p shard. This is particularly useful for the
-    /// just-serve server implementation, since the sharding must be performed
-    /// according to the client's request and not following the server
-    /// configuration. It is caller's responsibility to check that \p shard is a
-    /// valid path.
-    [[nodiscard]] auto WithShard(const std::optional<std::string>& shard) const
+    /// FileStorage uses the given \p backend_description 's hash. This is
+    /// particularly useful for the just-serve server implementation, since the
+    /// sharding must be performed according to the client's request and not
+    /// following the server configuration.
+    [[nodiscard]] auto WithShard(BackendDescription backend_description) const
         -> TargetCache {
-        return shard ? TargetCache<kDoGlobalUplink>(*this, *shard) : *this;
+        if (backend_description_ == backend_description) {
+            return *this;
+        }
+
+        return TargetCache(&cas_,
+                           file_store_.StorageRoot().parent_path(),
+                           &uplinker_,
+                           std::move(backend_description));
     }
 
     TargetCache(TargetCache const&) = default;
@@ -131,15 +138,47 @@ class TargetCache {
                 /*kSetEpochTime=*/false>
         file_store_;
     Uplinker<kDoGlobalUplink> const& uplinker_;
-    std::optional<std::string> explicit_shard_{std::nullopt};
+    BackendDescription const backend_description_;
 
-    explicit TargetCache(TargetCache const& other,
-                         std::string const& explicit_shard)
-        : cas_{other.cas_},
-          file_store_{other.file_store_.StorageRoot().parent_path() /
-                      explicit_shard},
-          uplinker_{other.uplinker_},
-          explicit_shard_{explicit_shard} {}
+    explicit TargetCache(
+        gsl::not_null<LocalCAS<kDoGlobalUplink> const*> const& cas,
+        std::filesystem::path const& root,
+        gsl::not_null<Uplinker<kDoGlobalUplink> const*> const& uplinker,
+        BackendDescription backend_description)
+        : cas_{*cas},
+          file_store_{
+              root /
+              backend_description.HashContent(cas->GetHashFunction()).hash()},
+          uplinker_{*uplinker},
+          backend_description_{std::move(backend_description)} {
+        if constexpr (kDoGlobalUplink) {
+            // Write backend description (which determines the target cache
+            // shard) to CAS. It needs to be added for informational purposes
+            // only, so it is not an error if insertion fails or returns an
+            // unexpected result.
+            auto const id = cas_.StoreBlob(
+                backend_description_.GetDescription(), /*is_executable=*/false);
+
+            auto const expected_hash =
+                file_store_.StorageRoot().filename().string();
+            if (not id) {
+                logger_->Emit(LogLevel::Debug,
+                              "TargetCache: Failed to add backend description "
+                              "{} to the storage:\n{}",
+                              expected_hash,
+                              backend_description_.GetDescription());
+            }
+            else if (id->hash() != expected_hash) {
+                logger_->Emit(LogLevel::Debug,
+                              "TargetCache: backend description was added to "
+                              "the storage with an unexpected hash. Expected "
+                              "{}, added with {}. Content:\n{}",
+                              expected_hash,
+                              id->hash(),
+                              backend_description_.GetDescription());
+            }
+        }
+    }
 
     template <bool kIsLocalGeneration = not kDoGlobalUplink>
         requires(kIsLocalGeneration)

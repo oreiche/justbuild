@@ -3,7 +3,7 @@
 NAME
 ====
 
-just repository config - The format of the repository config used by
+just-repository-config - The format of the repository config used by
 **`just`**(1)
 
 DESCRIPTION
@@ -37,10 +37,21 @@ which determines the type and semantic of the subsequent elements:
       entry is missing, the root is considered absent and any target
       requiring this root has to come from a specified serve end point.
 
- - *`"computed"`* refers to a file root that is the result of evaluating
-   an export target of a content-fixed repository. The list has to have
-   length 5, with the remaining arguments being the global repository name,
-   the module name, the target name, and the configuration, in that order.
+ - *`"computed"`* refers to a file root that is the result of
+   evaluating an export target of a content-fixed repository. The
+   list has to have length 5 or 6, with the remaining arguments
+   being the global repository name, the module name, the target
+   name, and the configuration, in that order, optionally followed
+   by a pragma object. If the pragma object contains the entry
+   `true` for the key `"absent"`, that root is considered absent,
+   otherwise not.
+
+ - *`"tree structure"`* refers to the directory structure of a file root.
+   The list has to have length 2 or 3. The second argument contains the
+   global name of the repository which workspace root gets taken for
+   computation. The third argument is an optional pragma object. If the
+   pragma object contains the key `"absent"`, the entry must be a boolean.
+   If the entry is `true`, that root is considered absent, otherwise not.
 
 Repository description
 ----------------------

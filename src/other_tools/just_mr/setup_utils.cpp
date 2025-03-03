@@ -29,10 +29,11 @@
 #include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
+#include "src/buildtool/file_system/precomputed_root.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/other_tools/just_mr/exit_codes.hpp"
-#include "src/other_tools/utils/parse_computed_root.hpp"
+#include "src/other_tools/utils/parse_precomputed_root.hpp"
 #include "src/utils/cpp/expected.hpp"
 
 namespace {
@@ -58,16 +59,23 @@ void WarnUnknownKeys(std::string const& name, ExpressionPtr const& repo_def) {
     }
 }
 
-[[nodiscard]] auto GetTargetRepoIfComputed(ExpressionPtr const& repo)
+[[nodiscard]] auto GetTargetRepoIfPrecomputed(ExpressionPtr const& repos,
+                                              std::string const& name)
     -> std::optional<std::string> {
-    if (not repo.IsNotNull() or not repo->IsMap()) {
-        return std::nullopt;
-    }
-    auto const repository = repo->Get("repository", Expression::none_t{});
-    if (auto const crparser = ComputedRootParser::Create(&repository)) {
-        if (auto target_repo = crparser->GetTargetRepository()) {
-            return std::move(target_repo).value();
+    // Resolve indirections while the root's workspace root is declared
+    // implicitly:
+    ExpressionPtr root{name};
+    while (root.IsNotNull() and root->IsString()) {
+        auto const repo = repos->Get(root->String(), Expression::none_t{});
+        if (not repo.IsNotNull() or not repo->IsMap()) {
+            return std::nullopt;
         }
+        root = repo->Get("repository", Expression::none_t{});
+    }
+
+    // Check the root is a precomputed root:
+    if (auto const precomputed = ParsePrecomputedRoot(root)) {
+        return precomputed->GetReferencedRepository();
     }
     return std::nullopt;
 }
@@ -101,8 +109,8 @@ void ReachableRepositories(
         WarnUnknownKeys(repo_name, repos_repo_name);
 
         // If the current repo is a computed one, process its target repo
-        if (auto computed_target = GetTargetRepoIfComputed(repos_repo_name)) {
-            to_process.push(*std::move(computed_target));
+        if (auto precomputed = GetTargetRepoIfPrecomputed(repos, repo_name)) {
+            to_process.push(*std::move(precomputed));
         }
 
         // check bindings
@@ -125,9 +133,9 @@ void ReachableRepositories(
 
                 // If the overlay repo is a computed one, process its target
                 // repo
-                if (auto computed_target = GetTargetRepoIfComputed(
-                        repos->Get(layer_repo_name, Expression::none_t{}))) {
-                    to_process.push(*std::move(computed_target));
+                if (auto precomputed =
+                        GetTargetRepoIfPrecomputed(repos, layer_repo_name)) {
+                    to_process.push(*std::move(precomputed));
                 }
             }
         }
@@ -218,7 +226,7 @@ auto ReadConfiguration(
                                 absent_file_opt->string());
                     std::exit(kExitConfigError);
                 }
-                absent_set.insert(repo);
+                absent_set.insert(repo.get<std::string>());
             }
             auto new_repos = nlohmann::json::object();
             auto repos = config.value("repositories", nlohmann::json::object());

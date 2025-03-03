@@ -16,29 +16,24 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <functional>
 #include <iterator>
 #include <mutex>
 #include <new>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>  // std::move
 
-#include "fmt/core.h"
 #include "src/buildtool/auth/authentication.hpp"
+#include "src/buildtool/common/artifact_blob.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/common/protocol_traits.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_blob_container.hpp"
-#include "src/buildtool/execution_api/bazel_msg/bazel_common.hpp"
 #include "src/buildtool/execution_api/bazel_msg/directory_tree.hpp"
-#include "src/buildtool/execution_api/common/artifact_blob_container.hpp"
+#include "src/buildtool/execution_api/bazel_msg/execution_config.hpp"
 #include "src/buildtool/execution_api/common/common_api.hpp"
-#include "src/buildtool/execution_api/common/content_blob_container.hpp"
 #include "src/buildtool/execution_api/common/stream_dumper.hpp"
 #include "src/buildtool/execution_api/common/tree_reader.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_action.hpp"
@@ -49,40 +44,44 @@
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
+#include "src/utils/cpp/back_map.hpp"
 #include "src/utils/cpp/expected.hpp"
-#include "src/utils/cpp/transformed_range.hpp"
 
 namespace {
 
 [[nodiscard]] auto RetrieveToCas(
-    std::vector<ArtifactDigest> const& digests,
+    std::unordered_set<Artifact::ObjectInfo> const& infos,
     IExecutionApi const& api,
-    std::shared_ptr<BazelNetwork> const& network,
-    std::unordered_map<ArtifactDigest, Artifact::ObjectInfo> const&
-        info_map) noexcept -> bool {
+    std::shared_ptr<BazelNetwork> const& network) noexcept -> bool {
+    auto const back_map = BackMap<ArtifactDigest, Artifact::ObjectInfo>::Make(
+        &infos, [](Artifact::ObjectInfo const& info) { return info.digest; });
+    if (back_map == nullptr) {
+        return false;
+    }
+
+    std::vector const digests(back_map->GetKeys().begin(),
+                              back_map->GetKeys().end());
 
     // Fetch blobs from this CAS.
-    auto size = digests.size();
     auto reader = network->CreateReader();
     std::size_t count{};
-    ArtifactBlobContainer container{};
-    for (auto blobs : reader.ReadIncrementally(digests)) {
-        if (count + blobs.size() > size) {
+    std::unordered_set<ArtifactBlob> container{};
+    for (auto blobs : reader.ReadIncrementally(&digests)) {
+        if (count + blobs.size() > digests.size()) {
             Logger::Log(LogLevel::Warning,
                         "received more blobs than requested.");
             return false;
         }
         for (auto& blob : blobs) {
-            blob.is_exec =
-                info_map.contains(blob.digest)
-                    ? IsExecutableObject(info_map.at(blob.digest).type)
-                    : false;
+            auto const info = back_map->GetReference(blob.GetDigest());
+            blob.SetExecutable(info.has_value() and
+                               IsExecutableObject(info.value()->type));
             // Collect blob and upload to other CAS if transfer size reached.
-            if (not UpdateContainerAndUpload<ArtifactDigest>(
+            if (not UpdateContainerAndUpload(
                     &container,
                     std::move(blob),
                     /*exception_is_fatal=*/true,
-                    [&api](ArtifactBlobContainer&& blobs) {
+                    [&api](std::unordered_set<ArtifactBlob>&& blobs) {
                         return api.Upload(std::move(blobs),
                                           /*skip_find_missing=*/true);
                     })) {
@@ -92,7 +91,7 @@ namespace {
         count += blobs.size();
     }
 
-    if (count != size) {
+    if (count != digests.size()) {
         Logger::Log(LogLevel::Debug, "could not retrieve all requested blobs.");
         return false;
     }
@@ -105,27 +104,26 @@ namespace {
     Artifact::ObjectInfo const& artifact_info,
     IExecutionApi const& this_api,
     IExecutionApi const& other_api,
-    std::shared_ptr<BazelNetwork> const& network,
-    std::unordered_map<ArtifactDigest, Artifact::ObjectInfo> const&
-        info_map) noexcept -> bool {
-
+    std::shared_ptr<BazelNetwork> const& network) noexcept -> bool {
     // Split blob into chunks at the remote side and retrieve chunk digests.
     auto chunk_digests = this_api.SplitBlob(artifact_info.digest);
     if (not chunk_digests) {
         // If blob splitting failed, fall back to regular fetching.
-        return ::RetrieveToCas(
-            {artifact_info.digest}, other_api, network, info_map);
+        return ::RetrieveToCas({artifact_info}, other_api, network);
     }
 
     // Fetch unknown chunks.
-    auto digest_set = std::unordered_set<ArtifactDigest>{chunk_digests->begin(),
-                                                         chunk_digests->end()};
-    auto unique_digests =
-        std::vector<ArtifactDigest>{digest_set.begin(), digest_set.end()};
+    std::unordered_set<Artifact::ObjectInfo> missing;
+    missing.reserve(chunk_digests->size());
+    for (auto const& digest : other_api.GetMissingDigests(std::unordered_set(
+             chunk_digests->begin(), chunk_digests->end()))) {
+        missing.emplace(
+            Artifact::ObjectInfo{digest,
+                                 ObjectType::File,  // Chunks are always files
+                                 /*failed=*/false});
+    }
 
-    auto missing_artifact_digests = other_api.IsAvailable(unique_digests);
-    if (not ::RetrieveToCas(
-            missing_artifact_digests, other_api, network, info_map)) {
+    if (not ::RetrieveToCas(missing, other_api, network)) {
         return false;
     }
 
@@ -133,68 +131,20 @@ namespace {
     auto digest = other_api.SpliceBlob(artifact_info.digest, *chunk_digests);
     if (not digest) {
         // If blob splicing failed, fall back to regular fetching.
-        return ::RetrieveToCas(
-            {artifact_info.digest}, other_api, network, info_map);
+        return ::RetrieveToCas({artifact_info}, other_api, network);
     }
-
-    Logger::Log(
-        LogLevel::Debug,
-        [&artifact_info,
-         &unique_digests,
-         &missing_artifact_digests,
-         total_size = digest->size()]() {
-            auto missing_digest_set = std::unordered_set<ArtifactDigest>{
-                missing_artifact_digests.begin(),
-                missing_artifact_digests.end()};
-            std::uint64_t transmitted_bytes{0};
-            for (auto const& chunk_digest : unique_digests) {
-                if (missing_digest_set.contains(chunk_digest)) {
-                    transmitted_bytes += chunk_digest.size();
-                }
-            }
-            double transmission_factor = 0.;
-            if (total_size > 0) {
-                transmission_factor = static_cast<double>(transmitted_bytes) /
-                                      static_cast<double>(total_size);
-            }
-            return fmt::format(
-                "Blob splitting saved {} bytes ({:.2f}%) of network traffic "
-                "when fetching {}.\n",
-                total_size - transmitted_bytes,
-                transmission_factor,
-                artifact_info.ToString());
-        });
-
     return true;
 }
 
-[[nodiscard]] auto ConvertToBazelBlobContainer(
-    ArtifactBlobContainer&& container) noexcept
-    -> std::optional<BazelBlobContainer> {
-    std::vector<BazelBlob> blobs;
-    try {
-        blobs.reserve(container.Size());
-        for (const auto& blob : container.Blobs()) {
-            blobs.emplace_back(ArtifactDigestFactory::ToBazel(blob.digest),
-                               blob.data,
-                               blob.is_exec);
-        }
-    } catch (...) {
-        return std::nullopt;
-    }
-    return BazelBlobContainer{std::move(blobs)};
-};
-
 }  // namespace
 
-BazelApi::BazelApi(
-    std::string const& instance_name,
-    std::string const& host,
-    Port port,
-    gsl::not_null<Auth const*> const& auth,
-    gsl::not_null<RetryConfig const*> const& retry_config,
-    ExecutionConfiguration const& exec_config,
-    gsl::not_null<HashFunction const*> const& hash_function) noexcept {
+BazelApi::BazelApi(std::string const& instance_name,
+                   std::string const& host,
+                   Port port,
+                   gsl::not_null<Auth const*> const& auth,
+                   gsl::not_null<RetryConfig const*> const& retry_config,
+                   ExecutionConfiguration const& exec_config,
+                   HashFunction hash_function) noexcept {
     network_ = std::make_shared<BazelNetwork>(instance_name,
                                               host,
                                               port,
@@ -278,7 +228,7 @@ auto BazelApi::CreateAction(
     auto size = file_digests.size();
     auto reader = network_->CreateReader();
     std::size_t count{};
-    for (auto blobs : reader.ReadIncrementally(file_digests)) {
+    for (auto blobs : reader.ReadIncrementally(&file_digests)) {
         if (count + blobs.size() > size) {
             Logger::Log(LogLevel::Warning,
                         "received more blobs than requested.");
@@ -287,9 +237,15 @@ auto BazelApi::CreateAction(
         for (std::size_t pos = 0; pos < blobs.size(); ++pos) {
             auto gpos = artifact_pos[count + pos];
             auto const& type = artifacts_info[gpos].type;
-            if (not FileSystemManager::WriteFileAs</*kSetEpochTime=*/true,
-                                                   /*kSetWritable=*/true>(
-                    *blobs[pos].data, output_paths[gpos], type)) {
+
+            bool written = false;
+            if (auto const content = blobs[pos].ReadContent()) {
+                written = FileSystemManager::WriteFileAs</*kSetEpochTime=*/true,
+                                                         /*kSetWritable=*/true>(
+                    *content, output_paths[gpos], type);
+            }
+
+            if (not written) {
                 Logger::Log(LogLevel::Warning,
                             "staging to output path {} failed.",
                             output_paths[gpos].string());
@@ -369,39 +325,34 @@ auto BazelApi::CreateAction(
     }
 
     // Determine missing artifacts in other CAS.
-    auto missing_artifacts_info = GetMissingArtifactsInfo<Artifact::ObjectInfo>(
-        api,
-        artifacts_info.begin(),
-        artifacts_info.end(),
-        [](Artifact::ObjectInfo const& info) { return info.digest; });
-    if (not missing_artifacts_info) {
-        Logger::Log(LogLevel::Error,
-                    "BazelApi: Failed to retrieve the missing artifacts");
-        return false;
+    std::unordered_set<Artifact::ObjectInfo> missing;
+    missing.reserve(artifacts_info.size());
+    {
+        auto back_map = BackMap<ArtifactDigest, Artifact::ObjectInfo>::Make(
+            &artifacts_info,
+            [](Artifact::ObjectInfo const& info) { return info.digest; });
+        if (back_map == nullptr) {
+            Logger::Log(LogLevel::Error, "BazelApi: Failed to create BackMap");
+            return false;
+        }
+        auto missing_digests = api.GetMissingDigests(back_map->GetKeys());
+        missing = back_map->GetValues(missing_digests);
     }
 
     // Recursively process trees.
-    std::vector<ArtifactDigest> blob_digests{};
-    for (auto const& dgst : missing_artifacts_info->digests) {
-        auto const& info = missing_artifacts_info->back_map[dgst];
-        if (IsTreeObject(info.type)) {
-            auto reader =
-                TreeReader<BazelNetworkReader>{network_->CreateReader()};
-            auto const result = reader.ReadDirectTreeEntries(
-                info.digest, std::filesystem::path{});
-            if (not result or not RetrieveToCas(result->infos, api)) {
-                return false;
-            }
+    auto const reader =
+        TreeReader<BazelNetworkReader>{network_->CreateReader()};
+    for (auto const& info : missing) {
+        if (not IsTreeObject(info.type)) {
+            continue;
         }
-
-        // Object infos created by network_->ReadTreeInfos() will contain 0 as
-        // size, but this is handled by the remote execution engine, so no need
-        // to regenerate the digest.
-        blob_digests.push_back(info.digest);
+        auto const result =
+            reader.ReadDirectTreeEntries(info.digest, std::filesystem::path{});
+        if (not result or not RetrieveToCas(result->infos, api)) {
+            return false;
+        }
     }
-
-    return ::RetrieveToCas(
-        blob_digests, api, network_, missing_artifacts_info->back_map);
+    return ::RetrieveToCas(missing, api, network_);
 }
 
 [[nodiscard]] auto BazelApi::ParallelRetrieveToCas(
@@ -445,15 +396,18 @@ auto BazelApi::CreateAction(
     }
 
     // Determine missing artifacts in other CAS.
-    auto missing_artifacts_info = GetMissingArtifactsInfo<Artifact::ObjectInfo>(
-        api,
-        artifacts_info.begin(),
-        artifacts_info.end(),
-        [](Artifact::ObjectInfo const& info) { return info.digest; });
-    if (not missing_artifacts_info) {
-        Logger::Log(LogLevel::Error,
-                    "BazelApi: Failed to retrieve the missing artifacts");
-        return false;
+    std::unordered_set<gsl::not_null<Artifact::ObjectInfo const*>> missing;
+    missing.reserve(artifacts_info.size());
+    {
+        auto back_map = BackMap<ArtifactDigest, Artifact::ObjectInfo>::Make(
+            &artifacts_info,
+            [](Artifact::ObjectInfo const& info) { return info.digest; });
+        if (back_map == nullptr) {
+            Logger::Log(LogLevel::Error, "BazelApi: Failed to create BackMap");
+            return false;
+        }
+        auto missing_digests = api.GetMissingDigests(back_map->GetKeys());
+        missing = back_map->GetReferences(missing_digests);
     }
 
     // Recursively process trees.
@@ -462,30 +416,25 @@ auto BazelApi::CreateAction(
     std::mutex prerequisites_lock{};
     try {
         auto ts = TaskSystem{jobs};
-        for (auto const& dgst : missing_artifacts_info->digests) {
-            auto const& info = missing_artifacts_info->back_map[dgst];
-            if (IsTreeObject(info.type)) {
-                ts.QueueTask([this,
-                              &info,
-                              &failure,
-                              &prerequisites,
-                              &prerequisites_lock]() {
+        for (auto const& info : missing) {
+            if (not IsTreeObject(info->type)) {
+                continue;
+            }
+            ts.QueueTask(
+                [this, info, &failure, &prerequisites, &prerequisites_lock]() {
                     auto reader = TreeReader<BazelNetworkReader>{
                         network_->CreateReader()};
                     auto const result = reader.ReadDirectTreeEntries(
-                        info.digest, std::filesystem::path{});
+                        info->digest, std::filesystem::path{});
                     if (not result) {
                         failure = true;
                         return;
                     }
-                    {
-                        std::unique_lock lock{prerequisites_lock};
-                        prerequisites.insert(prerequisites.end(),
-                                             result->infos.begin(),
-                                             result->infos.end());
-                    }
+                    std::unique_lock lock{prerequisites_lock};
+                    prerequisites.insert(prerequisites.end(),
+                                         result->infos.begin(),
+                                         result->infos.end());
                 });
-            }
         }
     } catch (std::exception const& ex) {
         Logger::Log(LogLevel::Warning,
@@ -506,20 +455,12 @@ auto BazelApi::CreateAction(
     // In parallel process all the requested artifacts
     try {
         auto ts = TaskSystem{jobs};
-        for (auto const& dgst : missing_artifacts_info->digests) {
-            auto const& info = missing_artifacts_info->back_map[dgst];
-            ts.QueueTask([this,
-                          &info,
-                          &api,
-                          &failure,
-                          &info_map = missing_artifacts_info->back_map,
-                          use_blob_splitting]() {
+        for (auto const& info : missing) {
+            ts.QueueTask([this, info, &api, &failure, use_blob_splitting]() {
                 if (use_blob_splitting and network_->BlobSplitSupport() and
                             api.BlobSpliceSupport()
-                        ? ::RetrieveToCasSplitted(
-                              info, *this, api, network_, info_map)
-                        : ::RetrieveToCas(
-                              {info.digest}, api, network_, info_map)) {
+                        ? ::RetrieveToCasSplitted(*info, *this, api, network_)
+                        : ::RetrieveToCas({*info}, api, network_)) {
                     return;
                 }
                 failure = true;
@@ -551,18 +492,17 @@ auto BazelApi::CreateAction(
     -> std::optional<std::string> {
     auto reader = network_->CreateReader();
     if (auto blob = reader.ReadSingleBlob(artifact_info.digest)) {
-        return *blob->data;
+        if (auto const content = blob->ReadContent()) {
+            return *content;
+        }
     }
     return std::nullopt;
 }
 
-[[nodiscard]] auto BazelApi::Upload(ArtifactBlobContainer&& blobs,
+[[nodiscard]] auto BazelApi::Upload(std::unordered_set<ArtifactBlob>&& blobs,
                                     bool skip_find_missing) const noexcept
     -> bool {
-    auto bazel_blobs = ConvertToBazelBlobContainer(std::move(blobs));
-    return bazel_blobs ? network_->UploadBlobs(std::move(*bazel_blobs),
-                                               skip_find_missing)
-                       : false;
+    return network_->UploadBlobs(std::move(blobs), skip_find_missing);
 }
 
 [[nodiscard]] auto BazelApi::UploadTree(
@@ -586,9 +526,11 @@ auto BazelApi::CreateAction(
             gsl::not_null<std::vector<std::string>*> const& targets) {
             auto reader = network->CreateReader();
             targets->reserve(digests.size());
-            for (auto blobs : reader.ReadIncrementally(digests)) {
+            for (auto blobs : reader.ReadIncrementally(&digests)) {
                 for (auto const& blob : blobs) {
-                    targets->emplace_back(*blob.data);
+                    if (auto const content = blob.ReadContent()) {
+                        targets->emplace_back(*content);
+                    }
                 }
             }
         });
@@ -596,30 +538,13 @@ auto BazelApi::CreateAction(
 
 [[nodiscard]] auto BazelApi::IsAvailable(
     ArtifactDigest const& digest) const noexcept -> bool {
-    return network_->IsAvailable(ArtifactDigestFactory::ToBazel(digest));
+    return network_->IsAvailable(digest);
 }
 
-[[nodiscard]] auto BazelApi::IsAvailable(
-    std::vector<ArtifactDigest> const& digests) const noexcept
-    -> std::vector<ArtifactDigest> {
-    std::vector<bazel_re::Digest> bazel_digests;
-    bazel_digests.reserve(digests.size());
-    std::unordered_map<bazel_re::Digest, ArtifactDigest const*> digest_map;
-    for (auto const& digest : digests) {
-        auto const& bazel_digest =
-            bazel_digests.emplace_back(ArtifactDigestFactory::ToBazel(digest));
-        digest_map.insert_or_assign(bazel_digest, &digest);
-    }
-    auto const bazel_result = network_->IsAvailable(bazel_digests);
-    std::vector<ArtifactDigest> result;
-    result.reserve(bazel_result.size());
-    for (auto const& bazel_digest : bazel_result) {
-        auto it = digest_map.find(bazel_digest);
-        if (it != digest_map.end()) {
-            result.push_back(*it->second);
-        }
-    }
-    return result;
+[[nodiscard]] auto BazelApi::GetMissingDigests(
+    std::unordered_set<ArtifactDigest> const& digests) const noexcept
+    -> std::unordered_set<ArtifactDigest> {
+    return network_->FindMissingBlobs(digests);
 }
 
 [[nodiscard]] auto BazelApi::SplitBlob(ArtifactDigest const& blob_digest)
@@ -673,4 +598,9 @@ auto BazelApi::CreateAction(
 
 [[nodiscard]] auto BazelApi::BlobSpliceSupport() const noexcept -> bool {
     return network_->BlobSpliceSupport();
+}
+
+[[nodiscard]] auto BazelApi::GetHashType() const noexcept
+    -> HashFunction::Type {
+    return network_->GetHashFunction().GetType();
 }

@@ -166,9 +166,11 @@ def get_repo_to_import(config: Json) -> str:
     fail("Config does not contain any repositories; unsure what to import")
 
 
-def get_target_if_computed_repo(repo: Json) -> Optional[str]:
+def get_target_if_computed_repo(repo: Any, repos_config: Json) -> Optional[str]:
     """If repository is computed, return the target repository name."""
-    if repo.get("type") == "computed":
+    while isinstance(repo, str):
+        repo = repos_config[repo]["repository"]
+    if repo.get("type") in ["computed", "tree structure"]:
         return cast(str, repo.get("repo"))
     return None
 
@@ -204,7 +206,7 @@ def repos_to_import(repos_config: Json, entry: str,
                 visit(repo)
         else:
             # if computed, visit the referred repository
-            target = get_target_if_computed_repo(cast(Json, repo))
+            target = get_target_if_computed_repo(repo, repos_config)
             if target is not None:
                 extra_imports.discard(target)
                 visit(target)
@@ -217,8 +219,8 @@ def repos_to_import(repos_config: Json, entry: str,
                 if extra not in known and extra not in to_import:
                     extra_imports.add(extra)
                 extra_target = get_target_if_computed_repo(
-                    cast(Json,
-                         repos_config.get(extra, {}).get("repository", {})))
+                    repos_config.get(extra, {}).get("repository", {}),
+                    repos_config)
                 if extra_target is not None:
                     extra_imports.discard(extra_target)
                     visit(extra_target)
@@ -268,28 +270,39 @@ def rewrite_repo(repo_spec: Json,
         repo = assign[repo]
     elif repo.get("type") == "file":
         changes = {}
-        subdir = repo.get("path", ".")
-        if subdir not in ["", "."]:
+        # take subdir
+        subdir: str = os.path.normpath(repo.get("path", "."))
+        if subdir != ".":
             changes["subdir"] = subdir
+        # keep ignore special and absent pragmas
+        pragma = {}
+        if cast(Json, repo).get("pragma", {}).get("special", None) == "ignore":
+            pragma["special"] = "ignore"
+        if cast(Json, repo).get("pragma", {}).get("absent", False):
+            pragma["absent"] = True
+        if pragma:
+            changes["pragma"] = pragma
         repo = dict(remote, **changes)
     elif repo.get("type") == "distdir":
         existing_repos: List[str] = repo.get("repositories", [])
         new_repos = [assign[k] for k in existing_repos]
         repo = dict(repo, **{"repositories": new_repos})
-    elif repo.get("type") == "computed":
+    elif repo.get("type") in ["computed", "tree structure"]:
         target: str = repo.get("repo", None)
         repo = dict(repo, **{"repo": assign[target]})
     if absent and isinstance(repo, dict):
         repo["pragma"] = dict(repo.get("pragma", {}), **{"absent": True})
     new_spec["repository"] = repo
-    for key in ["target_root", "rule_root", "expression_root"]:
-        if key in repo_spec:
-            new_spec[key] = assign[repo_spec[key]]
-    for key in ["target_file_name", "rule_file_name", "expression_file_name"]:
-        if key in repo_spec:
-            new_spec[key] = repo_spec[key]
-    # rewrite bindings, if actually needed to be imported
+    # rewrite other roots and bindings, if actually needed to be imported
     if not as_layer:
+        for key in ["target_root", "rule_root", "expression_root"]:
+            if key in repo_spec:
+                new_spec[key] = assign[repo_spec[key]]
+        for key in [
+                "target_file_name", "rule_file_name", "expression_file_name"
+        ]:
+            if key in repo_spec:
+                new_spec[key] = repo_spec[key]
         bindings = repo_spec.get("bindings", {})
         new_bindings = {}
         for k, v in bindings.items():

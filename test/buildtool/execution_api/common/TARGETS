@@ -6,15 +6,10 @@
     [ ["@", "catch2", "", "catch2"]
     , ["@", "fmt", "", "fmt"]
     , ["@", "gsl", "", "gsl"]
+    , ["@", "src", "src/buildtool/common", "artifact_blob"]
     , ["@", "src", "src/buildtool/common", "artifact_description"]
-    , ["@", "src", "src/buildtool/common", "artifact_digest_factory"]
     , ["@", "src", "src/buildtool/common", "common"]
     , ["@", "src", "src/buildtool/crypto", "hash_function"]
-    , [ "@"
-      , "src"
-      , "src/buildtool/execution_api/common"
-      , "artifact_blob_container"
-      ]
     , ["@", "src", "src/buildtool/execution_api/common", "common"]
     , ["@", "src", "src/buildtool/execution_api/local", "config"]
     , ["@", "src", "src/buildtool/execution_engine/dag", "dag"]
@@ -33,12 +28,13 @@
   , "srcs": ["bytestream_utils.test.cpp"]
   , "private-deps":
     [ ["@", "catch2", "", "catch2"]
-    , ["@", "src", "src/buildtool/common", "bazel_digest_factory"]
-    , ["@", "src", "src/buildtool/common", "bazel_types"]
+    , ["@", "src", "src/buildtool/common", "common"]
     , ["@", "src", "src/buildtool/crypto", "hash_function"]
     , ["@", "src", "src/buildtool/execution_api/common", "bytestream_utils"]
     , ["@", "src", "src/buildtool/execution_api/common", "common"]
+    , ["@", "src", "src/buildtool/execution_api/common", "ids"]
     , ["@", "src", "src/buildtool/file_system", "object_type"]
+    , ["@", "src", "src/utils/cpp", "expected"]
     , ["", "catch-main"]
     , ["utils", "test_hash_function_type"]
     ]
@@ -51,7 +47,6 @@
   , "private-deps":
     [ ["@", "catch2", "", "catch2"]
     , ["@", "gsl", "", "gsl"]
-    , ["@", "src", "src/buildtool/common", "artifact_digest_factory"]
     , ["@", "src", "src/buildtool/common", "common"]
     , ["@", "src", "src/buildtool/common", "protocol_traits"]
     , ["@", "src", "src/buildtool/crypto", "hash_function"]
@@ -63,7 +58,7 @@
     , ["@", "src", "src/buildtool/execution_api/common", "api_bundle"]
     , ["@", "src", "src/buildtool/execution_api/local", "config"]
     , ["@", "src", "src/buildtool/execution_api/local", "context"]
-    , ["@", "src", "src/buildtool/execution_api/local", "local"]
+    , ["@", "src", "src/buildtool/execution_api/local", "local_api"]
     , ["@", "src", "src/buildtool/execution_api/utils", "rehash_utils"]
     , ["@", "src", "src/buildtool/file_system", "file_system_manager"]
     , ["@", "src", "src/buildtool/file_system", "object_type"]

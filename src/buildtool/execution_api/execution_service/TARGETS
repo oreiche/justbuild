@@ -24,11 +24,10 @@
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]
     , ["@", "protoc", "", "libprotobuf"]
-    , ["src/buildtool/common", "artifact_digest_factory"]
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/common", "protocol_traits"]
     , ["src/buildtool/crypto", "hash_function"]
-    , ["src/buildtool/execution_api/local", "local"]
+    , ["src/buildtool/execution_api/local", "local_api"]
     , ["src/buildtool/file_system", "file_system_manager"]
     , ["src/buildtool/file_system", "object_type"]
     , ["src/buildtool/logging", "log_level"]
@@ -57,7 +56,6 @@
     ]
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]
-    , ["src/buildtool/common", "artifact_digest_factory"]
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/logging", "log_level"]
@@ -88,7 +86,6 @@
     [ "cas_utils"
     , ["@", "fmt", "", "fmt"]
     , ["@", "protoc", "", "libprotobuf"]
-    , ["src/buildtool/common", "artifact_digest_factory"]
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/logging", "log_level"]
@@ -147,14 +144,13 @@
     [ "cas_utils"
     , ["@", "fmt", "", "fmt"]
     , ["@", "protoc", "", "libprotobuf"]
-    , ["src/buildtool/common", "artifact_digest_factory"]
-    , ["src/buildtool/common", "bazel_types"]
     , ["src/buildtool/common", "common"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/execution_api/common", "bytestream_utils"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/storage", "garbage_collector"]
     , ["src/utils/cpp", "expected"]
+    , ["src/utils/cpp", "incremental_reader"]
     , ["src/utils/cpp", "tmp_dir"]
     ]
   }
@@ -175,8 +171,7 @@
     ]
   , "private-deps":
     [ ["src/buildtool/common", "protocol_traits"]
-    , ["src/buildtool/logging", "log_level"]
-    , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/execution_api/common", "message_limits"]
     ]
   }
 , "operation_cache":

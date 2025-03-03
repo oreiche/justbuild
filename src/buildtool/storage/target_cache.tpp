@@ -22,7 +22,6 @@
 
 #include "nlohmann/json.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
-#include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/storage/target_cache.hpp"
 
 template <bool kDoGlobalUplink>
@@ -78,7 +77,8 @@ auto TargetCache<kDoGlobalUplink>::Read(
 
     if constexpr (kDoGlobalUplink) {
         // Uplink any existing target cache entry in storage generations
-        std::ignore = uplinker_.UplinkTargetCacheEntry(key, explicit_shard_);
+        std::ignore =
+            uplinker_.UplinkTargetCacheEntry(key, backend_description_);
     }
 
     auto const entry =

@@ -24,7 +24,7 @@
 
 #include "fmt/core.h"
 #include "src/buildtool/crypto/hash_function.hpp"
-#include "src/buildtool/execution_api/common/execution_common.hpp"
+#include "src/buildtool/execution_api/common/ids.hpp"
 #include "src/buildtool/execution_api/common/message_limits.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
@@ -167,7 +167,7 @@ auto GarbageCollector::TriggerGarbageCollection(
         // Otherwise, an interruption of the process during compactification
         // would lead to an invalid old generation.
         if (not GarbageCollector::Compactify(storage_config,
-                                             kMaxBatchTransferSize)) {
+                                             MessageLimits::kMaxGrpcLength)) {
             Logger::Log(LogLevel::Error,
                         "Failed to compactify the youngest generation.");
             return false;
@@ -220,15 +220,14 @@ auto GarbageCollector::Compactify(StorageConfig const& storage_config,
     // Compactification must be done for both native and compatible storages.
     static constexpr std::array kHashes = {HashFunction::Type::GitSHA1,
                                            HashFunction::Type::PlainSHA256};
-    auto builder = StorageConfig::Builder{}
-                       .SetBuildRoot(storage_config.build_root)
-                       .SetNumGenerations(storage_config.num_generations);
 
     return std::all_of(
         kHashes.begin(),
         kHashes.end(),
-        [threshold, &builder](HashFunction::Type hash_type) {
-            auto const config = builder.SetHashType(hash_type).Build();
+        [threshold, &storage_config](HashFunction::Type hash_type) {
+            auto const config = StorageConfig::Builder::Rebuild(storage_config)
+                                    .SetHashType(hash_type)
+                                    .Build();
             if (not config) {
                 return false;
             }

@@ -25,21 +25,62 @@
 
 #include <grpcpp/grpcpp.h>
 
-#include "google/protobuf/message.h"
 #include "google/protobuf/repeated_ptr_field.h"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/bazel_digest_factory.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/common/remote/client_common.hpp"
 #include "src/buildtool/common/remote/retry.hpp"
 #include "src/buildtool/common/remote/retry_config.hpp"
-#include "src/buildtool/execution_api/common/bytestream_utils.hpp"
-#include "src/buildtool/execution_api/common/execution_common.hpp"
 #include "src/buildtool/execution_api/common/message_limits.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/buildtool/logging/log_level.hpp"
-#include "src/utils/cpp/transformed_range.hpp"
+#include "src/utils/cpp/back_map.hpp"
+#include "src/utils/cpp/expected.hpp"
 
 namespace {
+
+[[nodiscard]] auto GetContentSize(bazel_re::Digest const& digest) noexcept
+    -> std::size_t {
+    return static_cast<std::size_t>(digest.size_bytes());
+}
+
+[[nodiscard]] auto GetContentSize(ArtifactBlob const& blob) noexcept
+    -> std::size_t {
+    return blob.GetContentSize();
+}
+
+template <typename TRequest,
+          typename TIterator,
+          typename TCreator,
+          typename TValue = typename TIterator::value_type>
+[[nodiscard]] auto InitRequest(TRequest* request,
+                               TCreator const& request_creator,
+                               TIterator begin,
+                               TIterator end,
+                               std::size_t message_limit,
+                               std::optional<std::size_t> const& content_limit =
+                                   std::nullopt) -> TIterator {
+    std::size_t content_size = 0;
+    for (auto it = begin; it != end; ++it) {
+        std::optional<TRequest> to_merge = std::invoke(request_creator, *it);
+        if (not to_merge.has_value()) {
+            return it;
+        }
+
+        if (request->ByteSizeLong() + to_merge->ByteSizeLong() >
+            message_limit) {
+            return it;
+        }
+        if (content_limit.has_value() and
+            content_size + GetContentSize(*it) > *content_limit) {
+            return it;
+        }
+        request->MergeFrom(*std::move(to_merge));
+        content_size += GetContentSize(*it);
+    }
+    return end;
+}
 
 // In order to determine whether blob splitting is supported at the remote, a
 // trial request to the remote CAS service is issued. This is just a workaround
@@ -178,88 +219,127 @@ BazelCasClient::BazelCasClient(
     std::string const& server,
     Port port,
     gsl::not_null<Auth const*> const& auth,
-    gsl::not_null<RetryConfig const*> const& retry_config) noexcept
+    gsl::not_null<RetryConfig const*> const& retry_config,
+    gsl::not_null<BazelCapabilitiesClient const*> const& capabilities) noexcept
     : stream_{std::make_unique<ByteStreamClient>(server, port, auth)},
-      retry_config_{*retry_config} {
+      retry_config_{*retry_config},
+      capabilities_{*capabilities} {
     stub_ = bazel_re::ContentAddressableStorage::NewStub(
         CreateChannelWithCredentials(server, port, auth));
 }
 
-auto BazelCasClient::FindMissingBlobs(
-    std::string const& instance_name,
-    std::vector<bazel_re::Digest> const& digests) const noexcept
-    -> std::vector<bazel_re::Digest> {
-    return FindMissingBlobs(instance_name, digests.begin(), digests.end());
-}
-
-auto BazelCasClient::FindMissingBlobs(std::string const& instance_name,
-                                      BazelBlobContainer const& blob_container)
-    const noexcept -> std::vector<bazel_re::Digest> {
-    auto digests_range = blob_container.Digests();
-    return FindMissingBlobs(
-        instance_name, digests_range.begin(), digests_range.end());
-}
-
 auto BazelCasClient::BatchReadBlobs(
     std::string const& instance_name,
-    std::vector<bazel_re::Digest>::const_iterator const& begin,
-    std::vector<bazel_re::Digest>::const_iterator const& end) const noexcept
-    -> std::vector<BazelBlob> {
-    if (begin == end) {
-        return {};
+    std::unordered_set<ArtifactDigest> const& blobs) const noexcept
+    -> std::unordered_set<ArtifactBlob> {
+    std::unordered_set<ArtifactBlob> result;
+    if (blobs.empty()) {
+        return result;
     }
-    std::vector<BazelBlob> result{};
+
+    auto const max_content_size = GetMaxBatchTransferSize(instance_name);
+
+    auto const back_map = BackMap<bazel_re::Digest, ArtifactDigest>::Make(
+        &blobs, ArtifactDigestFactory::ToBazel);
+    if (back_map == nullptr) {
+        return result;
+    }
+
+    auto request_creator = [&instance_name](bazel_re::Digest const& digest) {
+        bazel_re::BatchReadBlobsRequest request;
+        request.set_instance_name(instance_name);
+        *request.add_digests() = digest;
+        return request;
+    };
+
     try {
-        auto requests =
-            CreateBatchRequestsMaxSize<bazel_re::BatchReadBlobsRequest>(
-                instance_name,
-                begin,
-                end,
-                "BatchReadBlobs",
-                [](bazel_re::BatchReadBlobsRequest* request,
-                   bazel_re::Digest const& x) {
-                    *(request->add_digests()) = x;
-                });
-        bazel_re::BatchReadBlobsResponse response;
-        auto batch_read_blobs =
-            [this, &response, &result](auto const& request) -> RetryResponse {
-            grpc::ClientContext context;
-            auto status = stub_->BatchReadBlobs(&context, request, &response);
-            if (status.ok()) {
-                auto batch_response = ProcessBatchResponse<
-                    BazelBlob,
-                    bazel_re::BatchReadBlobsResponse_Response,
-                    bazel_re::BatchReadBlobsResponse>(
-                    response,
-                    [](std::vector<BazelBlob>* v,
-                       bazel_re::BatchReadBlobsResponse_Response const& r) {
-                        v->emplace_back(
-                            r.digest(), r.data(), /*is_exec=*/false);
-                    });
-                if (batch_response.ok) {
-                    result = std::move(batch_response.result);
-                    return {.ok = true};
+        result.reserve(blobs.size());
+        bool has_failure = false;
+        for (auto it_processed = back_map->GetKeys().begin(), it = it_processed;
+             it_processed != back_map->GetKeys().end();
+             it_processed = it) {
+            bazel_re::BatchReadBlobsRequest request;
+            it = InitRequest(&request,
+                             request_creator,
+                             it,
+                             back_map->GetKeys().end(),
+                             MessageLimits::kMaxGrpcLength,
+                             max_content_size);
+            // If no progress happens, fallback to streaming API:
+            if (it == it_processed) {
+                logger_.Emit(LogLevel::Warning,
+                             "BatchReadBlobs: Failed to prepare request for "
+                             "{}\nFalling back to streaming API.",
+                             it->hash());
+                std::optional<ArtifactBlob> blob;
+                if (auto value = back_map->GetReference(*it)) {
+                    blob = ReadSingleBlob(instance_name, *value.value());
                 }
-                return {.ok = false,
-                        .exit_retry_loop = batch_response.exit_retry_loop,
-                        .error_msg = batch_response.error_msg};
+
+                if (blob.has_value()) {
+                    result.emplace(*std::move(blob));
+                }
+                ++it;
+                continue;
             }
-            auto exit_retry_loop =
-                status.error_code() != grpc::StatusCode::UNAVAILABLE;
-            return {.ok = false,
-                    .exit_retry_loop = exit_retry_loop,
-                    .error_msg = StatusString(status, "BatchReadBlobs")};
-        };
-        if (not std::all_of(std::begin(requests),
-                            std::end(requests),
-                            [this, &batch_read_blobs](auto const& request) {
-                                return WithRetry(
-                                    [&request, &batch_read_blobs]() {
-                                        return batch_read_blobs(request);
-                                    },
-                                    retry_config_,
-                                    logger_);
-                            })) {
+
+            logger_.Emit(LogLevel::Trace,
+                         "BatchReadBlobs - Request size: {} bytes\n",
+                         request.ByteSizeLong());
+
+            bool const retry_result = WithRetry(
+                [this, &request, &result, &back_map]() -> RetryResponse {
+                    bazel_re::BatchReadBlobsResponse response;
+                    grpc::ClientContext context;
+                    auto status =
+                        stub_->BatchReadBlobs(&context, request, &response);
+                    if (status.ok()) {
+                        auto batch_response = ProcessBatchResponse<
+                            ArtifactBlob,
+                            bazel_re::BatchReadBlobsResponse_Response,
+                            bazel_re::BatchReadBlobsResponse>(
+                            response,
+                            [&back_map](
+                                std::vector<ArtifactBlob>* v,
+                                bazel_re::BatchReadBlobsResponse_Response const&
+                                    r) {
+                                auto ref = back_map->GetReference(r.digest());
+                                if (not ref.has_value()) {
+                                    return;
+                                }
+                                auto blob = ArtifactBlob::FromMemory(
+                                    HashFunction{ref.value()->GetHashType()},
+                                    ref.value()->IsTree() ? ObjectType::Tree
+                                                          : ObjectType::File,
+                                    r.data());
+                                if (not blob.has_value()) {
+                                    return;
+                                }
+                                v->emplace_back(*std::move(blob));
+                            });
+                        if (batch_response.ok) {
+                            std::move(batch_response.result.begin(),
+                                      batch_response.result.end(),
+                                      std::inserter(result, result.end()));
+                            return {.ok = true};
+                        }
+                        return {
+                            .ok = false,
+                            .exit_retry_loop = batch_response.exit_retry_loop,
+                            .error_msg = batch_response.error_msg};
+                    }
+                    auto exit_retry_loop =
+                        status.error_code() != grpc::StatusCode::UNAVAILABLE;
+                    return {
+                        .ok = false,
+                        .exit_retry_loop = exit_retry_loop,
+                        .error_msg = StatusString(status, "BatchReadBlobs")};
+                },
+                retry_config_,
+                logger_);
+            has_failure = has_failure or not retry_result;
+        }
+        if (has_failure) {
             logger_.Emit(LogLevel::Error, "Failed to BatchReadBlobs.");
         }
     } catch (...) {
@@ -282,7 +362,9 @@ auto BazelCasClient::GetTree(std::string const& instance_name,
 
     std::vector<bazel_re::Directory> result;
     while (stream->Read(&response)) {
-        result = ProcessResponseContents<bazel_re::Directory>(response);
+        std::move(response.mutable_directories()->begin(),
+                  response.mutable_directories()->end(),
+                  std::back_inserter(result));
         auto const& next_page_token = response.next_page_token();
         if (not next_page_token.empty()) {
             // recursively call this function with token for next page
@@ -303,51 +385,35 @@ auto BazelCasClient::GetTree(std::string const& instance_name,
 }
 
 auto BazelCasClient::UpdateSingleBlob(std::string const& instance_name,
-                                      BazelBlob const& blob) const noexcept
+                                      ArtifactBlob const& blob) const noexcept
     -> bool {
     logger_.Emit(LogLevel::Trace, [&blob]() {
         std::ostringstream oss{};
         oss << "upload single blob" << std::endl;
-        oss << fmt::format(" - {}", blob.digest.hash()) << std::endl;
+        oss << fmt::format(" - {}", blob.GetDigest().hash()) << std::endl;
         return oss.str();
     });
 
-    thread_local static std::string uuid{};
-    if (uuid.empty()) {
-        auto id = CreateProcessUniqueId();
-        if (not id) {
-            logger_.Emit(LogLevel::Debug, "Failed creating process unique id.");
-            return false;
-        }
-        uuid = CreateUUIDVersion4(*id);
-    }
-    auto ok = stream_->Write(
-        ByteStreamUtils::WriteRequest{instance_name, uuid, blob.digest},
-        *blob.data);
-    if (not ok) {
+    if (not stream_->Write(instance_name, blob)) {
         logger_.Emit(LogLevel::Error,
                      "Failed to write {}:{}",
-                     blob.digest.hash(),
-                     blob.digest.size_bytes());
+                     blob.GetDigest().hash(),
+                     blob.GetDigest().size());
+        return false;
     }
-    return ok;
+    return true;
 }
 
 auto BazelCasClient::IncrementalReadSingleBlob(std::string const& instance_name,
-                                               bazel_re::Digest const& digest)
+                                               ArtifactDigest const& digest)
     const noexcept -> ByteStreamClient::IncrementalReader {
-    return stream_->IncrementalRead(
-        ByteStreamUtils::ReadRequest{instance_name, digest});
+    return stream_->IncrementalRead(instance_name, digest);
 }
 
-auto BazelCasClient::ReadSingleBlob(
-    std::string const& instance_name,
-    bazel_re::Digest const& digest) const noexcept -> std::optional<BazelBlob> {
-    if (auto data = stream_->Read(
-            ByteStreamUtils::ReadRequest{instance_name, digest})) {
-        return BazelBlob{digest, std::move(*data), /*is_exec=*/false};
-    }
-    return std::nullopt;
+auto BazelCasClient::ReadSingleBlob(std::string const& instance_name,
+                                    ArtifactDigest const& digest) const noexcept
+    -> std::optional<ArtifactBlob> {
+    return stream_->Read(instance_name, digest);
 }
 
 auto BazelCasClient::SplitBlob(HashFunction hash_function,
@@ -375,7 +441,12 @@ auto BazelCasClient::SplitBlob(HashFunction hash_function,
         LogStatus(&logger_, LogLevel::Error, status, "SplitBlob");
         return std::nullopt;
     }
-    return ProcessResponseContents<bazel_re::Digest>(response);
+    std::vector<bazel_re::Digest> result;
+    result.reserve(response.chunk_digests().size());
+    std::move(response.mutable_chunk_digests()->begin(),
+              response.mutable_chunk_digests()->end(),
+              std::back_inserter(result));
+    return result;
 }
 
 auto BazelCasClient::SpliceBlob(
@@ -426,28 +497,56 @@ auto BazelCasClient::BlobSpliceSupport(
         hash_function, instance_name, stub_, &logger_);
 }
 
-template <class TForwardIter>
-auto BazelCasClient::FindMissingBlobs(std::string const& instance_name,
-                                      TForwardIter const& start,
-                                      TForwardIter const& end) const noexcept
-    -> std::vector<bazel_re::Digest> {
-    std::vector<bazel_re::Digest> result;
-    if (start == end) {
+auto BazelCasClient::FindMissingBlobs(
+    std::string const& instance_name,
+    std::unordered_set<ArtifactDigest> const& digests) const noexcept
+    -> std::unordered_set<ArtifactDigest> {
+    std::unordered_set<ArtifactDigest> result;
+    if (digests.empty()) {
         return result;
     }
+
+    auto const back_map = BackMap<bazel_re::Digest, ArtifactDigest>::Make(
+        &digests, ArtifactDigestFactory::ToBazel);
+    if (back_map == nullptr) {
+        return digests;
+    }
+
+    auto request_creator = [&instance_name](bazel_re::Digest const& digest) {
+        bazel_re::FindMissingBlobsRequest request;
+        request.set_instance_name(instance_name);
+        *request.add_blob_digests() = digest;
+        return request;
+    };
+
     try {
-        result.reserve(std::distance(start, end));
-        auto requests =
-            CreateBatchRequestsMaxSize<bazel_re::FindMissingBlobsRequest>(
-                instance_name,
-                start,
-                end,
-                "FindMissingBlobs",
-                [](bazel_re::FindMissingBlobsRequest* request,
-                   bazel_re::Digest const& x) {
-                    *(request->add_blob_digests()) = x;
-                });
-        for (auto const& request : requests) {
+        result.reserve(digests.size());
+        for (auto it_processed = back_map->GetKeys().begin(), it = it_processed;
+             it_processed != back_map->GetKeys().end();
+             it_processed = it) {
+            bazel_re::FindMissingBlobsRequest request;
+            it = InitRequest(&request,
+                             request_creator,
+                             it,
+                             back_map->GetKeys().end(),
+                             MessageLimits::kMaxGrpcLength);
+            // If no progress happens, consider current digest missing
+            if (it == it_processed) {
+                logger_.Emit(
+                    LogLevel::Warning,
+                    "FindMissingBlobs: Failed to prepare request for {}",
+                    it->hash());
+
+                if (auto value = back_map->GetReference(*it)) {
+                    result.emplace(*value.value());
+                }
+                ++it;
+                continue;
+            }
+            logger_.Emit(LogLevel::Trace,
+                         "FindMissingBlobs - Request size: {} bytes\n",
+                         request.ByteSizeLong());
+
             bazel_re::FindMissingBlobsResponse response;
             auto [ok, status] = WithRetry(
                 [this, &response, &request]() {
@@ -458,28 +557,34 @@ auto BazelCasClient::FindMissingBlobs(std::string const& instance_name,
                 retry_config_,
                 logger_);
             if (ok) {
-                auto batch =
-                    ProcessResponseContents<bazel_re::Digest>(response);
-                for (auto&& x : batch) {
-                    result.emplace_back(std::move(x));
+                for (auto const& batch :
+                     *response.mutable_missing_blob_digests()) {
+                    if (auto value = back_map->GetReference(batch)) {
+                        result.emplace(*value.value());
+                    }
                 }
             }
             else {
                 LogStatus(
                     &logger_, LogLevel::Error, status, "FindMissingBlobs");
+                // Failed to get a response. Mark all requested digests missing:
+                for (auto const& digest : request.blob_digests()) {
+                    if (auto value = back_map->GetReference(digest)) {
+                        result.emplace(*value.value());
+                    }
+                }
             }
         }
-        logger_.Emit(LogLevel::Trace, [&start, &end, &result]() {
+        logger_.Emit(LogLevel::Trace, [&digests, &result]() {
             std::ostringstream oss{};
             oss << "find missing blobs" << std::endl;
-            std::for_each(start, end, [&oss](auto const& digest) {
+            for (auto const& digest : digests) {
                 oss << fmt::format(" - {}", digest.hash()) << std::endl;
-            });
+            }
             oss << "missing blobs" << std::endl;
-            std::for_each(
-                result.cbegin(), result.cend(), [&oss](auto const& digest) {
-                    oss << fmt::format(" - {}", digest.hash()) << std::endl;
-                });
+            for (auto const& digest : result) {
+                oss << fmt::format(" - {}", digest.hash()) << std::endl;
+            }
             return oss.str();
         });
     } catch (...) {
@@ -488,214 +593,154 @@ auto BazelCasClient::FindMissingBlobs(std::string const& instance_name,
     return result;
 }
 
-auto BazelCasClient::BatchUpdateBlobs(
-    std::string const& instance_name,
-    std::vector<gsl::not_null<BazelBlob const*>>::const_iterator const& begin,
-    std::vector<gsl::not_null<BazelBlob const*>>::const_iterator const& end)
-    const noexcept -> std::size_t {
-    if (begin == end) {
+auto BazelCasClient::BatchUpdateBlobs(std::string const& instance_name,
+                                      std::unordered_set<ArtifactBlob> const&
+                                          blobs) const noexcept -> std::size_t {
+    if (blobs.empty()) {
         return 0;
     }
-    std::vector<bazel_re::Digest> result;
+
+    auto const max_content_size = GetMaxBatchTransferSize(instance_name);
+
+    auto request_creator = [&instance_name](ArtifactBlob const& blob)
+        -> std::optional<bazel_re::BatchUpdateBlobsRequest> {
+        auto const content = blob.ReadContent();
+        if (content == nullptr) {
+            return std::nullopt;
+        }
+
+        bazel_re::BatchUpdateBlobsRequest request;
+        request.set_instance_name(instance_name);
+
+        auto& r = *request.add_requests();
+        (*r.mutable_digest()) =
+            ArtifactDigestFactory::ToBazel(blob.GetDigest());
+        r.set_data(*content);
+        return request;
+    };
+
+    std::unordered_set<bazel_re::Digest> updated;
     try {
-        auto requests =
-            CreateBatchRequestsMaxSize<bazel_re::BatchUpdateBlobsRequest>(
-                instance_name,
-                begin,
-                end,
-                "BatchUpdateBlobs",
-                [](bazel_re::BatchUpdateBlobsRequest* request,
-                   BazelBlob const* x) {
-                    *(request->add_requests()) =
-                        BazelCasClient::CreateUpdateBlobsSingleRequest(*x);
-                });
-        result.reserve(std::distance(begin, end));
-        auto batch_update_blobs =
-            [this, &result](auto const& request) -> RetryResponse {
-            bazel_re::BatchUpdateBlobsResponse response;
-            grpc::ClientContext context;
-            auto status = stub_->BatchUpdateBlobs(&context, request, &response);
-            if (status.ok()) {
-                auto batch_response = ProcessBatchResponse<
-                    bazel_re::Digest,
-                    bazel_re::BatchUpdateBlobsResponse_Response>(
-                    response,
-                    [](std::vector<bazel_re::Digest>* v,
-                       bazel_re::BatchUpdateBlobsResponse_Response const& r) {
-                        v->push_back(r.digest());
-                    });
-                if (batch_response.ok) {
-                    std::move(std::begin(batch_response.result),
-                              std::end(batch_response.result),
-                              std::back_inserter(result));
-                    return {.ok = true};
-                }
-                return {.ok = false,
-                        .exit_retry_loop = batch_response.exit_retry_loop,
-                        .error_msg = batch_response.error_msg};
+        updated.reserve(blobs.size());
+        bool has_failure = false;
+        for (auto it_processed = blobs.begin(), it = it_processed;
+             it_processed != blobs.end();
+             it_processed = it) {
+            bazel_re::BatchUpdateBlobsRequest request;
+            it = InitRequest(&request,
+                             request_creator,
+                             it,
+                             blobs.end(),
+                             MessageLimits::kMaxGrpcLength,
+                             max_content_size);
+            // If no progress happens, skip current blob
+            if (it == it_processed) {
+                logger_.Emit(
+                    LogLevel::Warning,
+                    "BatchUpdateBlobs: Failed to prepare request for {}",
+                    it->GetDigest().hash());
+                ++it;
+                continue;
             }
-            return {.ok = false,
-                    .exit_retry_loop =
-                        status.error_code() != grpc::StatusCode::UNAVAILABLE,
-                    .error_msg = StatusString(status, "BatchUpdateBlobs")};
-        };
-        if (not std::all_of(std::begin(requests),
-                            std::end(requests),
-                            [this, &batch_update_blobs](auto const& request) {
-                                return WithRetry(
-                                    [&request, &batch_update_blobs]() {
-                                        return batch_update_blobs(request);
-                                    },
-                                    retry_config_,
-                                    logger_,
-                                    LogLevel::Performance);
-                            })) {
+
+            logger_.Emit(LogLevel::Trace,
+                         "BatchUpdateBlobs - Request size: {} bytes\n",
+                         request.ByteSizeLong());
+
+            bool const retry_result = WithRetry(
+                [this, &request, &updated]() -> RetryResponse {
+                    bazel_re::BatchUpdateBlobsResponse response;
+                    grpc::ClientContext context;
+                    auto status =
+                        stub_->BatchUpdateBlobs(&context, request, &response);
+                    if (status.ok()) {
+                        auto batch_response = ProcessBatchResponse<
+                            bazel_re::Digest,
+                            bazel_re::BatchUpdateBlobsResponse_Response>(
+                            response,
+                            [](std::vector<bazel_re::Digest>* v,
+                               bazel_re::
+                                   BatchUpdateBlobsResponse_Response const& r) {
+                                v->push_back(r.digest());
+                            });
+                        if (batch_response.ok) {
+                            std::move(batch_response.result.begin(),
+                                      batch_response.result.end(),
+                                      std::inserter(updated, updated.end()));
+                            return {.ok = true};
+                        }
+                        return {
+                            .ok = false,
+                            .exit_retry_loop = batch_response.exit_retry_loop,
+                            .error_msg = batch_response.error_msg};
+                    }
+                    return {
+                        .ok = false,
+                        .exit_retry_loop = status.error_code() !=
+                                           grpc::StatusCode::UNAVAILABLE,
+                        .error_msg = StatusString(status, "BatchUpdateBlobs")};
+                },
+                retry_config_,
+                logger_,
+                LogLevel::Performance);
+            has_failure = has_failure or not retry_result;
+        }
+        if (has_failure) {
             logger_.Emit(LogLevel::Performance, "Failed to BatchUpdateBlobs.");
         }
     } catch (...) {
         logger_.Emit(LogLevel::Warning,
                      "Caught exception in DoBatchUpdateBlobs");
     }
-    logger_.Emit(LogLevel::Trace, [begin, end, &result]() {
+    logger_.Emit(LogLevel::Trace, [&blobs, &updated]() {
         std::ostringstream oss{};
         oss << "upload blobs" << std::endl;
-        std::for_each(begin, end, [&oss](BazelBlob const* blob) {
-            oss << fmt::format(" - {}", blob->digest.hash()) << std::endl;
-        });
+        for (auto const& blob : blobs) {
+            oss << fmt::format(" - {}", blob.GetDigest().hash()) << std::endl;
+        }
         oss << "received blobs" << std::endl;
-        std::for_each(
-            result.cbegin(), result.cend(), [&oss](auto const& digest) {
-                oss << fmt::format(" - {}", digest.hash()) << std::endl;
-            });
+        for (auto const& digest : updated) {
+            oss << fmt::format(" - {}", digest.hash()) << std::endl;
+        }
         return oss.str();
     });
 
-    auto missing = std::distance(begin, end) - result.size();
-    if (not result.empty() and missing > 0) {
+    auto const missing = blobs.size() - updated.size();
+    if (not updated.empty() and missing != 0) {
         // The remote execution protocol is a bit unclear about how to deal with
         // blob updates for which we got no response. While some clients
         // consider a blob update failed only if a failed response is received,
         // we are going extra defensive here and also consider missing responses
         // to be a failed blob update. Issue a retry for the missing blobs.
         logger_.Emit(LogLevel::Trace, "Retrying with missing blobs");
-        auto received_digests =
-            std::unordered_set<bazel_re::Digest>{result.begin(), result.end()};
-        auto missing_blobs = std::vector<gsl::not_null<BazelBlob const*>>{};
+        std::unordered_set<ArtifactBlob> missing_blobs;
         missing_blobs.reserve(missing);
-        std::for_each(
-            begin, end, [&received_digests, &missing_blobs](auto const& blob) {
-                if (not received_digests.contains(blob->digest)) {
-                    missing_blobs.emplace_back(blob);
-                }
-            });
-        return result.size() + BatchUpdateBlobs(instance_name,
-                                                missing_blobs.begin(),
-                                                missing_blobs.end());
+        for (auto const& blob : blobs) {
+            auto bazel_digest =
+                ArtifactDigestFactory::ToBazel(blob.GetDigest());
+            if (not updated.contains(bazel_digest)) {
+                missing_blobs.emplace(blob);
+            }
+        }
+        return updated.size() + BatchUpdateBlobs(instance_name, missing_blobs);
     }
-    if (result.empty() and missing > 0) {
+    if (updated.empty() and missing != 0) {
         // The batch upload did not make _any_ progress. So there is no value in
         // trying that again; instead, we fall back to uploading each blob
         // sequentially.
         logger_.Emit(LogLevel::Debug, "Falling back to sequential blob upload");
-        std::size_t count = 0;
-        std::for_each(
-            begin, end, [this, &count, &instance_name](auto const& blob) {
-                if (UpdateSingleBlob(instance_name, *blob)) {
-                    count += 1;
-                }
-            });
-        return count;
+        return std::count_if(blobs.begin(),
+                             blobs.end(),
+                             [this, &instance_name](ArtifactBlob const& blob) {
+                                 return UpdateSingleBlob(instance_name, blob);
+                             });
     }
-
-    return result.size();
+    return updated.size();
 }
 
-namespace detail {
-
-// Getter for response contents (needs specialization, never implemented)
-template <class TContent, class TResponse>
-static auto GetResponseContents(TResponse const&) noexcept
-    -> pb::RepeatedPtrField<TContent> const&;
-
-// Specialization of GetResponseContents for 'FindMissingBlobsResponse'
-template <>
-auto GetResponseContents<bazel_re::Digest, bazel_re::FindMissingBlobsResponse>(
-    bazel_re::FindMissingBlobsResponse const& response) noexcept
-    -> pb::RepeatedPtrField<bazel_re::Digest> const& {
-    return response.missing_blob_digests();
-}
-
-// Specialization of GetResponseContents for 'GetTreeResponse'
-template <>
-auto GetResponseContents<bazel_re::Directory, bazel_re::GetTreeResponse>(
-    bazel_re::GetTreeResponse const& response) noexcept
-    -> pb::RepeatedPtrField<bazel_re::Directory> const& {
-    return response.directories();
-}
-
-// Specialization of GetResponseContents for 'SplitBlobResponse'
-template <>
-auto GetResponseContents<bazel_re::Digest, bazel_re::SplitBlobResponse>(
-    bazel_re::SplitBlobResponse const& response) noexcept
-    -> pb::RepeatedPtrField<bazel_re::Digest> const& {
-    return response.chunk_digests();
-}
-
-}  // namespace detail
-
-template <typename TRequest, typename TForwardIter>
-auto BazelCasClient::CreateBatchRequestsMaxSize(
-    std::string const& instance_name,
-    TForwardIter const& first,
-    TForwardIter const& last,
-    std::string const& heading,
-    std::function<void(TRequest*,
-                       typename TForwardIter::value_type const&)> const&
-        request_builder) const noexcept -> std::vector<TRequest> {
-    if (first == last) {
-        return {};
-    }
-    std::vector<TRequest> result;
-    TRequest accumulating_request;
-    std::for_each(
-        first,
-        last,
-        [&instance_name, &accumulating_request, &result, &request_builder](
-            auto const& blob) {
-            TRequest request;
-            request.set_instance_name(instance_name);
-            request_builder(&request, blob);
-            if (accumulating_request.ByteSizeLong() + request.ByteSizeLong() >
-                kMaxBatchTransferSize) {
-                result.emplace_back(std::move(accumulating_request));
-                accumulating_request = std::move(request);
-            }
-            else {
-                accumulating_request.MergeFrom(request);
-            }
-        });
-    result.emplace_back(std::move(accumulating_request));
-    logger_.Emit(LogLevel::Trace, [&heading, &result]() {
-        std::ostringstream oss{};
-        std::size_t count{0};
-        oss << heading << " - Request sizes:" << std::endl;
-        std::for_each(
-            result.begin(), result.end(), [&oss, &count](auto const& request) {
-                oss << fmt::format(
-                           " {}: {} bytes", ++count, request.ByteSizeLong())
-                    << std::endl;
-            });
-        return oss.str();
-    });
-    return result;
-}
-
-auto BazelCasClient::CreateUpdateBlobsSingleRequest(BazelBlob const& b) noexcept
-    -> bazel_re::BatchUpdateBlobsRequest_Request {
-    bazel_re::BatchUpdateBlobsRequest_Request r{};
-    (*r.mutable_digest()) = b.digest;
-    r.set_data(*b.data);
-    return r;
+auto BazelCasClient::GetMaxBatchTransferSize(
+    std::string const& instance_name) const noexcept -> std::size_t {
+    return capabilities_.GetCapabilities(instance_name)->MaxBatchTransferSize;
 }
 
 auto BazelCasClient::CreateGetTreeRequest(
@@ -709,13 +754,4 @@ auto BazelCasClient::CreateGetTreeRequest(
     request.set_page_size(page_size);
     request.set_page_token(page_token);
     return request;
-}
-
-template <class TContent, class TResponse>
-auto BazelCasClient::ProcessResponseContents(
-    TResponse const& response) const noexcept -> std::vector<TContent> {
-    std::vector<TContent> output;
-    auto const& contents = detail::GetResponseContents<TContent>(response);
-    std::copy(contents.begin(), contents.end(), std::back_inserter(output));
-    return output;
 }

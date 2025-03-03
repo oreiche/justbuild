@@ -21,8 +21,6 @@
   , "srcs": ["object_cas.test.cpp"]
   , "private-deps":
     [ ["@", "catch2", "", "catch2"]
-    , ["@", "gsl", "", "gsl"]
-    , ["@", "src", "src/buildtool/common", "artifact_digest_factory"]
     , ["@", "src", "src/buildtool/common", "common"]
     , ["@", "src", "src/buildtool/crypto", "hash_function"]
     , ["@", "src", "src/buildtool/file_system", "file_system_manager"]
@@ -67,7 +65,6 @@
     [ ["@", "catch2", "", "catch2"]
     , ["@", "fmt", "", "fmt"]
     , ["@", "src", "src/buildtool/common", "artifact_description"]
-    , ["@", "src", "src/buildtool/common", "artifact_digest_factory"]
     , ["@", "src", "src/buildtool/common", "common"]
     , ["@", "src", "src/buildtool/common", "protocol_traits"]
     , ["@", "src", "src/buildtool/crypto", "hash_function"]
@@ -153,10 +150,10 @@
     , ["@", "src", "src/buildtool/file_system", "file_system_manager"]
     , ["@", "src", "src/buildtool/file_system", "git_cas"]
     , ["@", "src", "src/buildtool/file_system", "object_type"]
-    , ["@", "src", "src/buildtool/file_system/symlinks_map", "pragma_special"]
+    , ["@", "src", "src/buildtool/file_system/symlinks", "pragma_special"]
     , [ "@"
       , "src"
-      , "src/buildtool/file_system/symlinks_map"
+      , "src/buildtool/file_system/symlinks"
       , "resolve_symlinks_map"
       ]
     , ["@", "src", "src/buildtool/multithreading", "task_system"]

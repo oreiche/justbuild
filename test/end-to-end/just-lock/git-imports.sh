@@ -28,11 +28,22 @@ readonly WRKDIR="${PWD}/work"
 mkdir -p "${REPO_DIRS}/foo/src"
 cd "${REPO_DIRS}/foo"
 cat > repos.json <<'EOF'
-{"repositories": {"": {"repository": {"type": "file", "path": "src"}}}}
+{ "repositories":
+  { "":
+    { "repository":
+      { "type": "file"
+      , "path": "src"
+      , "pragma": {"special": "ignore"}
+      }
+    }
+  }
+}
 EOF
 cat > src/TARGETS <<'EOF'
 { "": {"type": "file_gen", "name": "foo.txt", "data": "FOO"}}
 EOF
+# add symlink to check that special pragma is needed and is inherited in import
+ln -s ../../../nonexistent src/causes_fail
 git init
 git checkout --orphan foomaster
 git config user.name 'N.O.Body'
@@ -54,7 +65,7 @@ git checkout --orphan barmaster
 git config user.name 'N.O.Body'
 git config user.email 'nobody@example.org'
 git add .
-git commit -m 'Add foo.txt' 2>&1
+git commit -m 'Add bar.txt' 2>&1
 
 mkdir -p "${WRKDIR}"
 cd "${WRKDIR}"
@@ -92,7 +103,8 @@ EOF
 echo
 cat repos.in.json
 
-"${JUST_LOCK}" -C repos.in.json -o repos.json
+echo
+"${JUST_LOCK}" -C repos.in.json -o repos.json --local-build-root "${LBR}" 2>&1
 
 echo
 cat repos.json

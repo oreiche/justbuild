@@ -94,13 +94,6 @@
   , "hdrs": ["path_hash.hpp"]
   , "stage": ["src", "utils", "cpp"]
   }
-, "transformed_range":
-  { "type": ["@", "rules", "CC", "library"]
-  , "name": ["transformed_range"]
-  , "hdrs": ["transformed_range.hpp"]
-  , "deps": [["@", "gsl", "", "gsl"]]
-  , "stage": ["src", "utils", "cpp"]
-  }
 , "prefix":
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["prefix"]
@@ -111,6 +104,28 @@
   { "type": ["@", "rules", "CC", "library"]
   , "name": ["expected"]
   , "hdrs": ["expected.hpp"]
+  , "stage": ["src", "utils", "cpp"]
+  }
+, "back_map":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["back_map"]
+  , "hdrs": ["back_map.hpp"]
+  , "deps": [["@", "gsl", "", "gsl"]]
+  , "stage": ["src", "utils", "cpp"]
+  }
+, "in_place_visitor":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["in_place_visitor"]
+  , "hdrs": ["in_place_visitor.hpp"]
+  , "stage": ["src", "utils", "cpp"]
+  }
+, "incremental_reader":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["incremental_reader"]
+  , "hdrs": ["incremental_reader.hpp"]
+  , "srcs": ["incremental_reader.cpp"]
+  , "deps": ["expected", ["@", "gsl", "", "gsl"]]
+  , "private-deps": ["in_place_visitor", ["@", "fmt", "", "fmt"]]
   , "stage": ["src", "utils", "cpp"]
   }
 }

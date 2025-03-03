@@ -19,20 +19,24 @@
 class ServeApi final {};
 #else
 
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/remote/remote_common.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/api_bundle.hpp"
 #include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/execution_api/remote/context.hpp"
 #include "src/buildtool/file_system/git_types.hpp"
-#include "src/buildtool/file_system/symlinks_map/pragma_special.hpp"
+#include "src/buildtool/file_system/symlinks/pragma_special.hpp"
 #include "src/buildtool/serve_api/remote/config.hpp"
 #include "src/buildtool/serve_api/remote/configuration_client.hpp"
 #include "src/buildtool/serve_api/remote/source_tree_client.hpp"
@@ -48,10 +52,12 @@ class ServeApi final {
                       gsl::not_null<RemoteContext const*> const& remote_context,
                       gsl::not_null<ApiBundle const*> const& apis) noexcept
         : stc_{address,
-               &local_context->storage_config->hash_function,
+               local_context->storage_config->hash_function,
                remote_context},
           tc_{address, local_context->storage, remote_context, apis},
-          cc_{address, remote_context} {}
+          cc_{address, remote_context},
+          storage_config_{*local_context->storage_config},
+          apis_{*apis} {}
 
     ~ServeApi() noexcept = default;
     ServeApi(ServeApi const&) = delete;
@@ -125,6 +131,11 @@ class ServeApi final {
         return stc_.GetRemoteTree(digest);
     }
 
+    [[nodiscard]] auto ComputeTreeStructure(ArtifactDigest const& digest)
+        const noexcept -> expected<ArtifactDigest, GitLookupError> {
+        return stc_.ComputeTreeStructure(digest);
+    }
+
     [[nodiscard]] auto ServeTargetVariables(std::string const& target_root_id,
                                             std::string const& target_file,
                                             std::string const& target)
@@ -140,9 +151,10 @@ class ServeApi final {
     }
 
     [[nodiscard]] auto ServeTarget(const TargetCacheKey& key,
-                                   const ArtifactDigest& repo_key)
+                                   const ArtifactDigest& repo_key,
+                                   bool keep_artifact_root = false)
         const noexcept -> std::optional<serve_target_result_t> {
-        return tc_.ServeTarget(key, repo_key);
+        return tc_.ServeTarget(key, repo_key, keep_artifact_root);
     }
 
     [[nodiscard]] auto CheckServeRemoteExecution() const noexcept -> bool {
@@ -153,6 +165,24 @@ class ServeApi final {
         return cc_.IsCompatible();
     }
 
+    class UploadError;
+    /// \brief Upload a git tree from git repo to serve.
+    /// \param tree         Tree to upload.
+    /// \param git_repo     Git repository where the tree can be found.
+    /// \return std::monostate if the tree is available for this serve
+    /// instance after the call, or an unexpected UploadError on failure.
+    [[nodiscard]] auto UploadTree(ArtifactDigest const& tree,
+                                  std::filesystem::path const& git_repo)
+        const noexcept -> expected<std::monostate, UploadError>;
+
+    /// \brief Download a git tree from serve.
+    /// \param tree         Tree to download.
+    /// \return std::monostate if after the call the requested tree can be found
+    /// in the native CAS to which this serve instance is bound to, or an
+    /// unexpected error message on failure.
+    [[nodiscard]] auto DownloadTree(ArtifactDigest const& tree) const noexcept
+        -> expected<std::monostate, std::string>;
+
   private:
     // source tree service client
     SourceTreeClient const stc_;
@@ -160,6 +190,32 @@ class ServeApi final {
     TargetClient const tc_;
     // configuration service client
     ConfigurationClient const cc_;
+
+    StorageConfig const& storage_config_;
+    ApiBundle const& apis_;
+};
+
+class ServeApi::UploadError final {
+  public:
+    [[nodiscard]] auto Message() const& noexcept -> std::string const& {
+        return message_;
+    }
+
+    [[nodiscard]] auto Message() && noexcept -> std::string {
+        return std::move(message_);
+    }
+
+    [[nodiscard]] auto IsSyncError() const noexcept -> bool {
+        return is_sync_error_;
+    }
+
+  private:
+    friend ServeApi;
+    explicit UploadError(std::string message, bool is_sync_error) noexcept
+        : message_{std::move(message)}, is_sync_error_{is_sync_error} {}
+
+    std::string message_;
+    bool is_sync_error_;
 };
 
 #endif  // BOOTSTRAP_BUILD_TOOL
