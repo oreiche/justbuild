@@ -1,4 +1,4 @@
-## Release `1.5.0` (UNRELEASED)
+## Release `1.5.0` (2025-03-06)
 
 A feature release on top of `1.4.0`, backwards compatible.
 
@@ -55,6 +55,19 @@ A feature release on top of `1.4.0`, backwards compatible.
 - For remote execution, the server capability `max_batch_total_size_bytes`
   is now correctly honored, if announced by the server.
 - Missing entries in the documentation have been added.
+
+
+### Changes since `1.5.0~beta2`
+
+- Fixed how `just-import-git` and `just-lock` handle the transitively
+  implied base repositories of computed roots; the lack of properly
+  handling indirections led to crashes even if computed roots where
+  not used at all.
+- A case was fixed where special entries where not ignored properly,
+  even though this was requested.
+- Unnecessary verbosity reduced.
+- Updated dependencies.
+- Documentation extended.
 
 ## Release `1.5.0~beta2` (2025-02-28)
 
