@@ -74,6 +74,7 @@ for f in $(ls ./share/man/); do
   install -D ${OUTFILE} ${OUTDIR}/share/man/$SECTION/$OUTFILE
 done
 
+install -D ./bin/just-lock.py ${OUTDIR}/bin/just-lock
 install -D ./bin/just-import-git.py ${OUTDIR}/bin/just-import-git
 install -D ./bin/just-deduplicate-repos.py ${OUTDIR}/bin/just-deduplicate-repos
 install -D ./share/just_complete.bash ${OUTDIR}/share/bash-completion/completions/just

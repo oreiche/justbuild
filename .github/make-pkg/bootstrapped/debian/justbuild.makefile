@@ -85,6 +85,7 @@ man-pages: $(MANPAGES)
 install: justbuild
 	install -D $(BUILDDIR)/out/bin/just $(DESTDIR)/$(PREFIX)/bin/justbuild
 	install -D $(BUILDDIR)/out/bin/just-mr $(DESTDIR)/$(PREFIX)/bin/just-mr
+	install -D ./bin/just-lock.py $(DESTDIR)/$(PREFIX)/bin/just-lock
 	install -D ./bin/just-import-git.py $(DESTDIR)/$(PREFIX)/bin/just-import-git
 	install -D ./bin/just-deduplicate-repos.py $(DESTDIR)/$(PREFIX)/bin/just-deduplicate-repos
 	install -D -m 644 ./share/just_complete.bash $(DESTDIR)/$(PREFIX)/share/bash-completion/completions/justbuild
