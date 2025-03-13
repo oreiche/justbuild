@@ -45,5 +45,5 @@ tar -xvf rpmbuild/justbuild.tar.gz --strip-components=1 -C $RPM_BUILD_ROOT/usr
 
 
 %changelog
-* Thu May 23 2024 Oliver Reiche <oliver.reiche@gmail.com>
+* Thu Mar 06 2025 Oliver Reiche <oliver.reiche@gmail.com>
 - Initial release
