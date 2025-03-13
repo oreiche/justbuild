@@ -116,10 +116,6 @@
   , "distrelease": "jammy"
   , "build-depends":
     [ "clang"
-    , "protobuf-compiler"
-    , "protobuf-compiler-grpc"
-    , "libprotobuf-dev"
-    , "libgrpc++-dev"
     , "libfmt-dev"
     , "nlohmann-json3-dev"
     , "libgit2-dev"
@@ -128,13 +124,22 @@
     , "libmsgsl-dev"
     , "libarchive-dev"
     , "libcurl4-openssl-dev"
+    , "libc-ares-dev"
+    , "zlib1g-dev"
     , "python3"
     , "pandoc"
     , "patch"
     , "unzip"
     , "pkgconf"
     ]
-  , "non-local-deps": ["google_apis", "bazel_remote_apis"]
+  , "non-local-deps":
+    [ "protobuf"
+    , "com_github_grpc_grpc"
+    , "com_google_absl"
+    , "re2"
+    , "google_apis"
+    , "bazel_remote_apis"
+    ]
   , "gen-pkgconfig": [{"Name": "gsl", "Cflags": "-I/usr/include"}]
   }
 , "ubuntu22.10":
