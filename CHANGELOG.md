@@ -1,3 +1,17 @@
+## Release `1.5.1` (2025-04-01)
+
+Bug fixes on top of `1.5.0`.
+
+### Fixes
+
+- Services now write pid and info files atomically.
+- `just serve`, when requested to materialize a tree root, now fetches the tree
+  from remote execution in parallel.
+- `just-mr` now also considers computed roots (as no-op) when
+  reporting progress.
+- The built-in `"tree"` rule now correctly warns about all unsupported fields.
+- Minor documentation fixes.
+
 ## Release `1.5.0` (2025-03-06)
 
 A feature release on top of `1.4.0`, backwards compatible.
