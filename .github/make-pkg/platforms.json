@@ -194,6 +194,32 @@
   , "non-local-deps": ["google_apis", "bazel_remote_apis"]
   , "gen-pkgconfig": [{"Name": "gsl", "Cflags": "-I/usr/include"}]
   }
+, "ubuntu25.04":
+  { "type": "deb"
+  , "image": "ubuntu:25.04"
+  , "distrelease": "plucky"
+  , "build-depends":
+    [ "protobuf-compiler"
+    , "protobuf-compiler-grpc"
+    , "libprotobuf-dev"
+    , "libgrpc++-dev"
+    , "libfmt-dev"
+    , "nlohmann-json3-dev"
+    , "libgit2-dev"
+    , "libssl-dev"
+    , "libcli11-dev"
+    , "libmsgsl-dev"
+    , "libarchive-dev"
+    , "libcurl4-openssl-dev"
+    , "python3"
+    , "pandoc"
+    , "patch"
+    , "unzip"
+    , "pkgconf"
+    ]
+  , "non-local-deps": ["google_apis", "bazel_remote_apis"]
+  , "gen-pkgconfig": [{"Name": "gsl", "Cflags": "-I/usr/include"}]
+  }
 , "fedora37":
   { "type": "rpm"
   , "image": "fedora:37"
