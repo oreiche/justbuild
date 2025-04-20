@@ -112,7 +112,11 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
   echo ${NON_LOCAL_DEPS} > ${DATADIR}/non_local_deps
 
-  BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" // [] | join(",")' ${ROOTDIR}/platforms.json)
+  if [ "${PKG}" = "deb" ]; then
+    BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" // [] | join(",\\n  ")' ${ROOTDIR}/platforms.json)
+  else
+    BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" // [] | join(",")' ${ROOTDIR}/platforms.json)
+  fi
 
   if [ "${PKG}" = "deb" ]; then
     COMPAT_LEVEL=$(dpkg -s debhelper | sed -n 's/^Version:\s\+\([0-9]*\).*/\1/p')
@@ -135,7 +139,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
       sed -i 's|BUILDDIR ?= .*|BUILDDIR ?= /tmp/build|g' ./debian/justbuild.makefile
 
       # use clang if build depends on it
-      if echo ${BUILD_DEPENDS} | grep -q clang; then
+      if echo "${BUILD_DEPENDS}" | grep -q clang; then
         # set FAMILY to "clang" and specify reproducibility compile flag
         sed -i 's/{"FAMILY": "gnu"}/{"FAMILY": "clang"}/' ./debian/justbuild.makefile
         sed -i 's/\([C|CXX]FLAGS +=\)/\1 -fdebug-compilation-dir=. -gdwarf-4 -Wno-ignored-optimization-argument/' ./debian/justbuild.makefile
@@ -152,7 +156,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
     # patch control file
     sed -i 's/COMPAT_LEVEL/'${COMPAT_LEVEL}'/' ./debian/control
-    sed -i 's/BUILD_DEPENDS/'${BUILD_DEPENDS}'/' ./debian/control
+    sed -i 's/BUILD_DEPENDS/'"${BUILD_DEPENDS}"'/' ./debian/control
 
     if [ -f ./debian/upstream/metadata.ex ]; then
       # patch upstream/metadata file
@@ -188,7 +192,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
 
     # patch spec file
     sed -i 's/VERSION/'${VERSION}'/' ${HOME}/rpmbuild/SPECS/justbuild.spec
-    sed -i 's/BUILD_DEPENDS/'${BUILD_DEPENDS}'/' ${HOME}/rpmbuild/SPECS/justbuild.spec
+    sed -i 's/BUILD_DEPENDS/'"${BUILD_DEPENDS}"'/' ${HOME}/rpmbuild/SPECS/justbuild.spec
 
     # create archive
     cd ${WORKDIR}

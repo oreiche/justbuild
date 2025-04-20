@@ -2,7 +2,8 @@ Source: justbuild
 Section: devel
 Priority: optional
 Maintainer: Oliver Reiche <oliver.reiche@gmail.com>
-Build-Depends: debhelper-compat (= COMPAT_LEVEL), BUILD_DEPENDS
+Build-Depends: debhelper-compat (= COMPAT_LEVEL),
+  BUILD_DEPENDS
 Standards-Version: 4.7.2
 Homepage: https://github.com/just-buildsystem/justbuild
 Vcs-Browser: https://salsa.debian.org/debian/justbuild
