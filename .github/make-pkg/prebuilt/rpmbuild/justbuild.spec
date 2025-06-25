@@ -7,7 +7,7 @@ License:        Apache-2.0
 URL:            https://github.com/just-buildsystem/justbuild
 Source0:        justbuild-VERSION.tar.gz
 
-BuildRequires:  make, BUILD_DEPENDS
+BuildRequires:  make BUILD_DEPENDS
 Recommends:     python3, bash-completion, git >= 2.29
 
 %description

@@ -113,9 +113,9 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
   echo ${NON_LOCAL_DEPS} > ${DATADIR}/non_local_deps
 
   if [ "${PKG}" = "deb" ]; then
-    BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" // [] | join(",\\n  ")' ${ROOTDIR}/platforms.json)
+    BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" // [] | map(",\\n  " + .) | join("")' ${ROOTDIR}/platforms.json)
   else
-    BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" // [] | join(",")' ${ROOTDIR}/platforms.json)
+    BUILD_DEPENDS=$(jq -r '."'${PLF}'"."build-depends" // [] | map(", " + .) | join("")' ${ROOTDIR}/platforms.json)
   fi
 
   if [ "${PKG}" = "deb" ]; then
