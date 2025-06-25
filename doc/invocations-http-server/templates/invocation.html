@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block heading %}
+Invocation {{invocation | e}}
+{% endblock %}
+
+{% from 'macros.html' import show_action %}
+
+{% block content %}
+<h1>Invocation {{invocation | e}}</h1>
+
+<a href="/">(all invocations)</a>
+
+<h2>Overview</h2>
+<ul>
+  {% if cmd %}
+  <li> Subcommand and positional arguments: <span id="invocation-target"><tt>{{ cmd | e }}</tt></span></li>
+  {% endif %}
+  {% if cmdline %}
+  <li>
+    <details>
+      <summary>Full command line</summary>
+      <tt>{{ cmdline | e }}</tt>
+    </details>
+  </li>
+  {% endif %}
+  {% if repo_config %}
+  <li> Repository configuration:
+    <a href="/blob/{{ repo_config | e }}"><tt>{{ repo_config | e}}</tt></a>
+  </li>
+  {% endif %}
+  {% if target %}
+  <li> Target:
+    <a href="/filterinvocations/target/{{ target["value_hex"] | e }}"><tt>{{ target["value"] | e }}</tt></a>
+  </li>
+  {% endif %}
+  {% if config %}
+  <li> Target configuration: <tt>{{ config | e }}</tt></li>
+  {% endif %}
+  {% if has_remote %}
+  <li>
+    {% if is_remote %}
+    Remote build:
+    {% else %}
+    Local build:
+    {% endif %}
+    <ul>
+      <li> Address:
+        <a href="/filterinvocations/remote/address/{{ remote_address["value_hex"] | e }}"><tt>{{ remote_address["value"] | e }}</tt></a>
+      </li>
+      {% if remote_props %}
+      <li> Properties:
+        <ul>
+          {% for prop in remote_props %}
+          <li> <tt>{{ prop["key"] | e }}</tt> :
+            <a href="/filterinvocations/remote/prop/{{ prop["key_hex"] | e }}/{{ prop["value_hex"] | e }}"><tt>{{ prop["value"] | e }}</tt></a>
+          </li>
+          {% endfor %}
+        </ul>
+      </li>
+      {% endif %}
+      {% if remote_dispatch %}
+      <li> Dispatch: <tt>{{ remote_dispatch | e }}</tt></li>
+      {% endif %}
+    </ul>
+  </li>
+  {% endif %}
+  {% if context %}
+  <li> Context:
+    <ul>
+      {% for entry in context %}
+      <li> <tt>{{ entry["key"] | e }}</tt> :
+        <a href="/filterinvocations/context/{{ entry["key_hex"] | e }}/{{ entry["value_hex"] | e }}"><tt>{{ entry["value"] | e }}</tt></a>
+      </li>
+      {% endfor %}
+    </ul>
+  </li>
+  {% else %}
+  <li> Context: <i>(none)</i></li>
+  {% endif %}
+  {% if wall_clock_time %}
+  <li> Wall-clock time: <tt>{{ wall_clock_time | e }}</tt></li>
+  {% endif %}
+  {% if build_wall_clock_time %}
+  <li> Wall-clock time (build only): <tt>{{ build_wall_clock_time | e }}</tt></li>
+  {% endif %}
+  {% if exit_code != None %}
+  <li> Exit code: <tt>{{ exit_code | e }}</tt></li>
+  {% endif %}
+  {% if not fully_cached %}
+  <li> <a href="/critical_path/{{invocation | e}}">Critical path</a></li>
+  {% endif %}
+  {% if artifacts %}
+  <li>
+    {% if artifacts_count == 1 %}
+    <details open>
+      <summary open>artifact</summary>
+    {% else %}
+    <details>
+      <summary>{{ artifacts_count | e }} artifacts</summary>
+    {% endif %}
+      <ul>
+        {% for entry in artifacts %}
+        <li>
+          <a href="/{{ entry["type"] | e}}/{{ entry["hash"] | e}}">{{ entry["path"] | e}}</a>
+          {% if entry["type"] == "blob" %}
+          <a href="/blob/{{ entry["hash"] | e}}/{{ entry["basename"] | e}}">[&darr;]</a>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </details>
+  </li>
+  {% endif %}
+</ul>
+
+{% if have_profile %}
+{% if analysis_errors %}
+<h2>Analysis errors</h2>
+<ul>
+  {% for error in analysis_errors %}
+  <li> <pre>{{ error["msg"] | e}}</pre>
+    {% if error["blobs"] %}
+    Blobs:
+    {% for blob in error["blobs"] %}
+    <a href="/blob/{{ blob | e }}"><tt>{{ blob | e }}</tt></a>
+    {% endfor %}
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+{% if exit_code == 0 or exit_code == 1 or exit_code == 2 %}
+<h2>Actions</h2>
+<ul>
+  <li> Processed: <tt>{{ action_count | e }}</tt></li>
+  <li> Cached: <tt>{{ action_count_cached | e }}</tt></li>
+</ul>
+
+<h3> Failed actions ({{ failed_actions_count | e }})</h3>
+{% if failed_actions %}
+<ul>
+  {% for action in failed_actions %}
+  {{ show_action(action, loop.index == 1) }}
+  {% endfor %}
+</ul>
+{% else %}
+<i>(none)</i>
+{% endif %}
+
+<h3>Other actions with console output ({{ output_actions_count | e }})</h3>
+{% if output_actions %}
+<ul>
+  {% for action in output_actions %}
+  {{ show_action(action) }}
+  {% endfor %}
+</ul>
+{% else %}
+<i>(none)</i>
+{% endif %}
+
+
+<h3>Remaining non-cached actions ({{ non_cached_count | e}})</h3>
+{% if non_cached %}
+In order of decreasing run time.
+<ul>
+  {% for action in non_cached %}
+  {{ show_action(action) }}
+  {% endfor %}
+  {% if more_non_cached %}
+  <li> &hellip; and {{ more_non_cached | e }} actions</li>
+  {% endif %}
+</ul>
+{% else %}
+<i>(none)</i>
+{% endif %}
+{% endif %}
+{% endif %}
+{% else %}
+<b>No profiling data available; invocation data is not (yet) complete.</b>
+{% endif %}
+
+
+{% endblock %}

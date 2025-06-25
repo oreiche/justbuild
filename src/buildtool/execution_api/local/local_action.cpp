@@ -15,6 +15,7 @@
 #include "src/buildtool/execution_api/local/local_action.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <exception>
 #include <filesystem>
@@ -54,7 +55,7 @@ class BuildCleanupAnchor {
     auto operator=(BuildCleanupAnchor const&) -> BuildCleanupAnchor& = delete;
     auto operator=(BuildCleanupAnchor&&) -> BuildCleanupAnchor& = delete;
     ~BuildCleanupAnchor() {
-        if (not FileSystemManager::RemoveDirectory(build_path_, true)) {
+        if (not FileSystemManager::RemoveDirectory(build_path_)) {
             Logger::Log(LogLevel::Error,
                         "Could not cleanup build directory {}",
                         build_path_.string());
@@ -133,8 +134,11 @@ auto LocalAction::Execute(Logger const* logger) noexcept
         if (auto result =
                 local_context_.storage->ActionCache().CachedResult(*action)) {
             if (result->exit_code() == 0 and
-                ActionResultContainsExpectedOutputs(
-                    *result, output_files_, output_dirs_)) {
+                (mode_ == RequestMode::kV2_1
+                     ? ActionResultContainsExpectedOutputs(*result,
+                                                           output_paths_)
+                     : ActionResultContainsExpectedOutputs(
+                           *result, output_files_, output_dirs_))) {
                 return create_response(
                     logger,
                     action->hash(),
@@ -203,8 +207,10 @@ auto LocalAction::Run(ArtifactDigest const& action_id) const noexcept
     std::copy(cmdline_.begin(), cmdline_.end(), std::back_inserter(cmdline));
 
     SystemCommand system{"LocalExecution"};
+    auto start_time = std::chrono::system_clock::now();
     auto const exit_code =
         system.Execute(cmdline, env_vars_, build_root / cwd_, *exec_path);
+    auto end_time = std::chrono::system_clock::now();
     if (exit_code.has_value()) {
         Output result{};
         result.action.set_exit_code(*exit_code);
@@ -226,6 +232,8 @@ auto LocalAction::Run(ArtifactDigest const& action_id) const noexcept
                 }
             }
         }
+        result.duration =
+            std::chrono::duration<double>(end_time - start_time).count();
         return result;
     }
 
@@ -290,7 +298,7 @@ auto LocalAction::StageInput(
                      res.error().message());
         return false;
     }
-    TmpDirPtr new_copy_dir =
+    TmpDir::Ptr new_copy_dir =
         local_context_.storage_config->CreateTypedTmpDir("blob-copy");
     if (new_copy_dir == nullptr) {
         logger_.Emit(LogLevel::Warning,
@@ -332,7 +340,7 @@ auto LocalAction::StageInputs(
         return false;
     }
     for (std::size_t i{}; i < result->paths.size(); ++i) {
-        if (not StageInput(result->paths.at(i), result->infos.at(i), copies)) {
+        if (not StageInput(result->paths[i], result->infos[i], copies)) {
             return false;
         }
     }
@@ -342,7 +350,7 @@ auto LocalAction::StageInputs(
 auto LocalAction::CreateDirectoryStructure(
     std::filesystem::path const& exec_path) const noexcept -> bool {
     // clean execution directory
-    if (not FileSystemManager::RemoveDirectory(exec_path, true)) {
+    if (not FileSystemManager::RemoveDirectory(exec_path)) {
         logger_.Emit(LogLevel::Error, "failed to clean exec_path");
         return false;
     }
@@ -371,6 +379,16 @@ auto LocalAction::CreateDirectoryStructure(
         }
         return true;
     };
+
+    if (mode_ == RequestMode::kV2_1) {
+        return std::all_of(
+            output_paths_.begin(),
+            output_paths_.end(),
+            [this, &exec_path, &create_dir](auto const& local_path) {
+                auto dir = (exec_path / cwd_ / local_path).parent_path();
+                return create_dir(dir);
+            });
+    }
     return std::all_of(output_files_.begin(),
                        output_files_.end(),
                        [this, &exec_path, &create_dir](auto const& local_path) {
@@ -393,7 +411,7 @@ auto LocalAction::CollectOutputFileOrSymlink(
     auto file_path = exec_path / local_path;
     auto type = FileSystemManager::Type(file_path, /*allow_upwards=*/true);
     if (not type) {
-        Logger::Log(LogLevel::Error, "expected known type at {}", local_path);
+        logger_.Emit(LogLevel::Error, "expected known type at {}", local_path);
         return std::nullopt;
     }
     if (IsSymlinkObject(*type)) {
@@ -402,7 +420,7 @@ auto LocalAction::CollectOutputFileOrSymlink(
             if (ProtocolTraits::IsNative(
                     local_context_.storage->GetHashFunction().GetType()) and
                 not PathIsNonUpwards(*content)) {
-                Logger::Log(
+                logger_.Emit(
                     LogLevel::Error, "found invalid symlink at {}", local_path);
                 return std::nullopt;
             }
@@ -428,7 +446,7 @@ auto LocalAction::CollectOutputFileOrSymlink(
         }
     }
     else {
-        Logger::Log(
+        logger_.Emit(
             LogLevel::Error, "expected file or symlink at {}", local_path);
     }
     return std::nullopt;
@@ -441,7 +459,7 @@ auto LocalAction::CollectOutputDirOrSymlink(
     auto dir_path = exec_path / local_path;
     auto type = FileSystemManager::Type(dir_path, /*allow_upwards=*/true);
     if (not type) {
-        Logger::Log(LogLevel::Error, "expected known type at {}", local_path);
+        logger_.Emit(LogLevel::Error, "expected known type at {}", local_path);
         return std::nullopt;
     }
     if (IsSymlinkObject(*type)) {
@@ -450,7 +468,7 @@ auto LocalAction::CollectOutputDirOrSymlink(
             if (ProtocolTraits::IsNative(
                     local_context_.storage->GetHashFunction().GetType()) and
                 not PathIsNonUpwards(*content)) {
-                Logger::Log(
+                logger_.Emit(
                     LogLevel::Error, "found invalid symlink at {}", local_path);
                 return std::nullopt;
             }
@@ -471,13 +489,74 @@ auto LocalAction::CollectOutputDirOrSymlink(
                 ArtifactDigestFactory::ToBazel(*digest);
             return out_dir;
         }
-        Logger::Log(LogLevel::Error,
-                    "found invalid entries in directory at {}",
-                    local_path);
+        logger_.Emit(LogLevel::Error,
+                     "found invalid entries in directory at {}",
+                     local_path);
     }
     else {
-        Logger::Log(
+        logger_.Emit(
             LogLevel::Error, "expected directory or symlink at {}", local_path);
+    }
+    return std::nullopt;
+}
+
+auto LocalAction::CollectOutputPath(
+    std::filesystem::path const& exec_path,
+    std::string const& local_path) const noexcept -> std::optional<OutputPath> {
+    auto out_path = exec_path / local_path;
+    auto type = FileSystemManager::Type(out_path, /*allow_upwards=*/true);
+    if (not type) {
+        logger_.Emit(LogLevel::Error, "expected known type at {}", local_path);
+        return std::nullopt;
+    }
+    if (IsSymlinkObject(*type)) {
+        if (auto content = FileSystemManager::ReadSymlink(out_path)) {
+            // in native mode: check validity of symlink
+            if (ProtocolTraits::IsNative(
+                    local_context_.storage->GetHashFunction().GetType()) and
+                not PathIsNonUpwards(*content)) {
+                logger_.Emit(
+                    LogLevel::Error, "found invalid symlink at {}", local_path);
+                return std::nullopt;
+            }
+            if (local_context_.storage->CAS().StoreBlob(*content)) {
+                auto out_symlink = bazel_re::OutputSymlink{};
+                out_symlink.set_path(local_path);
+                out_symlink.set_target(*content);
+                return out_symlink;
+            }
+        }
+    }
+    else if (IsFileObject(*type)) {
+        bool is_executable = IsExecutableObject(*type);
+        auto digest = local_context_.storage->CAS().StoreBlob</*kOwner=*/true>(
+            out_path, is_executable);
+        if (digest) {
+            auto out_file = bazel_re::OutputFile{};
+            out_file.set_path(local_path);
+            *out_file.mutable_digest() =
+                ArtifactDigestFactory::ToBazel(*digest);
+            out_file.set_is_executable(is_executable);
+            return out_file;
+        }
+    }
+    else if (IsTreeObject(*type)) {
+        if (auto digest = CreateDigestFromLocalOwnedTree(
+                *local_context_.storage, out_path)) {
+            auto out_dir = bazel_re::OutputDirectory{};
+            out_dir.set_path(local_path);
+            (*out_dir.mutable_tree_digest()) =
+                ArtifactDigestFactory::ToBazel(*digest);
+            return out_dir;
+        }
+        logger_.Emit(LogLevel::Error,
+                     "found invalid entries in directory at {}",
+                     local_path);
+    }
+    else {
+        logger_.Emit(LogLevel::Error,
+                     "expected file, directory, or symlink at {}",
+                     local_path);
     }
     return std::nullopt;
 }
@@ -487,6 +566,43 @@ auto LocalAction::CollectAndStoreOutputs(
     std::filesystem::path const& exec_path) const noexcept -> bool {
     try {
         logger_.Emit(LogLevel::Trace, "collecting outputs:");
+        if (mode_ == RequestMode::kV2_1) {
+            for (auto const& path : output_paths_) {
+                auto out = CollectOutputPath(exec_path, path);
+                if (not out) {
+                    logger_.Emit(LogLevel::Error,
+                                 "could not collect output path {}",
+                                 path);
+                    return false;
+                }
+                if (std::holds_alternative<bazel_re::OutputSymlink>(*out)) {
+                    auto out_symlink = std::get<bazel_re::OutputSymlink>(*out);
+                    logger_.Emit(LogLevel::Trace,
+                                 " - symlink {}: {}",
+                                 path,
+                                 out_symlink.target());
+                    result->mutable_output_symlinks()->Add(
+                        std::move(out_symlink));
+                }
+                else if (std::holds_alternative<bazel_re::OutputFile>(*out)) {
+                    auto out_file = std::get<bazel_re::OutputFile>(*out);
+                    auto const& digest = out_file.digest().hash();
+                    logger_.Emit(
+                        LogLevel::Trace, " - file {}: {}", path, digest);
+                    result->mutable_output_files()->Add(std::move(out_file));
+                }
+                else {
+                    auto out_dir = std::get<bazel_re::OutputDirectory>(*out);
+                    auto const& digest = out_dir.tree_digest().hash();
+                    logger_.Emit(
+                        LogLevel::Trace, " - dir {}: {}", path, digest);
+                    result->mutable_output_directories()->Add(
+                        std::move(out_dir));
+                }
+            }
+            return true;
+        }
+        // if mode_ is RequestMode::kV2_0 or RequestMode::kBestEffort
         for (auto const& path : output_files_) {
             auto out = CollectOutputFileOrSymlink(exec_path, path);
             if (not out) {
@@ -501,6 +617,9 @@ auto LocalAction::CollectAndStoreOutputs(
                              " - symlink {}: {}",
                              path,
                              out_symlink.target());
+                if (mode_ == RequestMode::kBestEffort) {
+                    *result->mutable_output_symlinks()->Add() = out_symlink;
+                }
                 result->mutable_output_file_symlinks()->Add(
                     std::move(out_symlink));
             }
@@ -525,7 +644,10 @@ auto LocalAction::CollectAndStoreOutputs(
                              " - symlink {}: {}",
                              path,
                              out_symlink.target());
-                result->mutable_output_file_symlinks()->Add(
+                if (mode_ == RequestMode::kBestEffort) {
+                    *result->mutable_output_symlinks()->Add() = out_symlink;
+                }
+                result->mutable_output_directory_symlinks()->Add(
                     std::move(out_symlink));
             }
             else {

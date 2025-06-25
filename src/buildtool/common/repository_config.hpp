@@ -34,12 +34,13 @@
 #include "src/buildtool/file_system/precomputed_root.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/multithreading/atomic_value.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
 
 class RepositoryConfig {
 
   public:
-    struct RepositoryInfo {
+    struct RepositoryInfo {  // NOLINT(bugprone-exception-escape)
         FileRoot workspace_root;
         FileRoot target_root{workspace_root};
         FileRoot rule_root{target_root};
@@ -64,7 +65,9 @@ class RepositoryConfig {
 
     [[nodiscard]] auto SetGitCAS(
         std::filesystem::path const& repo_path,
+        gsl::not_null<StorageConfig const*> const& storage_config,
         LogLevel log_level = LogLevel::Warning) noexcept -> bool {
+        storage_config_ = storage_config;
         git_cas_ = GitCAS::Open(repo_path, log_level);
         return static_cast<bool>(git_cas_);
     }
@@ -84,17 +87,18 @@ class RepositoryConfig {
 
     [[nodiscard]] auto ReadBlobFromGitCAS(
         std::string const& hex_id,
+        bool is_symlink,
         LogLevel log_failure = LogLevel::Warning) const noexcept
         -> std::optional<std::string> {
-        return git_cas_ ? git_cas_->ReadObject(
-                              hex_id, /*is_hex_id=*/true, log_failure)
+        return git_cas_ ? git_cas_->ReadObject(hex_id,
+                                               /*is_hex_id=*/true,
+                                               /*as_valid_symlink=*/is_symlink,
+                                               log_failure)
                         : std::nullopt;
     }
 
     [[nodiscard]] auto ReadTreeFromGitCAS(
-        std::string const& hex_id) const noexcept -> std::optional<GitTree> {
-        return git_cas_ ? GitTree::Read(git_cas_, hex_id) : std::nullopt;
-    }
+        std::string const& hex_id) const noexcept -> std::optional<GitTree>;
 
     [[nodiscard]] auto WorkspaceRoot(std::string const& repo) const noexcept
         -> FileRoot const* {
@@ -179,6 +183,7 @@ class RepositoryConfig {
 
     std::unordered_map<std::string, RepositoryData> repos_;
     GitCASPtr git_cas_;
+    StorageConfig const* storage_config_ = nullptr;
     AtomicValue<duplicates_t> duplicates_;
 
     template <class T>

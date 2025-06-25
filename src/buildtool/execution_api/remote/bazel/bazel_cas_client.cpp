@@ -220,10 +220,12 @@ BazelCasClient::BazelCasClient(
     Port port,
     gsl::not_null<Auth const*> const& auth,
     gsl::not_null<RetryConfig const*> const& retry_config,
-    gsl::not_null<BazelCapabilitiesClient const*> const& capabilities) noexcept
+    gsl::not_null<BazelCapabilitiesClient const*> const& capabilities,
+    TmpDir::Ptr temp_space) noexcept
     : stream_{std::make_unique<ByteStreamClient>(server, port, auth)},
       retry_config_{*retry_config},
-      capabilities_{*capabilities} {
+      capabilities_{*capabilities},
+      temp_space_{std::move(temp_space)} {
     stub_ = bazel_re::ContentAddressableStorage::NewStub(
         CreateChannelWithCredentials(server, port, auth));
 }
@@ -299,7 +301,7 @@ auto BazelCasClient::BatchReadBlobs(
                             bazel_re::BatchReadBlobsResponse_Response,
                             bazel_re::BatchReadBlobsResponse>(
                             response,
-                            [&back_map](
+                            [this, &back_map](
                                 std::vector<ArtifactBlob>* v,
                                 bazel_re::BatchReadBlobsResponse_Response const&
                                     r) {
@@ -307,10 +309,11 @@ auto BazelCasClient::BatchReadBlobs(
                                 if (not ref.has_value()) {
                                     return;
                                 }
-                                auto blob = ArtifactBlob::FromMemory(
+                                auto blob = ArtifactBlob::FromTempFile(
                                     HashFunction{ref.value()->GetHashType()},
                                     ref.value()->IsTree() ? ObjectType::Tree
                                                           : ObjectType::File,
+                                    temp_space_,
                                     r.data());
                                 if (not blob.has_value()) {
                                     return;
@@ -348,42 +351,6 @@ auto BazelCasClient::BatchReadBlobs(
     return result;
 }
 
-auto BazelCasClient::GetTree(std::string const& instance_name,
-                             bazel_re::Digest const& root_digest,
-                             std::int32_t page_size,
-                             std::string const& page_token) const noexcept
-    -> std::vector<bazel_re::Directory> {
-    auto request =
-        CreateGetTreeRequest(instance_name, root_digest, page_size, page_token);
-
-    grpc::ClientContext context;
-    bazel_re::GetTreeResponse response;
-    auto stream = stub_->GetTree(&context, request);
-
-    std::vector<bazel_re::Directory> result;
-    while (stream->Read(&response)) {
-        std::move(response.mutable_directories()->begin(),
-                  response.mutable_directories()->end(),
-                  std::back_inserter(result));
-        auto const& next_page_token = response.next_page_token();
-        if (not next_page_token.empty()) {
-            // recursively call this function with token for next page
-            auto next_result =
-                GetTree(instance_name, root_digest, page_size, next_page_token);
-            std::move(next_result.begin(),
-                      next_result.end(),
-                      std::back_inserter(result));
-        }
-    }
-
-    auto status = stream->Finish();
-    if (not status.ok()) {
-        LogStatus(&logger_, LogLevel::Error, status);
-    }
-
-    return result;
-}
-
 auto BazelCasClient::UpdateSingleBlob(std::string const& instance_name,
                                       ArtifactBlob const& blob) const noexcept
     -> bool {
@@ -413,7 +380,7 @@ auto BazelCasClient::IncrementalReadSingleBlob(std::string const& instance_name,
 auto BazelCasClient::ReadSingleBlob(std::string const& instance_name,
                                     ArtifactDigest const& digest) const noexcept
     -> std::optional<ArtifactBlob> {
-    return stream_->Read(instance_name, digest);
+    return stream_->Read(instance_name, digest, temp_space_);
 }
 
 auto BazelCasClient::SplitBlob(HashFunction hash_function,

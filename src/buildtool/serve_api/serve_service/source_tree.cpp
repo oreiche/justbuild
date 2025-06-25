@@ -232,6 +232,8 @@ auto SourceTreeService::ServeCommitTree(
     ::grpc::ServerContext* /* context */,
     const ::justbuild::just_serve::ServeCommitTreeRequest* request,
     ServeCommitTreeResponse* response) -> ::grpc::Status {
+    logger_->Emit(
+        LogLevel::Debug, "ServeCommitTree({}, ...)", request->commit());
     // get lock for Git cache
     auto repo_lock = RepositoryGarbageCollector::SharedLock(
         *native_context_->storage_config);
@@ -368,7 +370,7 @@ auto SourceTreeService::SyncGitEntryToCas(
     }
 
     auto repo = RepositoryConfig{};
-    if (not repo.SetGitCAS(repo_path)) {
+    if (not repo.SetGitCAS(repo_path, native_context_->storage_config)) {
         logger_->Emit(
             LogLevel::Error, "Failed to SetGitCAS at {}", repo_path.string());
         return TResponse::INTERNAL_ERROR;
@@ -691,6 +693,8 @@ auto SourceTreeService::ServeArchiveTree(
     ::grpc::ServerContext* /* context */,
     const ::justbuild::just_serve::ServeArchiveTreeRequest* request,
     ServeArchiveTreeResponse* response) -> ::grpc::Status {
+    logger_->Emit(
+        LogLevel::Debug, "ServeArchiveTree({}, ...)", request->content());
     // get gc lock for Git cache
     auto repo_lock = RepositoryGarbageCollector::SharedLock(
         *native_context_->storage_config);
@@ -985,6 +989,7 @@ auto SourceTreeService::ServeDistdirTree(
     ::grpc::ServerContext* /* context */,
     const ::justbuild::just_serve::ServeDistdirTreeRequest* request,
     ServeDistdirTreeResponse* response) -> ::grpc::Status {
+    logger_->Emit(LogLevel::Debug, "ServeDistdirTree(...)");
     // get gc lock for Git cache
     auto repo_lock = RepositoryGarbageCollector::SharedLock(
         *native_context_->storage_config);
@@ -1248,6 +1253,7 @@ auto SourceTreeService::ServeContent(
     const ::justbuild::just_serve::ServeContentRequest* request,
     ServeContentResponse* response) -> ::grpc::Status {
     auto const& content{request->content()};
+    logger_->Emit(LogLevel::Debug, "ServeContent({})", content);
     // get gc lock for Git cache
     auto repo_lock = RepositoryGarbageCollector::SharedLock(
         *native_context_->storage_config);
@@ -1465,6 +1471,7 @@ auto SourceTreeService::CheckRootTree(
     const ::justbuild::just_serve::CheckRootTreeRequest* request,
     CheckRootTreeResponse* response) -> ::grpc::Status {
     auto const& tree_id{request->tree()};
+    logger_->Emit(LogLevel::Debug, "CheckRootTree({})", tree_id);
     // get gc lock for Git cache
     auto repo_lock = RepositoryGarbageCollector::SharedLock(
         *native_context_->storage_config);
@@ -1595,6 +1602,8 @@ auto SourceTreeService::GetRemoteTree(
     ::grpc::ServerContext* /* context */,
     const ::justbuild::just_serve::GetRemoteTreeRequest* request,
     GetRemoteTreeResponse* response) -> ::grpc::Status {
+    logger_->Emit(
+        LogLevel::Debug, "GetRemoteTree({})", request->digest().hash());
     // get gc lock for Git cache
     auto repo_lock = RepositoryGarbageCollector::SharedLock(
         *native_context_->storage_config);
@@ -1637,13 +1646,25 @@ auto SourceTreeService::GetRemoteTree(
         response->set_status(GetRemoteTreeResponse::INTERNAL_ERROR);
         return ::grpc::Status::OK;
     }
-    if (not apis_.remote->RetrieveToPaths(
+    if (not apis_.remote->ParallelRetrieveToCas(
             {Artifact::ObjectInfo{.digest = *remote_digest,
                                   .type = ObjectType::Tree}},
-            {tmp_dir->GetPath()},
-            &(*apis_.local))) {
+            *apis_.local,
+            serve_config_.jobs,
+            true)) {
+        logger_->Emit(
+            LogLevel::Error,
+            "Failed to parallel retrieve tree {} from remote CAS to local CAS",
+            remote_digest->hash());
+        response->set_status(GetRemoteTreeResponse::FAILED_PRECONDITION);
+        return ::grpc::Status::OK;
+    }
+    if (not apis_.local->RetrieveToPaths(
+            {Artifact::ObjectInfo{.digest = *remote_digest,
+                                  .type = ObjectType::Tree}},
+            {tmp_dir->GetPath()})) {
         logger_->Emit(LogLevel::Error,
-                      "Failed to retrieve tree {} from remote CAS",
+                      "Failed to install tree {} from local CAS",
                       remote_digest->hash());
         response->set_status(GetRemoteTreeResponse::FAILED_PRECONDITION);
         return ::grpc::Status::OK;
@@ -1674,6 +1695,7 @@ auto SourceTreeService::ComputeTreeStructure(
     ::grpc::ServerContext* /*context*/,
     const ::justbuild::just_serve::ComputeTreeStructureRequest* request,
     ComputeTreeStructureResponse* response) -> ::grpc::Status {
+    logger_->Emit(LogLevel::Debug, "GetTreeStructure({})", request->tree());
     auto repo_lock = RepositoryGarbageCollector::SharedLock(
         *native_context_->storage_config);
     if (not repo_lock) {

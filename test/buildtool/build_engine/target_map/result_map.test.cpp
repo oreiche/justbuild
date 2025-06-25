@@ -37,6 +37,7 @@
 #include "src/buildtool/common/action_description.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/common/tree.hpp"
+#include "src/buildtool/common/tree_overlay.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/progress_reporting/progress.hpp"
 
@@ -60,6 +61,7 @@ namespace {
         descs,
         blobs,
         std::vector<Tree::Ptr>(),
+        std::vector<TreeOverlay::Ptr>(),
         std::unordered_set<std::string>{},
         std::set<std::string>{},
         std::set<std::string>{},
@@ -81,7 +83,7 @@ TEST_CASE("empty map", "[result_map]") {
           R"({"actions": {}, "blobs": [], "trees": {}})"_json);
 
     auto filename = (GetTestDir() / "test_empty.graph").string();
-    map.ToFile(filename, &stats, &progress);
+    map.ToFile({std::filesystem::path(filename)}, &stats, &progress);
     std::ifstream file(filename);
     nlohmann::json from_file{};
     file >> from_file;
@@ -146,7 +148,7 @@ TEST_CASE("origins creation", "[result_map]") {
         0}])"_json;
 
     auto filename = (GetTestDir() / "test_with_origins.graph").string();
-    map.ToFile(filename, &stats, &progress);
+    map.ToFile({std::filesystem::path(filename)}, &stats, &progress);
     std::ifstream file(filename);
     nlohmann::json from_file{};
     file >> from_file;
@@ -182,7 +184,8 @@ TEST_CASE("blobs uniqueness", "[result_map]") {
                          {"trees", nlohmann::json::object()}});
 
     auto filename = (GetTestDir() / "test_unique_blobs.graph").string();
-    map.ToFile</*kIncludeOrigins=*/false>(filename, &stats, &progress);
+    map.ToFile</*kIncludeOrigins=*/false>(
+        {std::filesystem::path(filename)}, &stats, &progress);
     std::ifstream file(filename);
     nlohmann::json from_file{};
     file >> from_file;

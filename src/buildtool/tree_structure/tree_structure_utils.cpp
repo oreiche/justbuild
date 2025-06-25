@@ -14,7 +14,6 @@
 
 #include "src/buildtool/tree_structure/tree_structure_utils.hpp"
 
-#include <algorithm>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -38,7 +37,6 @@
 #include "src/buildtool/file_system/git_repo.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/utils/cpp/hex_string.hpp"
-#include "src/utils/cpp/path.hpp"
 #include "src/utils/cpp/tmp_dir.hpp"
 
 auto TreeStructureUtils::Compute(ArtifactDigest const& tree,
@@ -65,22 +63,9 @@ auto TreeStructureUtils::Compute(ArtifactDigest const& tree,
             fmt::format("Failed to read content of: {}", tree.hash())};
     }
 
-    auto const check_symlinks =
-        [&storage](std::vector<ArtifactDigest> const& ids) {
-            return std::all_of(
-                ids.begin(), ids.end(), [&storage](auto const& id) -> bool {
-                    auto path_to_symlink =
-                        storage.CAS().BlobPath(id, /*is_executable=*/false);
-                    if (not path_to_symlink) {
-                        return false;
-                    }
-                    auto const content =
-                        FileSystemManager::ReadFile(*path_to_symlink);
-                    return content and PathIsNonUpwards(*content);
-                });
-        };
+    auto skip_symlinks = [](auto const& /*unused*/) { return true; };
     auto const entries = GitRepo::ReadTreeData(
-        *tree_content, tree.hash(), check_symlinks, /*is_hex_id=*/true);
+        *tree_content, tree.hash(), skip_symlinks, /*is_hex_id=*/true);
     if (not entries) {
         return unexpected{
             fmt::format("Failed to parse git tree: {}", tree.hash())};
@@ -208,6 +193,7 @@ auto TreeStructureUtils::ImportToGit(
 auto TreeStructureUtils::ExportFromGit(
     ArtifactDigest const& tree,
     std::vector<std::filesystem::path> const& source_repos,
+    StorageConfig const& storage_config,
     IExecutionApi const& target_api) noexcept -> expected<bool, std::string> {
     if (not tree.IsTree() or not ProtocolTraits::IsNative(tree.GetHashType())) {
         return unexpected{fmt::format("Not a git tree: {}", tree.hash())};
@@ -231,7 +217,7 @@ auto TreeStructureUtils::ExportFromGit(
     }
 
     RepositoryConfig repo_config{};
-    if (not repo_config.SetGitCAS(*repo)) {
+    if (not repo_config.SetGitCAS(*repo, &storage_config)) {
         return unexpected{
             fmt::format("Failed to set git cas at {}", repo->string())};
     }
@@ -276,7 +262,8 @@ auto TreeStructureUtils::ComputeStructureLocally(
 
     // If the tree is not in the storage, it must be present in git:
     if (not storage.CAS().TreePath(tree).has_value()) {
-        auto in_cas = ExportFromGit(tree, known_repositories, local_api);
+        auto in_cas =
+            ExportFromGit(tree, known_repositories, storage_config, local_api);
         if (not in_cas.has_value()) {
             return unexpected{
                 fmt::format("While exporting {} from git to CAS:\n{}",

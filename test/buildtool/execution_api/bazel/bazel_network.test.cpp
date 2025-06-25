@@ -36,8 +36,9 @@
 #include "src/buildtool/execution_api/remote/bazel/bazel_network_reader.hpp"
 #include "src/buildtool/execution_api/remote/config.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
+#include "src/buildtool/storage/config.hpp"
 #include "src/utils/cpp/expected.hpp"
-#include "test/utils/hermeticity/test_hash_function_type.hpp"
+#include "test/utils/hermeticity/test_storage_config.hpp"
 #include "test/utils/remote_execution/test_auth_config.hpp"
 #include "test/utils/remote_execution/test_remote_config.hpp"
 
@@ -45,6 +46,8 @@ constexpr std::size_t kLargeSize = GRPC_DEFAULT_MAX_RECV_MESSAGE_LENGTH + 1;
 
 TEST_CASE("Bazel network: write/read blobs", "[execution_api]") {
     std::string instance_name{"remote-execution"};
+
+    auto const storage_config = TestStorageConfig::Create();
 
     auto auth_config = TestAuthConfig::ReadFromEnvironment();
     REQUIRE(auth_config);
@@ -55,15 +58,17 @@ TEST_CASE("Bazel network: write/read blobs", "[execution_api]") {
 
     RetryConfig retry_config{};  // default retry config
 
-    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
+    HashFunction const hash_function = storage_config.Get().hash_function;
 
-    auto network = BazelNetwork{instance_name,
-                                remote_config->remote_address->host,
-                                remote_config->remote_address->port,
-                                &*auth_config,
-                                &retry_config,
-                                {},
-                                hash_function};
+    auto network =
+        BazelNetwork{instance_name,
+                     remote_config->remote_address->host,
+                     remote_config->remote_address->port,
+                     &*auth_config,
+                     &retry_config,
+                     {},
+                     hash_function,
+                     storage_config.Get().CreateTypedTmpDir("test_space")};
 
     std::string content_foo("foo");
     std::string content_bar("bar");
@@ -83,16 +88,13 @@ TEST_CASE("Bazel network: write/read blobs", "[execution_api]") {
     REQUIRE(network.UploadBlobs({*foo, *bar, *baz}));
 
     // Read blobs in order
-    auto reader = network.CreateReader();
     std::vector<ArtifactDigest> to_read{foo->GetDigest(),
                                         bar->GetDigest(),
                                         baz->GetDigest(),
                                         bar->GetDigest(),
                                         foo->GetDigest()};
-    std::vector<ArtifactBlob> blobs{};
-    for (auto next : reader.ReadIncrementally(&to_read)) {
-        blobs.insert(blobs.end(), next.begin(), next.end());
-    }
+    std::vector<ArtifactBlob> const blobs =
+        network.CreateReader().ReadOrdered(to_read);
 
     // Check order maintained
     REQUIRE(blobs.size() == 5);
@@ -107,7 +109,8 @@ TEST_CASE("Bazel network: write/read blobs", "[execution_api]") {
 }
 
 TEST_CASE("Bazel network: read blobs with unknown size", "[execution_api]") {
-    HashFunction const hash_function{TestHashType::ReadFromEnvironment()};
+    auto const storage_config = TestStorageConfig::Create();
+    HashFunction const hash_function = storage_config.Get().hash_function;
     if (not ProtocolTraits::IsNative(hash_function.GetType())) {
         // only supported in native mode
         return;
@@ -124,13 +127,15 @@ TEST_CASE("Bazel network: read blobs with unknown size", "[execution_api]") {
 
     RetryConfig retry_config{};  // default retry config
 
-    auto network = BazelNetwork{instance_name,
-                                remote_config->remote_address->host,
-                                remote_config->remote_address->port,
-                                &*auth_config,
-                                &retry_config,
-                                {},
-                                hash_function};
+    auto network =
+        BazelNetwork{instance_name,
+                     remote_config->remote_address->host,
+                     remote_config->remote_address->port,
+                     &*auth_config,
+                     &retry_config,
+                     {},
+                     hash_function,
+                     storage_config.Get().CreateTypedTmpDir("test_space")};
 
     std::string content_foo("foo");
     std::string content_bar(kLargeSize, 'x');  // single larger blob
@@ -155,12 +160,8 @@ TEST_CASE("Bazel network: read blobs with unknown size", "[execution_api]") {
         /*size_unknown=*/0};
 
     // Read blobs
-    auto reader = network.CreateReader();
-    std::vector<ArtifactDigest> to_read{foo_digest, bar_digest};
-    std::vector<ArtifactBlob> blobs{};
-    for (auto next : reader.ReadIncrementally(&to_read)) {
-        blobs.insert(blobs.end(), next.begin(), next.end());
-    }
+    std::vector<ArtifactBlob> const blobs =
+        network.CreateReader().ReadOrdered({foo_digest, bar_digest});
 
     // Check order maintained
     REQUIRE(blobs.size() == 2);

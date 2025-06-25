@@ -197,7 +197,7 @@ auto TargetService::CreateRemoteExecutionConfig(
     auto res = GetDispatchList(*dispatch_info_digest);
     if (not res) {
         auto err = std::move(res).error();
-        logger_->Emit(LogLevel::Error, "{}", err.error_message());
+        logger_->Emit(LogLevel::Info, "{}", err.error_message());
         return unexpected{std::move(err)};
     }
     // the remote and cache addresses are kept from the stored ApiBundle
@@ -221,6 +221,8 @@ auto TargetService::ServeTarget(
         return ::grpc::Status{::grpc::StatusCode::INVALID_ARGUMENT,
                               target_cache_key_digest.error()};
     }
+    logger_->Emit(
+        LogLevel::Debug, "ServeTarget({})", target_cache_key_digest->hash());
 
     // acquire locks
     auto repo_lock =
@@ -330,7 +332,7 @@ auto TargetService::ServeTarget(
         auto msg = fmt::format("Parsing TargetCacheKey {} failed with:\n{}",
                                target_cache_key_digest->hash(),
                                ex.what());
-        logger_->Emit(LogLevel::Error, "{}", msg);
+        logger_->Emit(LogLevel::Warning, "{}", msg);
         return ::grpc::Status{::grpc::StatusCode::INTERNAL, msg};
     }
     if (not target_description_dict.IsNotNull() or
@@ -339,7 +341,7 @@ auto TargetService::ServeTarget(
             fmt::format("TargetCacheKey {} should contain a map, but found {}",
                         target_cache_key_digest->hash(),
                         target_description_dict.ToJson().dump());
-        logger_->Emit(LogLevel::Error, "{}", msg);
+        logger_->Emit(LogLevel::Warning, "{}", msg);
         return ::grpc::Status{::grpc::StatusCode::NOT_FOUND, msg};
     }
 
@@ -355,7 +357,7 @@ auto TargetService::ServeTarget(
                 fmt::format("TargetCacheKey {} does not contain key \"{}\"",
                             target_cache_key_digest->hash(),
                             key);
-            logger_->Emit(LogLevel::Error, "{}", error_msg);
+            logger_->Emit(LogLevel::Warning, "{}", error_msg);
             return false;
         }
         return true;
@@ -375,7 +377,7 @@ auto TargetService::ServeTarget(
             "found {}",
             target_cache_key_digest->hash(),
             repo_key.ToJson().dump());
-        logger_->Emit(LogLevel::Error, "{}", msg);
+        logger_->Emit(LogLevel::Warning, "{}", msg);
         return ::grpc::Status{::grpc::StatusCode::NOT_FOUND, msg};
     }
     auto const repo_key_dgst =
@@ -414,12 +416,12 @@ auto TargetService::ServeTarget(
     RepositoryConfig repository_config{};
     std::string const main_repo{"0"};  // known predefined main repository name
     if (auto msg = DetermineRoots(serve_config_,
-                                  *local_context_.storage_config,
+                                  local_context_.storage_config,
                                   main_repo,
                                   *repo_config_path,
                                   &repository_config,
                                   logger_)) {
-        logger_->Emit(LogLevel::Error, "{}", *msg);
+        logger_->Emit(LogLevel::Info, "{}", *msg);
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, *msg};
     }
 
@@ -432,7 +434,7 @@ auto TargetService::ServeTarget(
             " found {}",
             target_cache_key_digest->hash(),
             target_expr.ToJson().dump());
-        logger_->Emit(LogLevel::Error, "{}", msg);
+        logger_->Emit(LogLevel::Warning, "{}", msg);
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
     }
     auto target_name = nlohmann::json::object();
@@ -443,7 +445,7 @@ auto TargetService::ServeTarget(
             "TargetCacheKey {}: parsing \"target_name\" failed with:\n{}",
             target_cache_key_digest->hash(),
             ex.what());
-        logger_->Emit(LogLevel::Error, "{}", msg);
+        logger_->Emit(LogLevel::Warning, "{}", msg);
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
     }
 
@@ -456,7 +458,7 @@ auto TargetService::ServeTarget(
             " but found {}",
             target_cache_key_digest->hash(),
             config_expr.ToJson().dump());
-        logger_->Emit(LogLevel::Error, "{}", msg);
+        logger_->Emit(LogLevel::Warning, "{}", msg);
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
     }
     Configuration config{};
@@ -468,7 +470,7 @@ auto TargetService::ServeTarget(
             "TargetCacheKey {}: parsing \"effective_config\" failed with:\n{}",
             target_cache_key_digest->hash(),
             ex.what());
-        logger_->Emit(LogLevel::Error, "{}", msg);
+        logger_->Emit(LogLevel::Warning, "{}", msg);
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION, msg};
     }
 
@@ -484,7 +486,7 @@ auto TargetService::ServeTarget(
                                     parse_err);
         });
     if (not entity) {
-        logger_->Emit(LogLevel::Error, "{}", error_msg);
+        logger_->Emit(LogLevel::Warning, "{}", error_msg);
         return ::grpc::Status{::grpc::StatusCode::FAILED_PRECONDITION,
                               error_msg};
     }
@@ -558,7 +560,8 @@ auto TargetService::ServeTarget(
                                             .apis = &local_apis,
                                             .remote_context = &dispatch_context,
                                             .statistics = &stats,
-                                            .progress = &progress};
+                                            .progress = &progress,
+                                            .profile = std::nullopt};
 
         GraphTraverser const traverser{
             std::move(traverser_args),
@@ -571,7 +574,7 @@ auto TargetService::ServeTarget(
             ReadOutputArtifacts(analyse_result->target);
 
         // get the analyse_result map outputs
-        auto [actions, blobs, trees] =
+        auto [actions, blobs, trees, tree_overlays] =
             analyse_result->result_map.ToResult(&stats, &progress, &logger);
 
         // collect cache targets and artifacts for target-level caching
@@ -590,6 +593,7 @@ auto TargetService::ServeTarget(
                                                     std::move(actions),
                                                     std::move(blobs),
                                                     std::move(trees),
+                                                    std::move(tree_overlays),
                                                     std::move(cache_artifacts));
 
         if (not build_result) {
@@ -671,6 +675,7 @@ auto TargetService::ServeTargetVariables(
     auto const& root_tree{request->root_tree()};
     auto const& target_file{request->target_file()};
     auto const& target{request->target()};
+    logger_->Emit(LogLevel::Debug, "ServeTargetVariables({}, ...)", root_tree);
     // retrieve content of target file
     std::optional<std::string> target_file_content{std::nullopt};
     bool tree_found{false};
@@ -827,6 +832,8 @@ auto TargetService::ServeTargetDescription(
     auto const& root_tree{request->root_tree()};
     auto const& target_file{request->target_file()};
     auto const& target{request->target()};
+    logger_->Emit(
+        LogLevel::Debug, "ServeTargetDescription({}, ...)", root_tree);
     // retrieve content of target file
     std::optional<std::string> target_file_content{std::nullopt};
     bool tree_found{false};

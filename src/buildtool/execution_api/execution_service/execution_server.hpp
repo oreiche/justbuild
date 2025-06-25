@@ -26,20 +26,21 @@
 #include "gsl/gsl"
 #include "src/buildtool/common/bazel_types.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
-#include "src/buildtool/execution_api/common/execution_api.hpp"
-#include "src/buildtool/execution_api/common/execution_response.hpp"
 #include "src/buildtool/execution_api/execution_service/operation_cache.hpp"
 #include "src/buildtool/execution_api/local/context.hpp"
+#include "src/buildtool/execution_api/local/local_api.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/storage/config.hpp"
 #include "src/buildtool/storage/storage.hpp"
 #include "src/utils/cpp/expected.hpp"
 
+class LocalResponse;
+
 class ExecutionServiceImpl final : public bazel_re::Execution::Service {
   public:
     explicit ExecutionServiceImpl(
         gsl::not_null<LocalContext const*> const& local_context,
-        gsl::not_null<IExecutionApi const*> const& local_api,
+        gsl::not_null<LocalApi const*> const& local_api,
         std::optional<std::uint8_t> op_exponent) noexcept
         : storage_config_{*local_context->storage_config},
           storage_{*local_context->storage},
@@ -137,16 +138,18 @@ class ExecutionServiceImpl final : public bazel_re::Execution::Service {
   private:
     StorageConfig const& storage_config_;
     Storage const& storage_;
-    IExecutionApi const& api_;
+    LocalApi const& api_;
     OperationCache op_cache_;
     Logger logger_{"execution-service"};
 
     [[nodiscard]] auto ToIExecutionAction(::bazel_re::Action const& action,
-                                          ::bazel_re::Command const& command)
-        const noexcept -> std::optional<IExecutionAction::Ptr>;
+                                          ::bazel_re::Command const& command,
+                                          bool legacy_client) const noexcept
+        -> std::optional<IExecutionAction::Ptr>;
 
     [[nodiscard]] auto ToBazelExecuteResponse(
-        IExecutionResponse::Ptr const& i_execution_response) const noexcept
+        gsl::not_null<LocalResponse*> const& local_response,
+        bool legacy_client) const noexcept
         -> expected<::bazel_re::ExecuteResponse, std::string>;
 
     void WriteResponse(

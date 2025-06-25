@@ -103,8 +103,7 @@ namespace {
     // set default if rcpath not given
     if (not clargs->common.norc) {
         if (not rc_path) {
-            rc_path = std::filesystem::weakly_canonical(
-                std::filesystem::absolute(kDefaultRCPath));
+            rc_path = std::filesystem::weakly_canonical(kDefaultRCPath);
         }
         else {
             if (not FileSystemManager::IsFile(*rc_path)) {
@@ -580,6 +579,77 @@ namespace {
                 if (path and FileSystemManager::IsFile(path->first)) {
                     clargs->common.absent_repository_file = path->first;
                     break;
+                }
+            }
+        }
+    }
+    // read invocation log argumnets
+    auto invocation_log = rc_config["invocation log"];
+    if (invocation_log.IsNotNull()) {
+        if (not invocation_log->IsMap()) {
+            Logger::Log(
+                LogLevel::Error,
+                "Value of \"invocation log\" has to be a map, but found {}",
+                invocation_log->ToString());
+            std::exit(kExitConfigError);
+        }
+        auto dir =
+            ReadLocation(invocation_log->Get("directory", Expression::none_t{}),
+                         clargs->common.just_mr_paths->workspace_root);
+        if (dir) {
+            clargs->invocation_log.directory = dir->first;
+            // Parse the remaining entries, only if  directory is specified
+            auto proj_id =
+                invocation_log->Get("project id", Expression::none_t{});
+            if (proj_id->IsString()) {
+                clargs->invocation_log.project_id = proj_id->String();
+            }
+            auto metadata =
+                invocation_log->Get("metadata", Expression::none_t{});
+            if (metadata->IsString()) {
+                clargs->invocation_log.metadata = metadata->String();
+            }
+            auto graph_file =
+                invocation_log->Get("--dump-graph", Expression::none_t{});
+            if (graph_file->IsString()) {
+                clargs->invocation_log.graph_file = graph_file->String();
+            }
+            auto graph_file_plain =
+                invocation_log->Get("--dump-plain-graph", Expression::none_t{});
+            if (graph_file_plain->IsString()) {
+                clargs->invocation_log.graph_file_plain =
+                    graph_file_plain->String();
+            }
+            auto dump_artifacts_to_build = invocation_log->Get(
+                "--dump-artifacts-to-build", Expression::none_t{});
+            if (dump_artifacts_to_build->IsString()) {
+                clargs->invocation_log.dump_artifacts_to_build =
+                    dump_artifacts_to_build->String();
+            }
+            auto dump_artifacts =
+                invocation_log->Get("--dump-artifacts", Expression::none_t{});
+            if (dump_artifacts->IsString()) {
+                clargs->invocation_log.dump_artifacts =
+                    dump_artifacts->String();
+            }
+            auto profile =
+                invocation_log->Get("--profile", Expression::none_t{});
+            if (profile->IsString()) {
+                clargs->invocation_log.profile = profile->String();
+            }
+            auto msg =
+                invocation_log->Get("invocation message", Expression::none_t{});
+            if (msg->IsString()) {
+                clargs->invocation_log.invocation_msg = msg->String();
+            }
+            auto context_vars =
+                invocation_log->Get("context variables", Expression::none_t{});
+            if (context_vars->IsList()) {
+                for (auto const& env_var : context_vars->List()) {
+                    if (env_var->IsString()) {
+                        clargs->invocation_log.context_vars.emplace_back(
+                            env_var->String());
+                    }
                 }
             }
         }

@@ -265,12 +265,17 @@ auto main(int argc, char* argv[]) -> int {
         }
 
         SetupLogging(arguments.log);
+        // Parse rc file, if given, and returns any configuration file found in
+        // known locations, with the setup root updated accordingly
         auto config_file = ReadJustMRRC(&arguments);
         // As the rc file can contain logging parameters, reset the logging
         // configuration
         SetupLogging(arguments.log);
+        // An explicitly given configuration file path wins. In this case, the
+        // default setup root must be used
         if (arguments.common.repository_config) {
             config_file = arguments.common.repository_config;
+            arguments.common.just_mr_paths->setup_root = kDefaultSetupRoot;
         }
 
         // if optional args were not read from just-mrrc or given by user, use
@@ -285,15 +290,14 @@ auto main(int argc, char* argv[]) -> int {
         if (not arguments.common.just_mr_paths->root) {
             forward_build_root = false;
             arguments.common.just_mr_paths->root =
-                std::filesystem::weakly_canonical(
-                    std::filesystem::absolute(kDefaultBuildRoot));
+                std::filesystem::weakly_canonical(kDefaultBuildRoot);
         }
         if (not arguments.common.checkout_locations_file and
             FileSystemManager::IsFile(std::filesystem::weakly_canonical(
-                std::filesystem::absolute(kDefaultCheckoutLocationsFile)))) {
+                kDefaultCheckoutLocationsFile))) {
             arguments.common.checkout_locations_file =
                 std::filesystem::weakly_canonical(
-                    std::filesystem::absolute(kDefaultCheckoutLocationsFile));
+                    kDefaultCheckoutLocationsFile);
         }
         if (arguments.common.just_mr_paths->distdirs.empty()) {
             arguments.common.just_mr_paths->distdirs.emplace_back(
@@ -385,6 +389,7 @@ auto main(int argc, char* argv[]) -> int {
         if (arguments.cmd == SubCommand::kJustDo or
             arguments.cmd == SubCommand::kJustSubCmd) {
             return CallJust(config_file,
+                            arguments.invocation_log,
                             arguments.common,
                             arguments.setup,
                             arguments.just_cmd,
@@ -432,7 +437,7 @@ auto main(int argc, char* argv[]) -> int {
             // report success
             Logger::Log(LogLevel::Info, "Setup completed");
             // print config file to stdout
-            std::cout << mr_config_path->string() << std::endl;
+            std::cout << mr_config_path->first.string() << std::endl;
             return kExitSuccess;
         }
 

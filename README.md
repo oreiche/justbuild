@@ -28,17 +28,22 @@ dependencies locally (neither as source nor as binary).
   - [Getting Started](doc/tutorial/getting-started.md)
   - [Hello World](doc/tutorial/hello-world.md)
   - [Third-party dependencies](doc/tutorial/third-party-software.md)
-  - [Debugging](doc/tutorial/debugging.md)
   - [Tests](doc/tutorial/tests.md)
+  - [Debugging](doc/tutorial/debugging.md)
   - [Targets versus `FILE`, `GLOB`, and `TREE`](doc/tutorial/target-file-glob-tree.md)
   - [Ensuring reproducibility](doc/tutorial/rebuild.md)
-  - [Using protobuf](doc/tutorial/proto.md)
   - [Running linters](doc/tutorial/lint.md)
-  - [How to create a single-node remote execution service](doc/tutorial/just-execute.org)
   - [Dependency management using Target-level Cache as a Service](doc/tutorial/just-serve.md)
   - [Cross compiling and testing cross-compiled targets](doc/tutorial/cross-compiling.md)
   - [Multi-repository configuration management](doc/tutorial/just-lock.md)
+
+* Advanced Topics
+  - [Using protobuf](doc/tutorial/proto.md)
+  - [How to create a single-node remote execution service](doc/tutorial/just-execute.org)
   - [Computed roots](doc/tutorial/computed.md)
+  - [More build delegation through a serve endpoint](doc/tutorial/build-delegation.md)
+  - [Invocation logging and profiling](doc/tutorial/invocation-logging.md)
+  - [Tree overlays](doc/tutorial/tree-overlay.md)
 
 ## Documentation
 
@@ -55,5 +60,7 @@ dependencies locally (neither as source nor as binary).
 - [Target-Level Caching as a Service](doc/concepts/service-target-cache.md)
 - [Garbage Collection](doc/concepts/garbage.md)
 - [Symbolic links](doc/concepts/symlinks.md)
+- [Tree overlays](doc/concepts/tree-overlay.md)
 - [Execution properties](doc/concepts/execution-properties.md)
 - [Computed roots](doc/concepts/computed-roots.md)
+- [Profiling and Invocation Logging](doc/concepts/profiling.md)

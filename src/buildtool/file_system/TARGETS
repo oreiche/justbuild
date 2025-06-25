@@ -103,7 +103,6 @@
     [ ["src/buildtool/common", "common"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
-    , ["src/utils/cpp", "path"]
     ]
   }
 , "git_context":
@@ -144,6 +143,7 @@
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "file_locking"]
+    , ["src/utils/cpp", "gsl"]
     , ["src/utils/cpp", "hex_string"]
     , ["src/utils/cpp", "tmp_dir"]
     ]
@@ -178,6 +178,7 @@
     [ "file_system_manager"
     , "git_cas"
     , "git_tree"
+    , "git_tree_utils"
     , "object_type"
     , "precomputed_root"
     , ["@", "fmt", "", "fmt"]
@@ -190,8 +191,10 @@
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/storage", "config"]
     , ["src/utils/cpp", "concepts"]
     , ["src/utils/cpp", "expected"]
+    , ["src/utils/cpp", "hex_string"]
     , ["src/utils/cpp", "json"]
     ]
   , "stage": ["src", "buildtool", "file_system"]
@@ -201,11 +204,38 @@
   , "name": ["precomputed_root"]
   , "hdrs": ["precomputed_root.hpp"]
   , "srcs": ["precomputed_root.cpp"]
-  , "deps": [["@", "json", "", "json"], ["src/utils/cpp", "expected"]]
+  , "deps":
+    [ ["@", "json", "", "json"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
+    , ["src/utils/cpp", "expected"]
+    ]
   , "private-deps":
     [ ["@", "fmt", "", "fmt"]
     , ["@", "gsl", "", "gsl"]
     , ["src/utils/cpp", "hash_combine"]
+    ]
+  , "stage": ["src", "buildtool", "file_system"]
+  }
+, "atomic":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["atomic"]
+  , "hdrs": ["atomic.hpp"]
+  , "srcs": ["atomic.cpp"]
+  , "private-deps": [["@", "fmt", "", "fmt"]]
+  , "stage": ["src", "buildtool", "file_system"]
+  }
+, "git_tree_utils":
+  { "type": ["@", "rules", "CC", "library"]
+  , "name": ["git_tree_utils"]
+  , "hdrs": ["git_tree_utils.hpp"]
+  , "srcs": ["git_tree_utils.cpp"]
+  , "deps": ["git_cas", "git_tree", ["src/buildtool/storage", "config"]]
+  , "private-deps":
+    [ "file_system_manager"
+    , "object_type"
+    , ["@", "gsl", "", "gsl"]
+    , ["src/buildtool/storage", "fs_utils"]
     ]
   , "stage": ["src", "buildtool", "file_system"]
   }

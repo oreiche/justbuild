@@ -111,7 +111,15 @@ The top-level `TARGETS` file contains the following content:
 { "fmt":
   { "type": "export"
   , "target": ["src", "fmt"]
-  , "flexible_config": ["CXX", "CXXFLAGS", "ADD_CXXFLAGS", "AR", "ENV", "DEBUG"]
+  , "flexible_config":
+    [ "CXX"
+    , "CXXFLAGS"
+    , "ADD_CXXFLAGS"
+    , "AR"
+    , "DWP"
+    , "ENV"
+    , "DEBUG"
+    ]
   }
 }
 ```
@@ -140,7 +148,7 @@ additional binding `"format"` for it:
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450"
+      , "commit": "7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -204,12 +212,12 @@ repositories:
 ``` sh
 $ just-mr build helloworld
 INFO: Performing repositories setup
-INFO: Found 5 repositories to set up
+INFO: Found 5 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","helloworld"]
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
 INFO: Export targets found: 0 cached, 0 uncached, 1 not eligible for caching
-INFO: Discovered 7 actions, 3 trees, 0 blobs
+INFO: Discovered 7 actions, 0 tree overlays, 3 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 7 actions, 1 cache hits.
 INFO: Artifacts built, logical paths are:
@@ -223,12 +231,12 @@ repository `fmtlib` must be specified via the `--main` option:
 ``` sh
 $ just-mr --main fmtlib build fmt
 INFO: Performing repositories setup
-INFO: Found 4 repositories to set up
+INFO: Found 4 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","fmt"]
 INFO: Requested target is [["@","fmtlib","","fmt"],{}]
 INFO: Analysed target [["@","fmtlib","","fmt"],{}]
 INFO: Export targets found: 0 cached, 0 uncached, 1 not eligible for caching
-INFO: Discovered 3 actions, 1 trees, 0 blobs
+INFO: Discovered 3 actions, 0 tree overlays, 1 trees, 0 blobs
 INFO: Building [["@","fmtlib","","fmt"],{}].
 INFO: Processed 3 actions, 3 cache hits.
 INFO: Artifacts built, logical paths are:
@@ -252,8 +260,8 @@ versioning first:
 $ git init .
 $ git add tutorial-defaults fmt-layer
 $ git commit -m "fix compile flags and fmt targets layer"
-[master (root-commit) 9c3a98b] fix compile flags and fmt targets layer
- 4 files changed, 29 insertions(+)
+[master (root-commit) 0337c65] fix compile flags and fmt targets layer
+ 4 files changed, 37 insertions(+)
  create mode 100644 fmt-layer/TARGETS
  create mode 100644 fmt-layer/include/fmt/TARGETS
  create mode 100644 fmt-layer/src/TARGETS
@@ -273,7 +281,7 @@ be set for them in `repos.json`:
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450"
+      , "commit": "7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -318,12 +326,12 @@ the benefits of the target cache should be visible on the second build:
 ``` sh
 $ just-mr build helloworld
 INFO: Performing repositories setup
-INFO: Found 5 repositories to set up
+INFO: Found 5 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","helloworld"]
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
 INFO: Export targets found: 0 cached, 1 uncached, 0 not eligible for caching
-INFO: Discovered 7 actions, 3 trees, 0 blobs
+INFO: Discovered 7 actions, 0 tree overlays, 3 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 7 actions, 7 cache hits.
 INFO: Artifacts built, logical paths are:
@@ -332,12 +340,12 @@ INFO: Backing up artifacts of 1 export targets
 $
 $ just-mr build helloworld
 INFO: Performing repositories setup
-INFO: Found 5 repositories to set up
+INFO: Found 5 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","helloworld"]
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
 INFO: Export targets found: 1 cached, 0 uncached, 0 not eligible for caching
-INFO: Discovered 4 actions, 2 trees, 0 blobs
+INFO: Discovered 4 actions, 0 tree overlays, 2 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 4 actions, 4 cache hits.
 INFO: Artifacts built, logical paths are:
@@ -396,7 +404,7 @@ example, the following `repos.json` defines the overlay
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450"
+      , "commit": "7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }

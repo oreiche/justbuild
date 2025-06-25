@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -28,6 +29,7 @@
 #include "src/buildtool/file_system/object_type.hpp"
 #include "src/utils/cpp/expected.hpp"
 #include "src/utils/cpp/incremental_reader.hpp"
+#include "src/utils/cpp/tmp_dir.hpp"
 
 class ArtifactBlob final {
   public:
@@ -52,6 +54,33 @@ class ArtifactBlob final {
     [[nodiscard]] static auto FromFile(HashFunction hash_function,
                                        ObjectType type,
                                        std::filesystem::path file) noexcept
+        -> expected<ArtifactBlob, std::string>;
+
+    /// \brief Create ArtifactBlob based on the existing temporary file. The
+    /// content is hashed based on the given hash function and ObjectType.
+    /// \param hash_function    HashFunction that must be used for hashing.
+    /// \param type             Type of the content.
+    /// \param file             Temporary file to be used as the source of
+    /// content.
+    /// \return Valid ArtifactBlob on success or an error message on failure.
+    [[nodiscard]] static auto FromTempFile(HashFunction hash_function,
+                                           ObjectType type,
+                                           TmpFile::Ptr file) noexcept
+        -> expected<ArtifactBlob, std::string>;
+
+    /// \brief Create ArtifactBlob and write the given content to the temporary
+    /// space. The content is hashed based on the given hash function and
+    /// ObjectType.
+    /// \param hash_function    HashFunction that must be used for hashing.
+    /// \param type             Type of the content.
+    /// \param temp_space       Temporary space where a new temporary file may
+    /// be created.
+    /// \param content          Content to be stored in the temporary file.
+    /// \return Valid ArtifactBlob on success or an error message on failure.
+    [[nodiscard]] static auto FromTempFile(HashFunction hash_type,
+                                           ObjectType type,
+                                           TmpDir::Ptr const& temp_space,
+                                           std::string const& content) noexcept
         -> expected<ArtifactBlob, std::string>;
 
     [[nodiscard]] auto operator==(ArtifactBlob const& other) const noexcept
@@ -83,6 +112,12 @@ class ArtifactBlob final {
     [[nodiscard]] auto ReadIncrementally(std::size_t chunk_size) const& noexcept
         -> expected<IncrementalReader, std::string>;
 
+    /// \brief Obtain the path to the file that is used as the content source.
+    /// If ArtifactBlob doesn't use a filesystem source or an internal error
+    /// occurs, std::nullopt is returned.
+    [[nodiscard]] auto GetFilePath() const& noexcept
+        -> std::optional<std::filesystem::path>;
+
     /// \brief Set executable permission.
     void SetExecutable(bool is_executable) noexcept {
         is_executable_ = is_executable;
@@ -96,7 +131,8 @@ class ArtifactBlob final {
   private:
     using InMemory = std::shared_ptr<std::string const>;
     using InFile = std::filesystem::path;
-    using ContentSource = std::variant<InMemory, InFile>;
+    using InTempFile = TmpFile::Ptr;
+    using ContentSource = std::variant<InMemory, InFile, InTempFile>;
 
     ArtifactDigest digest_;
     ContentSource content_;

@@ -44,6 +44,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -407,10 +408,10 @@ class FileSystemManager {
         return false;
     }
 
+    /// \brief Copy directory recursively
     [[nodiscard]] static auto CopyDirectoryImpl(
         std::filesystem::path const& src,
-        std::filesystem::path const& dst,
-        bool recursively = false) noexcept -> bool {
+        std::filesystem::path const& dst) noexcept -> bool {
         try {
             // also checks existence
             if (not IsDirectory(src)) {
@@ -427,11 +428,10 @@ class FileSystemManager {
                             dst.string());
                 return false;
             }
-            auto const opts =
+            static constexpr auto kOptions =
                 std::filesystem::copy_options::copy_symlinks |
-                (recursively ? std::filesystem::copy_options::recursive
-                             : std::filesystem::copy_options::none);
-            std::filesystem::copy(src, dst, opts);
+                std::filesystem::copy_options::recursive;
+            std::filesystem::copy(src, dst, kOptions);
             return true;
         } catch (std::exception const& e) {
             Logger::Log(LogLevel::Error,
@@ -510,9 +510,9 @@ class FileSystemManager {
         }
     }
 
-    [[nodiscard]] static auto RemoveDirectory(std::filesystem::path const& dir,
-                                              bool recursively = false) noexcept
-        -> bool {
+    /// \brief Remove directory recursively.
+    [[nodiscard]] static auto RemoveDirectory(
+        std::filesystem::path const& dir) noexcept -> bool {
         try {
             auto status = std::filesystem::symlink_status(dir);
             if (not std::filesystem::exists(status)) {
@@ -521,11 +521,9 @@ class FileSystemManager {
             if (not std::filesystem::is_directory(status)) {
                 return false;
             }
-            if (recursively) {
-                return (std::filesystem::remove_all(dir) !=
-                        static_cast<uintmax_t>(-1));
-            }
-            return std::filesystem::remove(dir);
+            // If it doesn't throw, it succeeds:
+            std::ignore = std::filesystem::remove_all(dir);
+            return true;
         } catch (std::exception const& e) {
             Logger::Log(LogLevel::Error,
                         "removing directory {}:\n{}",
@@ -687,7 +685,7 @@ class FileSystemManager {
         -> std::optional<std::string> {
         auto const type = Type(file);
         if (not type) {
-            Logger::Log(LogLevel::Debug,
+            Logger::Log(LogLevel::Trace,
                         "{} can not be read because it is not a file.",
                         file.string());
             return std::nullopt;
@@ -699,7 +697,7 @@ class FileSystemManager {
                                        ObjectType type) noexcept
         -> std::optional<std::string> {
         if (not IsFileObject(type)) {
-            Logger::Log(LogLevel::Debug,
+            Logger::Log(LogLevel::Trace,
                         "{} can not be read because it is not a file.",
                         file.string());
             return std::nullopt;
@@ -707,7 +705,7 @@ class FileSystemManager {
 
         auto const to_read = IncrementalReader::FromFile(kChunkSize, file);
         if (not to_read.has_value()) {
-            Logger::Log(LogLevel::Debug,
+            Logger::Log(LogLevel::Trace,
                         "FileSystemManager: failed to create reader for {}\n{}",
                         file.string(),
                         to_read.error());
@@ -1067,6 +1065,12 @@ class FileSystemManager {
             if (std::filesystem::is_symlink(src)) {
                 return false;
             }
+            // Check that src and dst point to different filesystem entities:
+            if (std::filesystem::weakly_canonical(src) ==
+                std::filesystem::weakly_canonical(dst)) {
+                return true;
+            }
+
             if (not RemoveFile(dst)) {
                 Logger::Log(
                     LogLevel::Error, "cannot remove file {}", dst.string());

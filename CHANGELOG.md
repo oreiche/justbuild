@@ -1,3 +1,65 @@
+## Release `1.6.0` (UNRELEASED)
+
+A feature release on top of `1.5.0`, backwards compatible.
+
+### New features
+
+- `just-mr` now supports logging of each invocation by setting
+  an appropriate configuration in the rc-file. Together with
+  the newly-added option `--profile` of `just` this can be used
+  to gather statistics on build times, cache hit rates, as well as
+  their evolution over time.
+- Computing a tree as overlays of other trees was added as a new
+  in-memory action.
+- The expression language has been extended to contain new
+  built-in functions `"zip_with"`, `"zip_map"`.
+
+### Other changes
+
+- The exit code 1 now strictly refers to build failure due to a
+  failing build action. Syntactical errors invoking the tool, as
+  well as errors during analysis now return separate exit codes.
+
+### Fixes
+
+- `just execute` and `just serve` now create their pid and info
+  files atomically; so waiting processes can assume the content
+  to be available as soon as the requested file appears on the
+  file sytem.
+- `just serve` now fetches trees from remote execution in parallel
+  and through its local CAS; this fixes a performance issue.
+- A bug was fixed that could cause the number of threads being
+  the square of what was specified during backing up artifacts of
+  export targets after build.
+- `just-mr` now also consideres computed roots (as no-op) when
+  reporting progress.
+- The "generic" rule now properly detects staging conflicts, taking
+  the full inputs into account (and not only the runfiles).
+- Illegitimate symlinks in explicit source-tree references are now
+  rejected reliably.
+- An incorrect error handling in the evaluation of computed roots was fixed.
+- `just execute`: Symlinks to directories and files are properly
+  distinguished as requested by the remote-execution protocol.
+- Various improvements of the documentation.
+
+### Note for package maintainers
+
+Any patching that used to patch `etc/repos.json` should now patch
+`etc/repos.in.json`. Background: to allow linting with well-defined
+dependencies, for the newly-added `"lint"` repository additional
+dependencies are pulled in via `just-lock` to bootstrap the correct
+versions of those tools; the local, manually-edited repository
+configuration `etc/repos.in.json` still contains everything needed
+for building and testing. So, to avoid accidentally trying to fetch
+more than is absolutely needed, `bin/bootstrap.py` was changed to
+use the original, manually-maintained `etc/repos.in.json`.
+
+## Release `1.6.0~beta1` (2025-06-24)
+
+First beta release for the upcoming `1.6.0` release; see release
+notes there.
+
+
 ## Release `1.5.0` (2025-03-06)
 
 A feature release on top of `1.4.0`, backwards compatible.

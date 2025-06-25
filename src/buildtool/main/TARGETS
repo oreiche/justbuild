@@ -42,11 +42,13 @@
     , ["src/buildtool/computed_roots", "evaluate"]
     , ["src/buildtool/crypto", "hash_function"]
     , ["src/buildtool/execution_api/common", "api_bundle"]
+    , ["src/buildtool/execution_api/common", "common"]
     , [ "src/buildtool/execution_api/execution_service"
       , "server_implementation"
       ]
     , ["src/buildtool/execution_api/local", "config"]
     , ["src/buildtool/execution_api/local", "context"]
+    , ["src/buildtool/execution_api/local", "local_api"]
     , ["src/buildtool/execution_api/remote", "config"]
     , ["src/buildtool/execution_api/remote", "context"]
     , ["src/buildtool/execution_engine/executor", "context"]
@@ -57,6 +59,7 @@
     , ["src/buildtool/logging", "log_level"]
     , ["src/buildtool/logging", "logging"]
     , ["src/buildtool/multithreading", "task_system"]
+    , ["src/buildtool/profile", "profile"]
     , ["src/buildtool/progress_reporting", "progress"]
     , ["src/buildtool/progress_reporting", "progress_reporter"]
     , ["src/buildtool/serve_api/remote", "config"]
@@ -218,6 +221,7 @@
     , ["src/buildtool/build_engine/target_map", "configured_target"]
     , ["src/buildtool/build_engine/target_map", "result_map"]
     , ["src/buildtool/logging", "logging"]
+    , ["src/buildtool/profile", "profile"]
     ]
   , "stage": ["src", "buildtool", "main"]
   , "private-deps":

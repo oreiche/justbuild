@@ -30,7 +30,7 @@ Second, we also need to create the multi-repository configuration
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450"
+      , "commit": "7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -46,7 +46,7 @@ Second, we also need to create the multi-repository configuration
 In that configuration, two repositories are defined:
 
 1. The `"rules-cc"` repository located in the subdirectory `rules` of
-   [just-buildsystem/rules-cc:3a5f0f0f50c59495ffc3b198df59e6edb8416450](https://github.com/just-buildsystem/rules-cc/tree/3a5f0f0f50c59495ffc3b198df59e6edb8416450),
+   [just-buildsystem/rules-cc:7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6](https://github.com/just-buildsystem/rules-cc/tree/7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6),
    which contains the high-level concepts for building C/C++ binaries
    and libraries.
 
@@ -117,11 +117,11 @@ command line:
 ``` sh
 $ just-mr build helloworld
 INFO: Performing repositories setup
-INFO: Found 2 repositories to set up
+INFO: Found 2 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","helloworld"]
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
-INFO: Discovered 2 actions, 1 trees, 0 blobs
+INFO: Discovered 2 actions, 0 tree overlays, 1 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 2 actions, 0 cache hits.
 INFO: Artifacts built, logical paths are:
@@ -166,11 +166,11 @@ object that sets `"CXX"` to `"clang++"`:
 ``` sh
 $ just-mr build helloworld -D'{"CXX":"clang++"}'
 INFO: Performing repositories setup
-INFO: Found 2 repositories to set up
+INFO: Found 2 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","helloworld","-D{\"CXX\":\"clang++\"}"]
 INFO: Requested target is [["@","tutorial","","helloworld"],{"CXX":"clang++"}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{"CXX":"clang++"}]
-INFO: Discovered 2 actions, 1 trees, 0 blobs
+INFO: Discovered 2 actions, 0 tree overlays, 1 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{"CXX":"clang++"}].
 INFO: Processed 2 actions, 0 cache hits.
 INFO: Artifacts built, logical paths are:
@@ -211,6 +211,7 @@ from. In our case, we don't use any base.
   , "CXX": ["c++"]
   , "ADD_COMPILE_FLAGS": ["-O2", "-Wall"]
   , "AR": ["ar"]
+  , "DWP": ["dwp"]
   , "PATH": ["/bin", "/usr/bin"]
   }
 }
@@ -234,7 +235,7 @@ the following content:
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450"
+      , "commit": "7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -271,11 +272,11 @@ change):
 ``` sh
 $ just-mr build helloworld
 INFO: Performing repositories setup
-INFO: Found 3 repositories to set up
+INFO: Found 3 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","helloworld"]
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
-INFO: Discovered 2 actions, 1 trees, 0 blobs
+INFO: Discovered 2 actions, 0 tree overlays, 1 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 2 actions, 0 cache hits.
 INFO: Artifacts built, logical paths are:
@@ -398,11 +399,11 @@ binary can be built with the same command as before (no need to rerun
 ``` sh
 $ just-mr build helloworld
 INFO: Performing repositories setup
-INFO: Found 3 repositories to set up
+INFO: Found 3 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","helloworld"]
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
-INFO: Discovered 4 actions, 2 trees, 0 blobs
+INFO: Discovered 4 actions, 0 tree overlays, 2 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 4 actions, 0 cache hits.
 INFO: Artifacts built, logical paths are:
@@ -416,11 +417,11 @@ run the following command:
 ``` sh
 $ just-mr build greet greet
 INFO: Performing repositories setup
-INFO: Found 3 repositories to set up
+INFO: Found 3 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","greet","greet"]
 INFO: Requested target is [["@","tutorial","greet","greet"],{}]
 INFO: Analysed target [["@","tutorial","greet","greet"],{}]
-INFO: Discovered 2 actions, 1 trees, 0 blobs
+INFO: Discovered 2 actions, 0 tree overlays, 1 trees, 0 blobs
 INFO: Building [["@","tutorial","greet","greet"],{}].
 INFO: Processed 2 actions, 2 cache hits.
 INFO: Artifacts built, logical paths are:
@@ -437,13 +438,13 @@ that library provides.
 ``` sh
 $ just-mr analyse greet greet
 INFO: Performing repositories setup
-INFO: Found 3 repositories to set up
+INFO: Found 3 repositories involved
 INFO: Setup finished, exec ["just","analyse","-C","...","greet","greet"]
 INFO: Requested target is [["@","tutorial","greet","greet"],{}]
 INFO: Analysed target [["@","tutorial","greet","greet"],{}]
 INFO: Result of target [["@","tutorial","greet","greet"],{}]: {
         "artifacts": {
-          "greet/libgreet.a": {"data":{"id":"c4ba32e2fc1ce267b4245d8885ae7b53405d41a709f853061549ca93aa73a6ac","path":"work/greet/libgreet.a"},"type":"ACTION"}
+          "greet/libgreet.a": {"data":{"id":"d964a2747015935adc5fd7f06bbd910d5dde99e990436be0b1f7034270b5b11d","path":"work/greet/libgreet.a"},"type":"ACTION"}
         },
         "provides": {
           "compile-args": [
@@ -453,6 +454,8 @@ INFO: Result of target [["@","tutorial","greet","greet"],{}]: {
           "debug-hdrs": {
           },
           "debug-srcs": {
+          },
+          "dwarf-pkg": {
           },
           "link-args": [
             "greet/libgreet.a"

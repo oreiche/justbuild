@@ -86,7 +86,7 @@ We define the following `repos.in.json` input configuration file for
 , "imports":
   [ { "source": "git"
     , "branch": "master"
-    , "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450"
+    , "commit": "7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6"
     , "url": "https://github.com/just-buildsystem/rules-cc.git"
     , "repos": [{"alias": "rules-cc-rules-sources", "repo": "rules"}]
     }
@@ -146,12 +146,12 @@ $ just-lock -C repos.in.json -o repos.out.json
 $
 $ just-mr -C repos.out.json build helloworld
 INFO: Performing repositories setup
-INFO: Found 5 repositories to set up
+INFO: Found 5 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","helloworld"]
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
 INFO: Export targets found: 1 cached, 0 uncached, 0 not eligible for caching
-INFO: Discovered 4 actions, 2 trees, 0 blobs
+INFO: Discovered 4 actions, 0 tree overlays, 2 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 4 actions, 4 cache hits.
 INFO: Artifacts built, logical paths are:
@@ -201,7 +201,7 @@ $ diff -y <(jq --sort-keys . repos.out.json) <(jq --sort-keys . repos.json)
     "rules-cc-rules-sources": {                               <
       "repository": {                                                 "repository": {
         "branch": "master",                                             "branch": "master",
-        "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450",           "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450",
+        "commit": "7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6",           "commit": "7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6",
         "repository": "https://github.com/just-buildsystem/ru           "repository": "https://github.com/just-buildsystem/ru
         "subdir": "rules",                                              "subdir": "rules",
         "type": "git"                                                   "type": "git"

@@ -15,12 +15,14 @@
 #ifndef INCLUDED_SRC_BUILDTOOL_EXECUTION_API_LOCAL_LOCAL_RESPONSE_HPP
 #define INCLUDED_SRC_BUILDTOOL_EXECUTION_API_LOCAL_LOCAL_RESPONSE_HPP
 
+#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 #include "fmt/core.h"
@@ -33,7 +35,6 @@
 #include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_response.hpp"
-#include "src/buildtool/execution_api/common/tree_reader.hpp"
 #include "src/buildtool/execution_api/local/local_action.hpp"
 #include "src/buildtool/execution_api/local/local_cas_reader.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
@@ -49,6 +50,8 @@ class LocalResponse final : public IExecutionResponse {
     friend class LocalAction;
 
   public:
+    using DirSymlinks = std::unordered_set<std::string>;
+
     auto Status() const noexcept -> StatusCode final {
         return StatusCode::Success;  // unused
     }
@@ -72,10 +75,32 @@ class LocalResponse final : public IExecutionResponse {
         Logger::Log(LogLevel::Debug, "reading stdout failed");
         return {};
     }
+    auto StdErrDigest() noexcept -> std::optional<ArtifactDigest> final {
+        auto digest = ArtifactDigestFactory::FromBazel(
+            storage_.GetHashFunction().GetType(),
+            output_.action.stderr_digest());
+        if (digest) {
+            return *digest;
+        }
+        return std::nullopt;
+    }
+    auto StdOutDigest() noexcept -> std::optional<ArtifactDigest> final {
+        auto digest = ArtifactDigestFactory::FromBazel(
+            storage_.GetHashFunction().GetType(),
+            output_.action.stdout_digest());
+        if (digest) {
+            return *digest;
+        }
+        return std::nullopt;
+    }
     auto ExitCode() const noexcept -> int final {
         return output_.action.exit_code();
     }
     auto IsCached() const noexcept -> bool final { return output_.is_cached; };
+
+    auto ExecutionDuration() noexcept -> double final {
+        return output_.duration;
+    }
 
     auto ActionDigest() const noexcept -> std::string const& final {
         return action_id_;
@@ -90,13 +115,34 @@ class LocalResponse final : public IExecutionResponse {
             &artifacts_);  // explicit type needed for expected
     }
 
+    // Note that for newer requests (>=RBEv2.1), the local api does not report
+    // output file and directory symlinks separately. In that case, an error
+    // will be returned.
     auto DirectorySymlinks() noexcept
-        -> expected<gsl::not_null<DirSymlinks const*>, std::string> final {
+        -> expected<gsl::not_null<DirSymlinks const*>, std::string> {
         if (auto error_msg = Populate()) {
             return unexpected{*std::move(error_msg)};
         }
+        bool has_links_apinew = not output_.action.output_symlinks().empty();
+        bool has_links_apiold =
+            not output_.action.output_file_symlinks().empty() or
+            not output_.action.output_directory_symlinks().empty();
+        // If the new symlinks field (RBEv2.1) is populated but none of the old
+        // symlinks fields, then the local api did not populate them.
+        if (has_links_apinew and not has_links_apiold) {
+            return unexpected{std::string{
+                "Local api does not populate the field "
+                "output_directory_symlinks for >=RBEv2.1 requests."}};
+        }
         return gsl::not_null<DirSymlinks const*>(
             &dir_symlinks_);  // explicit type needed for expected
+    }
+
+    auto HasUpwardsSymlinks() noexcept -> expected<bool, std::string> final {
+        if (auto error_msg = Populate()) {
+            return unexpected{*std::move(error_msg)};
+        }
+        return has_upwards_symlinks_;
     }
 
   private:
@@ -105,6 +151,7 @@ class LocalResponse final : public IExecutionResponse {
     Storage const& storage_;
     ArtifactInfos artifacts_;
     DirSymlinks dir_symlinks_;
+    bool has_upwards_symlinks_ = false;  // only tracked in compatible mode
     bool populated_ = false;
 
     explicit LocalResponse(
@@ -122,16 +169,15 @@ class LocalResponse final : public IExecutionResponse {
         if (populated_) {
             return std::nullopt;
         }
-        populated_ = true;
 
         ArtifactInfos artifacts{};
         auto const& action_result = output_.action;
         artifacts.reserve(
             static_cast<std::size_t>(action_result.output_files_size()) +
             static_cast<std::size_t>(
-                action_result.output_file_symlinks_size()) +
-            static_cast<std::size_t>(
-                action_result.output_directory_symlinks_size()) +
+                std::max(action_result.output_symlinks_size(),
+                         action_result.output_file_symlinks_size() +
+                             action_result.output_directory_symlinks_size())) +
             static_cast<std::size_t>(action_result.output_directories_size()));
 
         DirSymlinks dir_symlinks{};
@@ -165,16 +211,36 @@ class LocalResponse final : public IExecutionResponse {
         }
 
         // collect all symlinks and store them
-        for (auto const& link : action_result.output_file_symlinks()) {
+        for (auto const& link : action_result.output_symlinks()) {
             try {
-                // in compatible mode: check symlink validity
-                if (not ProtocolTraits::IsNative(
-                        storage_.GetHashFunction().GetType()) and
-                    not PathIsNonUpwards(link.target())) {
-                    return fmt::format(
-                        "LocalResponse: found invalid symlink at {}",
-                        link.path());
-                }
+                // in compatible mode: track upwards symlinks
+                has_upwards_symlinks_ =
+                    has_upwards_symlinks_ or
+                    (not ProtocolTraits::IsNative(hash_type) and
+                     not PathIsNonUpwards(link.target()));
+                artifacts.emplace(
+                    link.path(),
+                    Artifact::ObjectInfo{
+                        .digest =
+                            ArtifactDigestFactory::HashDataAs<ObjectType::File>(
+                                storage_.GetHashFunction(), link.target()),
+                        .type = ObjectType::Symlink});
+            } catch (std::exception const& ex) {
+                return fmt::format(
+                    "LocalResponse: unexpected failure gathering digest for "
+                    "{}:\n{}",
+                    link.path(),
+                    ex.what());
+            }
+        }
+        for (auto const& link : action_result.output_file_symlinks()) {
+            // DEPRECATED as of v2.1
+            try {
+                // in compatible mode: track upwards symlinks
+                has_upwards_symlinks_ =
+                    has_upwards_symlinks_ or
+                    (not ProtocolTraits::IsNative(hash_type) and
+                     not PathIsNonUpwards(link.target()));
                 artifacts.emplace(
                     link.path(),
                     Artifact::ObjectInfo{
@@ -191,15 +257,13 @@ class LocalResponse final : public IExecutionResponse {
             }
         }
         for (auto const& link : action_result.output_directory_symlinks()) {
+            // DEPRECATED as of v2.1
             try {
-                // in compatible mode: check symlink validity
-                if (not ProtocolTraits::IsNative(
-                        storage_.GetHashFunction().GetType()) and
-                    not PathIsNonUpwards(link.target())) {
-                    return fmt::format(
-                        "LocalResponse: found invalid symlink at {}",
-                        link.path());
-                }
+                // in compatible mode: track upwards symlinks
+                has_upwards_symlinks_ =
+                    has_upwards_symlinks_ or
+                    (not ProtocolTraits::IsNative(hash_type) and
+                     not PathIsNonUpwards(link.target()));
                 artifacts.emplace(
                     link.path(),
                     Artifact::ObjectInfo{
@@ -227,18 +291,18 @@ class LocalResponse final : public IExecutionResponse {
                     dir.path());
             }
             try {
-                // in compatible mode: check validity of symlinks in dir
-                if (not ProtocolTraits::IsNative(
-                        storage_.GetHashFunction().GetType())) {
-                    auto reader = TreeReader<LocalCasReader>{&storage_.CAS()};
-                    auto result = reader.RecursivelyReadTreeLeafs(
-                        *digest, "", /*include_trees=*/true);
-                    if (not result) {
-                        return fmt::format(
-                            "LocalResponse: found invalid entries in directory "
-                            "{}",
-                            dir.path());
+                // in compatible mode: track upwards symlinks; requires one
+                // directory traversal; other sources of errors should cause a
+                // fail too, so it is ok to report all traversal errors as
+                // if an invalid entry was found
+                if (not has_upwards_symlinks_ and
+                    not ProtocolTraits::IsNative(hash_type)) {
+                    LocalCasReader reader{&storage_.CAS()};
+                    auto valid_dir = reader.IsDirectoryValid(*digest);
+                    if (not valid_dir) {
+                        return std::move(valid_dir).error();
                     }
+                    has_upwards_symlinks_ = not *valid_dir;
                 }
                 artifacts.emplace(
                     dir.path(),
@@ -254,6 +318,7 @@ class LocalResponse final : public IExecutionResponse {
         }
         artifacts_ = std::move(artifacts);
         dir_symlinks_ = std::move(dir_symlinks);
+        populated_ = true;
         return std::nullopt;
     }
 

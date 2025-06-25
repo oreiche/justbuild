@@ -38,9 +38,11 @@
     , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "expected"]
     , ["src/utils/cpp", "incremental_reader"]
+    , ["src/utils/cpp", "tmp_dir"]
     ]
   , "proto":
     [ ["@", "bazel_remote_apis", "", "remote_execution_proto"]
+    , ["@", "bazel_remote_apis", "", "semver_proto"]
     , ["@", "googleapis", "", "google_bytestream_proto"]
     , ["@", "googleapis", "", "google_longrunning_operations_proto"]
     , ["@", "googleapis", "", "google_rpc_status_proto"]
@@ -84,6 +86,7 @@
     , ["src/buildtool/execution_api/bazel_msg", "execution_config"]
     , ["src/buildtool/execution_api/common", "common"]
     , ["src/buildtool/execution_engine/dag", "dag"]
+    , ["src/utils/cpp", "tmp_dir"]
     ]
   , "stage": ["src", "buildtool", "execution_api", "remote"]
   , "private-deps":

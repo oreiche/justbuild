@@ -30,6 +30,7 @@
 #include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/build_engine/expression/expression_ptr.hpp"
+#include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/remote/remote_common.hpp"
 #include "src/buildtool/common/user_structs.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
@@ -51,7 +52,6 @@
 #include "src/buildtool/multithreading/task_system.hpp"
 #include "src/buildtool/progress_reporting/base_progress_reporter.hpp"
 #include "src/buildtool/serve_api/remote/serve_api.hpp"
-#include "src/buildtool/storage/fs_utils.hpp"
 #include "src/buildtool/storage/garbage_collector.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress.hpp"
 #include "src/other_tools/just_mr/progress_reporting/progress_reporter.hpp"
@@ -82,7 +82,7 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                     Storage const& native_storage,
                     bool interactive,
                     std::string const& multi_repo_tool_name)
-    -> std::optional<std::filesystem::path> {
+    -> std::optional<std::pair<std::filesystem::path, std::string>> {
     // provide report
     Logger::Log(LogLevel::Info, "Performing repositories setup");
     // set anchor dir to setup_root; current dir will be reverted when anchor
@@ -141,7 +141,7 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
         JustMR::Utils::ReachableRepositories(repos, *main, setup_repos);
     }
     Logger::Log(LogLevel::Info,
-                "Found {} repositories to set up",
+                "Found {} repositories involved",
                 setup_repos->to_setup.size());
 
     // setup local execution config
@@ -234,7 +234,8 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
                                                 &*auth_config,
                                                 &*retry_config,
                                                 config,
-                                                hash_fct);
+                                                hash_fct,
+                                                mr_local_api->GetTempSpace());
     }
     bool const has_remote_api = remote_api != nullptr;
 
@@ -536,5 +537,14 @@ auto MultiRepoSetup(std::shared_ptr<Configuration> const& config,
         return std::nullopt;
     }
     // if successful, return the output config
-    return StorageUtils::AddToCAS(native_storage, mr_config.dump(2));
+    auto const& cas = native_storage.CAS();
+    auto digest = cas.StoreBlob(mr_config.dump(2));
+    if (not digest) {
+        return std::nullopt;
+    }
+    auto blob_path = cas.BlobPath(*digest, /*is_executable=*/false);
+    if (not blob_path) {
+        return std::nullopt;
+    }
+    return std::make_optional(std::make_pair(*blob_path, digest->hash()));
 }

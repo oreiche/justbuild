@@ -76,7 +76,10 @@
       ]
     , "HOST_ARCH":
       ["The architecture on which the build actions are carried out."]
-    , "DEBUG": ["Compute the debug-stage, needed for local debugging."]
+    , "DEBUG":
+      [ "If logically true (typically, a non-empty map), use debug-related"
+      , "options, otherwise not."
+      ]
     }
   , "imports":
     { "base-provides": ["./", "..", "defaults-base-provides"]
@@ -316,6 +319,13 @@
     { "type": "let*"
     , "bindings":
       [ ["name", {"type": "join", "$1": {"type": "FIELD", "name": "name"}}]
+      , [ "DEBUG"
+        , { "type": "if"
+          , "cond": {"type": "var", "name": "DEBUG"}
+          , "then": {"type": "var", "name": "DEBUG"}
+          , "else": {"type": "empty_map"}
+          }
+        ]
       , [ "stage"
         , { "type": "join"
           , "separator": "/"
@@ -348,6 +358,13 @@
     , "bindings":
       [ ["service support", true]
       , ["name", {"type": "join", "$1": {"type": "FIELD", "name": "name"}}]
+      , [ "DEBUG"
+        , { "type": "if"
+          , "cond": {"type": "var", "name": "DEBUG"}
+          , "then": {"type": "var", "name": "DEBUG"}
+          , "else": {"type": "empty_map"}
+          }
+        ]
       , [ "stage"
         , { "type": "join"
           , "separator": "/"

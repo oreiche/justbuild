@@ -288,6 +288,13 @@ As the non-rotating tasks can be useful in their own right, the
 `--no-rotate` option can be used to request only the clean-up tasks
 that do not lose information.
 
+If it is necessary to remove the entire cache, the `--all` option can
+be used to skip generation rotation and splitting of large files. In
+this scenario, all cache generations get removed starting from the
+oldest generation.
+
+`--no-rotate` and `--all` are incompatible options.
+
 **`execute`**
 -------------
 
@@ -433,6 +440,11 @@ JSON map with staging path as key, and object id description (hash,
 type, size) as value. Each artifact is guaranteed to be *`KNOWN`* in
 CAS. Therefore, this option cannot be used with **`analyse`**.  
 Supported by: build|install|rebuild|traverse.
+
+**`--profile`** *`PATH`*  
+Write a profile to the specified path. See **`just-profile`**(5) for
+details on the format.  
+Supported by: analyse|build|install|rebuild|describe.
 
 **`--dump-graph`** *`PATH`*  
 File path for writing the action graph description to. See
@@ -828,9 +840,14 @@ operations will be removed, in a FIFO scheme. If unset, defaults to
 -------------------------
 
 **`--no-rotate`**  
-Do not rotate gargabe-collection generations. Instead, only carry
+Do not rotate garbage-collection generations. Instead, only carry
 out clean up tasks that do not affect what is stored in the cache.
+Incompatible with `--all`.
 
+**`--all`**
+Do not rotate garbage-collection generations and do not split large
+files. Instead, remove all cache generations at once. Incompatible with
+`--no-rotate`.
 
 EXIT STATUS
 ===========
@@ -838,15 +855,24 @@ EXIT STATUS
 The exit status of **`just`** is one of the following values:
 
  - 0: the command completed successfully
- - 1: the command could not complete due to some errors (e.g.,
-   compilation errors, missing arguments, syntax errors, etc.)
+ - 1: the command failed due to a failing build action
  - 2: the command successfully parsed all the needed files (e.g.,
    *`TARGETS`*), successfully compiled the eventually required objects,
    but the generation of some artifacts failed (e.g., a test failed).
+ - 8: the command failed due to an error during analysis (e.g., missing or
+   malformed *`TARGETS`* files, assertion errors during analysis, cyclic
+   dependencies)
+ - 16: the command failed due to some problems related to the build environment
+   (e.g., local build root inaccessible, credentials for remote endpoint not
+   accessible)
+ - 32: the tool was invoked in a syntactically malformed way (e.g., failure
+   parsing the command line)
 
 See also
 ========
 
 **`just-repository-config`**(5),
 **`just-serve-config`**(5),
+**`just-graph-file`**(5),
+**`just-profile`**(5),
 **`just-mr`**(1)

@@ -61,6 +61,7 @@
 #include "src/buildtool/common/repository_config.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/common/tree.hpp"
+#include "src/buildtool/common/tree_overlay.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/file_system/file_root.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
@@ -327,6 +328,38 @@ auto ListDependencies(
     return deps.str();
 }
 
+auto ExprToTree(std::string const& context,
+                ExpressionPtr const& val) -> Tree::Ptr {
+    if (not val->IsMap()) {
+        throw Evaluator::EvaluationError{
+            fmt::format("{} has to be a map of artifacts, "
+                        "but found {}",
+                        context,
+                        val->ToString())};
+    }
+    std::unordered_map<std::string, ArtifactDescription> artifacts;
+    artifacts.reserve(val->Map().size());
+    for (auto const& [input_path, artifact] : val->Map()) {
+        if (not artifact->IsArtifact()) {
+            throw Evaluator::EvaluationError{
+                fmt::format("{} has to be a map of artifacts, "
+                            "but found {} for {}",
+                            artifact->ToString(),
+                            input_path,
+                            context)};
+        }
+        auto norm_path = ToNormalPath(std::filesystem::path{input_path});
+        artifacts.emplace(std::move(norm_path), artifact->Artifact());
+    }
+    auto conflict = BuildMaps::Target::Utils::tree_conflict(val);
+    if (conflict) {
+        throw Evaluator::EvaluationError{fmt::format(
+            "Tree conflicts on subtree {} of {}", *conflict, context)};
+    }
+    auto tree = std::make_shared<Tree>(std::move(artifacts));
+    return tree;
+}
+
 void withDependencies(
     const gsl::not_null<AnalyseContext*>& context,
     const std::vector<BuildMaps::Target::ConfiguredTarget>& transition_keys,
@@ -490,6 +523,7 @@ void withDependencies(
     std::vector<ActionDescription::Ptr> actions{};
     std::vector<std::string> blobs{};
     std::vector<Tree::Ptr> trees{};
+    std::vector<TreeOverlay::Ptr> tree_overlays{};
     auto main_exp_fcts = FunctionMap::MakePtr(
         {{"FIELD",
           [&params](auto&& eval, auto const& expr, auto const& env) {
@@ -812,36 +846,67 @@ void withDependencies(
          {"TREE",
           [&trees](auto&& eval, auto const& expr, auto const& env) {
               auto val = eval(expr->Get("$1", Expression::kEmptyMapExpr), env);
-              if (not val->IsMap()) {
-                  throw Evaluator::EvaluationError{
-                      fmt::format("TREE argument has to be a map of artifacts, "
-                                  "but found {}",
-                                  val->ToString())};
-              }
-              std::unordered_map<std::string, ArtifactDescription> artifacts;
-              artifacts.reserve(val->Map().size());
-              for (auto const& [input_path, artifact] : val->Map()) {
-                  if (not artifact->IsArtifact()) {
-                      throw Evaluator::EvaluationError{fmt::format(
-                          "TREE argument has to be a map of artifacts, "
-                          "but found {} for {}",
-                          artifact->ToString(),
-                          input_path)};
-                  }
-                  auto norm_path =
-                      ToNormalPath(std::filesystem::path{input_path});
-                  artifacts.emplace(std::move(norm_path), artifact->Artifact());
-              }
-              auto conflict = BuildMaps::Target::Utils::tree_conflict(val);
-              if (conflict) {
-                  throw Evaluator::EvaluationError{
-                      fmt::format("TREE conflicts on subtree {}", *conflict)};
-              }
-              auto tree = std::make_shared<Tree>(std::move(artifacts));
+              auto tree = ExprToTree("TREE argument", val);
               auto tree_id = tree->Id();
               trees.emplace_back(std::move(tree));
               return ExpressionPtr{ArtifactDescription::CreateTree(tree_id)};
           }},
+
+         {"TREE_OVERLAY",
+          [&tree_overlays, &trees](
+              auto&& eval, auto const& expr, auto const& env) {
+              auto val = eval(expr->Get("$1", Expression::kEmptyList), env);
+              if (not val->IsList()) {
+                  throw Evaluator::EvaluationError{
+                      fmt::format("TREE_OVERLAY argument has to be a list of "
+                                  "stages, but found {}",
+                                  val->ToString())};
+              }
+              TreeOverlay::to_overlay_t parts{};
+              for (std::size_t i = 0; i < val->List().size(); i++) {
+                  auto& entry = val->List()[i];
+                  auto context =
+                      fmt::format("Entry {} of TREE_OVERLAY argument", i);
+                  auto tree = ExprToTree(context, entry);
+                  auto tree_id = tree->Id();
+                  trees.emplace_back(std::move(tree));
+                  parts.emplace_back(ArtifactDescription::CreateTree(tree_id));
+              }
+              auto overlay = std::make_shared<TreeOverlay>(std::move(parts),
+                                                           /*disjoint=*/false);
+              auto overlay_id = overlay->Id();
+              tree_overlays.emplace_back(std::move(overlay));
+              return ExpressionPtr{
+                  ArtifactDescription::CreateTreeOverlay(overlay_id)};
+          }},
+         {"DISJOINT_TREE_OVERLAY",
+          [&tree_overlays, &trees](
+              auto&& eval, auto const& expr, auto const& env) {
+              auto val = eval(expr->Get("$1", Expression::kEmptyList), env);
+              if (not val->IsList()) {
+                  throw Evaluator::EvaluationError{fmt::format(
+                      "DISJOINT_TREE_OVERLAY argument has to be a list of "
+                      "stages, but found {}",
+                      val->ToString())};
+              }
+              TreeOverlay::to_overlay_t parts{};
+              for (std::size_t i = 0; i < val->List().size(); i++) {
+                  auto& entry = val->List()[i];
+                  auto context = fmt::format(
+                      "Entry {} of DISJOINT_TREE_OVERLAY argument", i);
+                  auto tree = ExprToTree(context, entry);
+                  auto tree_id = tree->Id();
+                  trees.emplace_back(std::move(tree));
+                  parts.emplace_back(ArtifactDescription::CreateTree(tree_id));
+              }
+              auto overlay = std::make_shared<TreeOverlay>(std::move(parts),
+                                                           /*disjoint=*/true);
+              auto overlay_id = overlay->Id();
+              tree_overlays.emplace_back(std::move(overlay));
+              return ExpressionPtr{
+                  ArtifactDescription::CreateTreeOverlay(overlay_id)};
+          }},
+
          {"VALUE_NODE",
           [](auto&& eval, auto const& expr, auto const& env) {
               auto val = eval(expr->Get("$1", Expression::kNone), env);
@@ -1043,6 +1108,7 @@ void withDependencies(
                                                std::move(actions),
                                                std::move(blobs),
                                                std::move(trees),
+                                               std::move(tree_overlays),
                                                std::move(effective_vars),
                                                std::move(tainted),
                                                std::move(implied_export),
@@ -1575,6 +1641,7 @@ void withTargetNode(
                            {},
                            {},
                            {},
+                           {},
                            TargetGraphInformation::kSource}));
     }
     else {
@@ -1678,6 +1745,7 @@ void TreeTarget(
                     std::vector<ActionDescription::Ptr>{},
                     std::vector<std::string>{},
                     std::vector<Tree::Ptr>{},
+                    std::vector<TreeOverlay::Ptr>{},
                     std::unordered_set<std::string>{},
                     std::set<std::string>{},
                     std::set<std::string>{},
@@ -1766,6 +1834,7 @@ void TreeTarget(
                             std::vector<ActionDescription::Ptr>{},
                             std::vector<std::string>{},
                             std::vector<Tree::Ptr>{tree},
+                            std::vector<TreeOverlay::Ptr>{},
                             std::unordered_set<std::string>{},
                             std::set<std::string>{},
                             std::set<std::string>{},
@@ -1800,6 +1869,7 @@ void GlobResult(const std::vector<AnalysedTargetPtr const*>& values,
         std::vector<ActionDescription::Ptr>{},
         std::vector<std::string>{},
         std::vector<Tree::Ptr>{},
+        std::vector<TreeOverlay::Ptr>{},
         std::unordered_set<std::string>{},
         std::set<std::string>{},
         std::set<std::string>{},

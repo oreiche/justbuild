@@ -23,12 +23,12 @@
     , ["src/buildtool/file_system", "object_type"]
     , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "expected"]
+    , ["src/utils/cpp", "tmp_dir"]
     ]
   , "private-deps":
     [ ["@", "json", "", "json"]
     , ["src/buildtool/logging", "log_level"]
     , ["src/utils/cpp", "hex_string"]
-    , ["src/utils/cpp", "path"]
     ]
   , "stage": ["src", "buildtool", "execution_api", "common"]
   }

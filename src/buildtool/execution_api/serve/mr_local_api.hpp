@@ -31,6 +31,7 @@
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
+#include "src/utils/cpp/tmp_dir.hpp"
 
 /// \brief Multi-repo-specific implementation of the abstract Execution API.
 /// Handles interaction between a native storage and a remote, irrespective of
@@ -54,8 +55,8 @@ class MRLocalApi final : public IExecutionApi {
         std::vector<std::string> const& /*output_files*/,
         std::vector<std::string> const& /*output_dirs*/,
         std::map<std::string, std::string> const& /*env_vars*/,
-        std::map<std::string, std::string> const& /*properties*/) const noexcept
-        -> IExecutionAction::Ptr final {
+        std::map<std::string, std::string> const& /*properties*/,
+        bool /*force_legacy*/) const noexcept -> IExecutionAction::Ptr final {
         // Execution not supported
         return nullptr;
     }
@@ -64,20 +65,16 @@ class MRLocalApi final : public IExecutionApi {
     /// Handles both native and compatible artifacts. Dispatches to appropriate
     /// local api instance based on digest hash type. Alternative api is never
     /// used.
-    // NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] auto RetrieveToPaths(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<std::filesystem::path> const& output_paths,
-        IExecutionApi const* /*alternative*/ = nullptr) const noexcept
-        -> bool final;
+        IExecutionApi const* /*alternative*/) const noexcept -> bool final;
 
-    // NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] auto RetrieveToFds(
         std::vector<Artifact::ObjectInfo> const& /*artifacts_info*/,
         std::vector<int> const& /*fds*/,
         bool /*raw_tree*/,
-        IExecutionApi const* /*alternative*/ = nullptr) const noexcept
-        -> bool final {
+        IExecutionApi const* /*alternative*/) const noexcept -> bool final {
         // Retrieval to file descriptors not supported
         return false;
     }
@@ -103,9 +100,8 @@ class MRLocalApi final : public IExecutionApi {
     /// the blobs to the appropriate local api instance based on used protocol.
     /// \note Caller is responsible for passing vectors with artifacts of the
     /// same digest type.
-    // NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] auto Upload(std::unordered_set<ArtifactBlob>&& blobs,
-                              bool skip_find_missing = false) const noexcept
+                              bool skip_find_missing) const noexcept
         -> bool final;
 
     [[nodiscard]] auto UploadTree(
@@ -132,6 +128,8 @@ class MRLocalApi final : public IExecutionApi {
         -> std::unordered_set<ArtifactDigest> final;
 
     [[nodiscard]] auto GetHashType() const noexcept -> HashFunction::Type final;
+
+    [[nodiscard]] auto GetTempSpace() const noexcept -> TmpDir::Ptr final;
 
   private:
     // retain local context references to have direct access to storages

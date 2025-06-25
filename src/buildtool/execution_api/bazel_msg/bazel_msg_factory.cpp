@@ -33,6 +33,7 @@
 #include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/git_repo.hpp"
+#include "src/buildtool/file_system/object_type.hpp"
 #include "src/utils/cpp/hex_string.hpp"
 #include "src/utils/cpp/path.hpp"
 
@@ -188,12 +189,21 @@ struct DirectoryNodeBundle final {
     std::copy(request.command_line->begin(),
               request.command_line->end(),
               pb::back_inserter(msg.mutable_arguments()));
+
+    // DEPRECATED as of v2.1: use output_paths instead, combining
+    // output_files and output_dirs.
     std::copy(request.output_files->begin(),
               request.output_files->end(),
               pb::back_inserter(msg.mutable_output_files()));
     std::copy(request.output_dirs->begin(),
               request.output_dirs->end(),
               pb::back_inserter(msg.mutable_output_directories()));
+
+    // NEW in v2.2
+    std::copy(request.output_paths->begin(),
+              request.output_paths->end(),
+              pb::back_inserter(msg.mutable_output_paths()));
+
     std::copy(request.env_vars->begin(),
               request.env_vars->end(),
               pb::back_inserter(msg.mutable_environment_variables()));
@@ -381,23 +391,12 @@ auto BazelMsgFactory::CreateDirectoryDigestFromGitTree(
         if (not tree_content) {
             return unexpected{tree_content.error()};
         }
-        auto const check_symlinks =
-            [&read_git](std::vector<ArtifactDigest> const& ids) {
-                return std::all_of(ids.begin(),
-                                   ids.end(),
-                                   [&read_git](auto const& id) -> bool {
-                                       auto content = GetContentFromGitEntry(
-                                           read_git, id, ObjectType::Symlink);
-                                       return content and
-                                              PathIsNonUpwards(*content);
-                                   });
-            };
-
         // Git-SHA1 hashing is used for reading from git
         HashFunction const hash_function{HashFunction::Type::GitSHA1};
         // the tree digest is in native mode, so no need for rehashing content
+        auto skip_symlinks = [](auto const& /*unused*/) { return true; };
         auto const entries = GitRepo::ReadTreeData(
-            *tree_content, digest.hash(), check_symlinks, /*is_hex_id=*/true);
+            *tree_content, digest.hash(), skip_symlinks, /*is_hex_id=*/true);
         if (not entries) {
             return unexpected{fmt::format("failed reading entries of tree {}",
                                           digest.hash())};
@@ -644,11 +643,6 @@ auto BazelMsgFactory::CreateGitTreeDigestFromDirectory(
                 }
             }
             else {
-                // check validity of symlink
-                if (not PathIsNonUpwards(sym.target())) {
-                    return unexpected{fmt::format(
-                        "found non-upwards symlink {}", sym_digest.hash())};
-                }
                 // rehash symlink
                 auto const blob_digest = store_symlink(sym.target());
                 if (not blob_digest) {
@@ -771,8 +765,9 @@ auto BazelMsgFactory::CreateDirectoryDigestFromLocalTree(
                        &root,
                        &store_file,
                        &store_dir,
-                       &store_symlink](auto name, auto type) {
-        const auto full_name = root / name;
+                       &store_symlink](std::filesystem::path const& name,
+                                       ObjectType type) {
+        const auto& full_name = root / name;
         if (IsTreeObject(type)) {
             // create and store sub directory
             auto digest = CreateDirectoryDigestFromLocalTree(
@@ -845,7 +840,8 @@ auto BazelMsgFactory::CreateGitTreeDigestFromLocalTree(
                        &root,
                        &store_file,
                        &store_tree,
-                       &store_symlink](auto name, auto type) {
+                       &store_symlink](std::filesystem::path const& name,
+                                       ObjectType type) {
         const auto full_name = root / name;
         if (IsTreeObject(type)) {
             // create and store sub directory

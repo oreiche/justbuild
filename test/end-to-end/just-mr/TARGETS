@@ -110,6 +110,12 @@
   , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
   , "repos": ["fetch-absent (data)"]
   }
+, "absent-closure":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["absent-closure"]
+  , "test": ["absent-closure.sh"]
+  , "deps": [["", "mr-tool-under-test"]]
+  }
 , "absent-config":
   { "type": ["end-to-end", "with serve"]
   , "name": ["absent-config"]
@@ -232,6 +238,21 @@
   , "test": ["ignore-special.sh"]
   , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
   }
+, "invocation-log":
+  { "type": ["@", "rules", "shell/test", "script"]
+  , "name": ["invocation-log"]
+  , "test": ["invocation-log.sh"]
+  , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
+  , "keep-dirs": ["log"]
+  , "keep": ["out/just-repo-config.json"]
+  }
+, "cas-root":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["cas-root"]
+  , "test": ["cas-root.sh"]
+  , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
+  , "keep-dirs": ["lbr-analyse", "out"]
+  }
 , "TESTS":
   { "type": ["@", "rules", "test", "suite"]
   , "arguments_config": ["TEST_BOOTSTRAP_JUST_MR", "TEST_COMPATIBLE_REMOTE"]
@@ -259,14 +280,21 @@
               , "gc-repo"
               , "repeated-gc"
               , "gc-drop"
+              , "invocation-log"
               ]
             , { "type": "if"
               , "cond": {"type": "var", "name": "TEST_COMPATIBLE_REMOTE"}
               , "then": []
-              , "else": ["fetch-remote", "fetch-remote-git-tree", "stay-local"]
+              , "else":
+                [ "fetch-remote"
+                , "fetch-remote-git-tree"
+                , "stay-local"
+                , "cas-root"
+                ]
               }
             , [ "fetch-absent"
               , "fetch-absent-git-tree"
+              , "absent-closure"
               , "absent-config"
               , "fetch-absent-archives"
               , "fetch-absent-archives-symlinks"

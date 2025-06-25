@@ -33,6 +33,7 @@
 #include "src/buildtool/execution_api/git/git_api.hpp"
 #include "src/buildtool/execution_api/local/context.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
+#include "src/utils/cpp/tmp_dir.hpp"
 
 class LocalApi final : public IExecutionApi {
   public:
@@ -46,23 +47,39 @@ class LocalApi final : public IExecutionApi {
         std::vector<std::string> const& output_files,
         std::vector<std::string> const& output_dirs,
         std::map<std::string, std::string> const& env_vars,
-        std::map<std::string, std::string> const& properties) const noexcept
-        -> IExecutionAction::Ptr final;
+        std::map<std::string, std::string> const& properties,
+        bool force_legacy) const noexcept -> IExecutionAction::Ptr final;
 
-    // NOLINTNEXTLINE(google-default-arguments)
+    /// \brief Create a new action (>=RBEv2.1).
+    /// \param[in] root_digest  Digest of the build root.
+    /// \param[in] command      Command as argv vector
+    /// \param[in] cwd          Working directory, relative to execution root
+    /// \param[in] output_paths List of output file/dir paths, relative to cwd
+    /// \param[in] env_vars     The environment variables to set.
+    /// \param[in] properties   Platform properties to set.
+    /// \returns The new action.
+    /// Note that, due to missing file/dir separation, the execution response
+    /// will not report output file symlinks and directory symlinks separately.
+    /// (see \ref LocalResponse::DirectorySymlinks)
+    [[nodiscard]] auto CreateAction(
+        ArtifactDigest const& root_digest,
+        std::vector<std::string> const& command,
+        std::string const& cwd,
+        std::vector<std::string> const& output_paths,
+        std::map<std::string, std::string> const& env_vars,
+        std::map<std::string, std::string> const& properties) const noexcept
+        -> IExecutionAction::Ptr;
+
     [[nodiscard]] auto RetrieveToPaths(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<std::filesystem::path> const& output_paths,
-        IExecutionApi const* /*alternative*/ = nullptr) const noexcept
-        -> bool final;
+        IExecutionApi const* /*alternative*/) const noexcept -> bool final;
 
-    // NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] auto RetrieveToFds(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<int> const& fds,
         bool raw_tree,
-        IExecutionApi const* /*alternative*/ = nullptr) const noexcept
-        -> bool final;
+        IExecutionApi const* /*alternative*/) const noexcept -> bool final;
 
     [[nodiscard]] auto RetrieveToCas(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
@@ -104,6 +121,8 @@ class LocalApi final : public IExecutionApi {
     }
 
     [[nodiscard]] auto GetHashType() const noexcept -> HashFunction::Type final;
+
+    [[nodiscard]] auto GetTempSpace() const noexcept -> TmpDir::Ptr final;
 
   private:
     LocalContext const& local_context_;

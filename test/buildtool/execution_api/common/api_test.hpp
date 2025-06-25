@@ -29,6 +29,8 @@
 #include <vector>
 
 #include "catch2/catch_test_macros.hpp"
+#include "catch2/catch_tostring.hpp"
+#include "catch2/generators/catch_generators_all.hpp"
 #include "fmt/core.h"
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact.hpp"
@@ -36,11 +38,14 @@
 #include "src/buildtool/common/artifact_description.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
 #include "src/buildtool/common/artifact_digest_factory.hpp"
+#include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_api/common/execution_response.hpp"
 #include "src/buildtool/execution_api/local/config.hpp"
+#include "src/buildtool/execution_api/local/local_api.hpp"
+#include "src/buildtool/execution_api/local/local_response.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/file_system/object_type.hpp"
@@ -654,16 +659,18 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
 
     auto output_path = std::filesystem::path{"foo/bar/baz"};
 
-    auto action = api->CreateAction(
-        *api->UploadTree({}),
-        {"/bin/sh",
-         "-c",
-         fmt::format("set -e\n [ -d {} ]", output_path.string())},
-        "",
-        {},
-        {output_path},
-        {},
-        props);
+    auto action =
+        api->CreateAction(*api->UploadTree({}),
+                          {"/bin/sh",
+                           "-c",
+                           fmt::format("set -e\n [ -d {} ]\n mkdir -p {}",
+                                       output_path.parent_path().string(),
+                                       output_path.string())},
+                          "",
+                          {},
+                          {output_path},
+                          {},
+                          props);
 
     SECTION("Cache execution result in action cache") {
         action->SetCacheFlag(IExecutionAction::CacheFlag::CacheOutput);
@@ -721,6 +728,238 @@ TestRetrieveFileAndSymlinkWithSameContentToPath(ApiFactory const& api_factory,
             REQUIRE(artifacts.value()->contains(output_path));
             CHECK(IsTreeObject(artifacts.value()->at(output_path).type));
             CHECK(not response->IsCached());
+        }
+    }
+}
+
+[[nodiscard]] static inline auto TestSymlinkCollection(
+    ApiFactory const& api_factory,
+    ExecProps const& props) {
+    auto api = api_factory();
+
+    SECTION("dangling") {
+        auto action = api->CreateAction(
+            *api->UploadTree({}),
+            {"/bin/sh",
+             "-c",
+             "set -e; "
+             "ln -s none foo; "
+             "rm -rf bar; ln -s none bar; "
+             "mkdir -p baz; ln -s none baz/foo; ln -s none baz/bar"},
+            "",
+            {"foo"},
+            {"bar", "baz"},
+            {},
+            props);
+
+        // run execution
+        auto const response = action->Execute();
+        REQUIRE(response);
+
+        // verify result
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains("foo"));
+        CHECK(IsSymlinkObject(artifacts.value()->at("foo").type));
+        REQUIRE(artifacts.value()->contains("bar"));
+        CHECK(IsSymlinkObject(artifacts.value()->at("bar").type));
+        REQUIRE(artifacts.value()->contains("baz"));
+        CHECK(IsTreeObject(artifacts.value()->at("baz").type));
+
+        // check if bar was correctly detected as directory symlink
+        auto* local_response = dynamic_cast<LocalResponse*>(response.get());
+        if (local_response != nullptr) {
+            auto dir_symlinks = local_response->DirectorySymlinks();
+            REQUIRE(dir_symlinks);
+            CHECK((*dir_symlinks)->contains("bar"));
+        }
+
+        SECTION("consuming dangling symlinks") {
+            auto dangling_symlinks_tree = artifacts.value()->at("baz");
+            auto consume_action =
+                api->CreateAction(dangling_symlinks_tree.digest,
+                                  {"/bin/sh",
+                                   "-c",
+                                   "set -e; "
+                                   "[ \"$(readlink foo)\" = \"none\" ]; "
+                                   "[ \"$(readlink bar)\" = \"none\" ]; "
+                                   "touch success"},
+                                  "",
+                                  {"success"},
+                                  {},
+                                  {},
+                                  props);
+
+            auto const consume_response = consume_action->Execute();
+            REQUIRE(consume_response);
+            CHECK(consume_response->ExitCode() == 0);
+        }
+    }
+
+    SECTION("upwards") {
+        auto action = api->CreateAction(
+            *api->UploadTree({}),
+            {"/bin/sh",
+             "-c",
+             "set -e; "
+             "ln -s ../foo foo; "
+             "rm -rf bar; ln -s /bar bar; "
+             "mkdir -p baz; ln -s ../foo baz/foo; ln -s /bar baz/bar"},
+            "",
+            {"foo"},
+            {"bar", "baz"},
+            {},
+            props);
+
+        // run execution
+        auto const response = action->Execute();
+        REQUIRE(response);
+
+        // verify result
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+
+        if (ProtocolTraits::IsNative(api->GetHashType())) {
+            // in native, no symlink is collected, as none of them is valid
+            CHECK(artifacts.value()->empty());
+            return;
+        }
+
+        REQUIRE(artifacts.value()->contains("foo"));
+        CHECK(IsSymlinkObject(artifacts.value()->at("foo").type));
+        REQUIRE(artifacts.value()->contains("bar"));
+        CHECK(IsSymlinkObject(artifacts.value()->at("bar").type));
+        REQUIRE(artifacts.value()->contains("baz"));
+        CHECK(IsTreeObject(artifacts.value()->at("baz").type));
+
+        // check if bar was correctly detected as directory symlink
+        auto* local_response = dynamic_cast<LocalResponse*>(response.get());
+        if (local_response != nullptr) {
+            auto dir_symlinks = local_response->DirectorySymlinks();
+            REQUIRE(dir_symlinks);
+            CHECK((*dir_symlinks)->contains("bar"));
+        }
+
+        SECTION("consuming upwards symlinks") {
+            auto upwards_symlinks_tree = artifacts.value()->at("baz");
+            auto consume_action =
+                api->CreateAction(upwards_symlinks_tree.digest,
+                                  {"/bin/sh",
+                                   "-c",
+                                   "set -e; "
+                                   "[ \"$(readlink foo)\" = \"../foo\" ]; "
+                                   "[ \"$(readlink bar)\" = \"/bar\" ]; "
+                                   "touch success"},
+                                  "",
+                                  {"success"},
+                                  {},
+                                  {},
+                                  props);
+
+            auto const consume_response = consume_action->Execute();
+            REQUIRE(consume_response);
+            CHECK(consume_response->ExitCode() == 0);
+        }
+    }
+}
+
+[[nodiscard]] static inline auto TestOutputPathModes(
+    ApiFactory const& api_factory,
+    ExecProps const& props) {
+    auto api = api_factory();
+
+    auto force_legacy = GENERATE(false, true);
+
+    DYNAMIC_SECTION("Separated output paths (legacy=" << force_legacy << ")") {
+        auto action =
+            api->CreateAction(*api->UploadTree({}),
+                              {"/bin/sh",
+                               "-c",
+                               "set -e; touch foo; ln -s none fox; "
+                               "mkdir -p bar; rm -rf bat; ln -s none bat"},
+                              "",
+                              {"foo", "fox"},
+                              {"bar", "bat"},
+                              {},
+                              props,
+                              force_legacy);
+        REQUIRE(action);
+
+        // run execution
+        auto const response = action->Execute();
+        REQUIRE(response);
+
+        // verify result
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains("foo"));
+        CHECK(IsFileObject(artifacts.value()->at("foo").type));
+        REQUIRE(artifacts.value()->contains("fox"));
+        CHECK(IsSymlinkObject(artifacts.value()->at("fox").type));
+        REQUIRE(artifacts.value()->contains("bar"));
+        CHECK(IsTreeObject(artifacts.value()->at("bar").type));
+        REQUIRE(artifacts.value()->contains("bat"));
+        CHECK(IsSymlinkObject(artifacts.value()->at("bat").type));
+
+        // verify DirectorySymlinks
+        auto* local_response = dynamic_cast<LocalResponse*>(response.get());
+        if (local_response != nullptr) {
+            auto dir_symlinks = local_response->DirectorySymlinks();
+            if (force_legacy or ProtocolTraits::IsNative(api->GetHashType())) {
+                // in legacy mode (<RBEv2.1), dir symlinks must be available,
+                // which is implicitly enabled for the native protocol as well.
+                REQUIRE(dir_symlinks.has_value());
+                CHECK(*dir_symlinks != nullptr);
+            }
+            if (dir_symlinks and *dir_symlinks != nullptr) {
+                // even in non-legacy mode, the API is free to additionally
+                // report output directory symlinks, and if it does so, it must
+                // correctly report all output directory symlinks.
+                CHECK((*dir_symlinks)->contains("bat"));
+            }
+        }
+    }
+
+    SECTION("Combined output paths") {
+        auto const* local_api = dynamic_cast<LocalApi const*>(api.get());
+        if (local_api == nullptr) {
+            // skip: combined output paths are only available for local api
+            return;
+        }
+
+        auto action = local_api->CreateAction(
+            *local_api->UploadTree({}),
+            {"/bin/sh",
+             "-c",
+             "set -e; touch foo; ln -s none fox; "
+             "mkdir -p bar; rm -rf bat; ln -s none bat"},
+            "",
+            {"foo", "fox", "bar", "bat"},
+            {},
+            props);
+        REQUIRE(action);
+
+        // run execution
+        auto const response = action->Execute();
+        REQUIRE(response);
+
+        // verify result
+        auto const artifacts = response->Artifacts();
+        REQUIRE(artifacts.has_value());
+        REQUIRE(artifacts.value()->contains("foo"));
+        CHECK(IsFileObject(artifacts.value()->at("foo").type));
+        REQUIRE(artifacts.value()->contains("fox"));
+        CHECK(IsSymlinkObject(artifacts.value()->at("fox").type));
+        REQUIRE(artifacts.value()->contains("bar"));
+        CHECK(IsTreeObject(artifacts.value()->at("bar").type));
+        REQUIRE(artifacts.value()->contains("bat"));
+        CHECK(IsSymlinkObject(artifacts.value()->at("bat").type));
+
+        // with combined output paths, we cannot report output dir symlinks
+        auto* local_response = dynamic_cast<LocalResponse*>(response.get());
+        if (local_response != nullptr) {
+            auto dir_symlinks = local_response->DirectorySymlinks();
+            REQUIRE_FALSE(dir_symlinks);
         }
     }
 }

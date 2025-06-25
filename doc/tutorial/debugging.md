@@ -26,44 +26,27 @@ flags) for our example project. This can be done by extending the existing
 ``` {.jsonc srcname="tutorial-defaults/CC/TARGETS"}
 { "defaults":
   { "type": ["CC", "defaults"]
-  , "arguments_config": ["DEBUG"]
   , "CC": ["cc"]
   , "CXX": ["c++"]
-  , "CFLAGS":
-    { "type": "++"
-    , "$1":
-      [ ["-O2", "-Wall"]
-      , { "type": "if"
-        , "cond": {"type": "var", "name": "DEBUG"}
-        , "then": ["-g"]
-        }
-      ]
-    }
-  , "CXXFLAGS":
-    { "type": "++"
-    , "$1":
-      [ ["-O2", "-Wall"]
-      , { "type": "if"
-        , "cond": {"type": "var", "name": "DEBUG"}
-        , "then": ["-g"]
-        }
-      ]
-    }
+  , "ADD_COMPILE_FLAGS": ["-O2", "-Wall"]
+  , "ADD_DEBUGFLAGS": ["-O2", "-Wall", "-g"]
   , "AR": ["ar"]
+  , "DWP": ["dwp"]
   , "PATH": ["/bin", "/usr/bin"]
   }
 }
 ```
 
-This states that when the `DEBUG` configuration argument is set, the C/C++ flags
-should contain `-g` to generate debug information for `gdb(1)`. As this updated
-`TARGETS` file is under version control, we need to commit the changes:
+This states that when in debug mode a different set of C/C++ flags should be
+used, in this case the ones from release mode plus the `-g` flag to generate
+debug information for `gdb(1)`. As this updated `TARGETS` file is under version
+control, we need to commit the changes:
 
 ``` sh
 $ git add tutorial-defaults
 $ git commit -m "update compile flags for debugging"
-[master baabec7] update compile flags for debugging
- 1 file changed, 21 insertions(+), 2 deletions(-)
+[master 642f739] update compile flags for debugging
+ 1 file changed, 1 insertions(+)
 ```
 
 Now we need to configure the actual target we want to debug. The `TARGETS` file
@@ -75,19 +58,15 @@ need to add a new target, configured in debug mode.
 , "helloworld-debug":
   { "type": "configure"
   , "target": "helloworld"
-  , "config":
-    { "type": "let*"
-    , "bindings": [["DEBUG", true]]
-    , "body": {"type": "env", "vars": ["DEBUG"]}
-    }
+  , "config": {"type": "'", "$1": {"DEBUG": {"USE_DEBUG_FISSION": false}}}
   }
 ...
 ```
 
 This describes the debug version of *hello-world*, configured by setting the
-`"DEBUG"` flag, which in turn will instruct the updated toolchain defaults,
-which now honor the `"DEBUG"` argument, to compile all actions with the `"-g"`
-flag.
+`"DEBUG"` map to enable regular (non-fission) debug mode, which in turn will
+instruct the updated toolchain defaults, which honor the `"DEBUG"` argument, to
+compile all actions with the `"-g"` flag.
 
 To actually collect the artifacts needed to run the debugger, we use the
 `["CC", "install-with-deps"]` rule, contained in the `rules-cc` repository.
@@ -107,16 +86,16 @@ Now this target can be installed to a location of our choice provided by the
 ``` sh
 $ just-mr install "helloworld-debug staged" -o .ext/debug
 INFO: Performing repositories setup
-INFO: Found 5 repositories to set up
+INFO: Found 5 repositories involved
 INFO: Setup finished, exec ["just","install","-C","...","helloworld-debug staged","-o",".ext/debug"]
 INFO: Requested target is [["@","tutorial","","helloworld-debug install"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld-debug install"],{}]
 INFO: Export targets found: 0 cached, 1 uncached, 0 not eligible for caching
-INFO: Discovered 7 actions, 3 trees, 0 blobs
+INFO: Discovered 7 actions, 0 tree overlays, 3 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld-debug install"],{}].
 INFO: Processed 7 actions, 0 cache hits.
 INFO: Artifacts can be found in:
-        /tmp/tutorial/.ext/debug/bin/helloworld [d88cadc156dc3b9b442fc162f7bc92c86b63d5f8:1570432:x]
+        /tmp/tutorial/.ext/debug/bin/helloworld [5f0ce4ed97000af42902c41f9d3b7d51343534a6:1570896:x]
         /tmp/tutorial/.ext/debug/include/fmt [3a5cb60e63f7480b150fdef0883d7a76e8a57a00:464:t]
         /tmp/tutorial/.ext/debug/include/greet/greet.hpp [63815ae1b5a36ab29efa535141fee67f3b7769de:53:f]
         /tmp/tutorial/.ext/debug/work/fmt [3a5cb60e63f7480b150fdef0883d7a76e8a57a00:464:t]

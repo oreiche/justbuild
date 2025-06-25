@@ -45,29 +45,126 @@
     ]
   , "stage": ["test"]
   }
-, "TESTS":
+, "unit tests with compatibility (unconfigured)":
   { "type": ["@", "rules", "test", "suite"]
-  , "arguments_config": ["DROP_LARGE_TESTS"]
-  , "deps":
-    { "type": "++"
+  , "arguments_config": ["TEST_COMPATIBLE_REMOTE"]
+  , "stage":
+    [ { "type": "if"
+      , "cond": {"type": "var", "name": "TEST_COMPATIBLE_REMOTE"}
+      , "then": "compatible"
+      , "else": "native"
+      }
+    ]
+  , "deps": [["./", "buildtool", "TESTS"]]
+  }
+, "unit tests with compatibility, compatible":
+  { "type": "configure"
+  , "arguments_config": ["TEST_ENV"]
+  , "tainted": ["test"]
+  , "target": "unit tests with compatibility (unconfigured)"
+  , "config":
+    { "type": "`"
     , "$1":
-      [ [ ["./", "buildtool", "TESTS"]
-        , ["./", "utils", "TESTS"]
-        , ["./", "end-to-end", "TESTS"]
-        , ["./", "other_tools", "TESTS"]
-        ]
-      , { "type": "if"
-        , "cond": {"type": "var", "name": "DROP_LARGE_TESTS"}
-        , "then": []
-        , "else": ["bootstrap-test"]
+      { "TEST_COMPATIBLE_REMOTE": true
+      , "TEST_ENV":
+        { "type": ","
+        , "$1":
+          { "type": "map_union"
+          , "$1":
+            [ { "type": "var"
+              , "name": "TEST_ENV"
+              , "default": {"type": "empty_map"}
+              }
+            , {"type": "'", "$1": {"COMPATIBLE": "YES"}}
+            ]
+          }
+        }
+      }
+    }
+  }
+, "unit tests with compatibility, native":
+  { "type": "configure"
+  , "arguments_config": ["TEST_ENV"]
+  , "tainted": ["test"]
+  , "target": "unit tests with compatibility (unconfigured)"
+  , "config":
+    { "type": "`"
+    , "$1":
+      { "TEST_COMPATIBLE_REMOTE": false
+      , "TEST_ENV":
+        { "type": ","
+        , "$1":
+          { "type": "map_union"
+          , "$1":
+            { "type": "foreach_map"
+            , "var_key": "name"
+            , "var_val": "value"
+            , "range":
+              { "type": "var"
+              , "name": "TEST_ENV"
+              , "default": {"type": "empty_map"}
+              }
+            , "body":
+              { "type": "case"
+              , "expr": {"type": "var", "name": "name"}
+              , "case": {"COMPATIBLE": {"type": "empty_map"}}
+              , "default":
+                { "type": "singleton_map"
+                , "key": {"type": "var", "name": "name"}
+                , "value": {"type": "var", "name": "value"}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+, "unit tests with compatibility":
+  { "type": ["@", "rules", "test", "suite"]
+  , "stage": ["using-remote"]
+  , "deps":
+    [ "unit tests with compatibility, compatible"
+    , "unit tests with compatibility, native"
+    ]
+  }
+, "TESTS":
+  { "type": ["@", "rules", "test", "matrix"]
+  , "arguments_config": ["DROP_LARGE_TESTS", "DROP_END_TO_END_TESTS"]
+  , "deps":
+    { "type": "`"
+    , "$1":
+      [ "unit tests with compatibility"
+      , ["./", "utils", "TESTS"]
+      , ["./", "other_tools", "TESTS"]
+      , { "type": ",@"
+        , "$1":
+          { "type": "if"
+          , "cond": {"type": "var", "name": "DROP_END_TO_END_TESTS"}
+          , "then": []
+          , "else": [["./", "end-to-end", "TESTS"]]
+          }
+        }
+      , { "type": ",@"
+        , "$1":
+          { "type": "if"
+          , "cond":
+            { "type": "or"
+            , "$1":
+              [ {"type": "var", "name": "DROP_END_TO_END_TESTS"}
+              , {"type": "var", "name": "DROP_LARGE_TESTS"}
+              ]
+            }
+          , "then": []
+          , "else": ["bootstrap-test"]
+          }
         }
       ]
     }
   }
 , "ALL":
   { "type": "configure"
-  , "arguments_config":
-    ["OS", "ARCH", "HOST_ARCH", "TARGET_ARCH", "TEST_BOOTSTRAP_JUST_MR"]
+  , "arguments_config": ["OS", "ARCH", "HOST_ARCH", "TARGET_ARCH"]
   , "tainted": ["test"]
   , "target": "TESTS"
   , "config":
@@ -89,11 +186,14 @@
         ]
       ]
     , "body":
-      { "type": "env"
-      , "vars":
-        ["OS", "ARCH", "HOST_ARCH", "TARGET_ARCH", "TEST_BOOTSTRAP_JUST_MR"]
-      }
+      {"type": "env", "vars": ["OS", "ARCH", "HOST_ARCH", "TARGET_ARCH"]}
     }
+  }
+, "UNIT_TESTS":
+  { "type": "configure"
+  , "tainted": ["test"]
+  , "target": "ALL"
+  , "config": {"type": "'", "$1": {"DROP_END_TO_END_TESTS": true}}
   }
 , "bootstrap-test":
   { "type": "configure"

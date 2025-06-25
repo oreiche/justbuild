@@ -58,6 +58,8 @@
     [ "module_name"
     , ["@", "json", "", "json"]
     , ["src/buildtool/build_engine/expression", "expression_ptr_interface"]
+    , ["src/buildtool/logging", "log_level"]
+    , ["src/buildtool/logging", "logging"]
     , ["src/utils/cpp", "hash_combine"]
     ]
   , "stage": ["src", "buildtool", "build_engine", "base_maps"]
@@ -101,6 +103,7 @@
     , ["src/buildtool/build_engine/expression", "expression_ptr_interface"]
     , ["src/buildtool/common", "action_description"]
     , ["src/buildtool/common", "tree"]
+    , ["src/buildtool/common", "tree_overlay"]
     ]
   }
 , "field_reader":

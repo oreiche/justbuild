@@ -66,8 +66,13 @@ auto LocalApi::CreateAction(
     std::vector<std::string> const& output_files,
     std::vector<std::string> const& output_dirs,
     std::map<std::string, std::string> const& env_vars,
-    std::map<std::string, std::string> const& properties) const noexcept
-    -> IExecutionAction::Ptr {
+    std::map<std::string, std::string> const& properties,
+    bool force_legacy) const noexcept -> IExecutionAction::Ptr {
+    if (ProtocolTraits::IsNative(GetHashType())) {
+        // fall back to legacy for native
+        force_legacy = true;
+    }
+    bool best_effort = not force_legacy;
     return IExecutionAction::Ptr{new (std::nothrow) LocalAction{&local_context_,
                                                                 root_digest,
                                                                 command,
@@ -75,10 +80,27 @@ auto LocalApi::CreateAction(
                                                                 output_files,
                                                                 output_dirs,
                                                                 env_vars,
+                                                                properties,
+                                                                best_effort}};
+}
+
+auto LocalApi::CreateAction(
+    ArtifactDigest const& root_digest,
+    std::vector<std::string> const& command,
+    std::string const& cwd,
+    std::vector<std::string> const& output_paths,
+    std::map<std::string, std::string> const& env_vars,
+    std::map<std::string, std::string> const& properties) const noexcept
+    -> IExecutionAction::Ptr {
+    return IExecutionAction::Ptr{new (std::nothrow) LocalAction{&local_context_,
+                                                                root_digest,
+                                                                command,
+                                                                cwd,
+                                                                output_paths,
+                                                                env_vars,
                                                                 properties}};
 }
 
-// NOLINTNEXTLINE(google-default-arguments)
 auto LocalApi::RetrieveToPaths(
     std::vector<Artifact::ObjectInfo> const& artifacts_info,
     std::vector<std::filesystem::path> const& output_paths,
@@ -106,7 +128,6 @@ auto LocalApi::RetrieveToPaths(
     return true;
 }
 
-// NOLINTNEXTLINE(google-default-arguments)
 auto LocalApi::RetrieveToFds(
     std::vector<Artifact::ObjectInfo> const& artifacts_info,
     std::vector<int> const& fds,
@@ -181,21 +202,10 @@ auto LocalApi::RetrieveToCas(
         if (not blob.has_value()) {
             return false;
         }
-
-        // Collect blob and upload to remote CAS if transfer size reached.
-        if (not UpdateContainerAndUpload(
-                &container,
-                *std::move(blob),
-                /*exception_is_fatal=*/true,
-                [&api](std::unordered_set<ArtifactBlob>&& blobs) {
-                    return api.Upload(std::move(blobs),
-                                      /*skip_find_missing=*/true);
-                })) {
-            return false;
-        }
+        container.emplace(*std::move(blob));
     }
 
-    // Upload remaining blobs to remote CAS.
+    // Upload blobs to remote CAS.
     return api.Upload(std::move(container), /*skip_find_missing=*/true);
 }
 
@@ -228,9 +238,17 @@ auto LocalApi::Upload(std::unordered_set<ArtifactBlob>&& blobs,
         blobs.begin(),
         blobs.end(),
         [&cas = local_context_.storage->CAS()](ArtifactBlob const& blob) {
+            bool const is_tree = blob.GetDigest().IsTree();
+
             std::optional<ArtifactDigest> cas_digest;
-            if (auto const content = blob.ReadContent()) {
-                cas_digest = blob.GetDigest().IsTree()
+            if (auto const path = blob.GetFilePath()) {
+                static constexpr bool kOwner = true;
+                cas_digest =
+                    is_tree ? cas.StoreTree<kOwner>(*path)
+                            : cas.StoreBlob<kOwner>(*path, blob.IsExecutable());
+            }
+            else if (auto const content = blob.ReadContent()) {
+                cas_digest = is_tree
                                  ? cas.StoreTree(*content)
                                  : cas.StoreBlob(*content, blob.IsExecutable());
             }
@@ -343,4 +361,8 @@ auto LocalApi::SpliceBlob(ArtifactDigest const& blob_digest,
 
 auto LocalApi::GetHashType() const noexcept -> HashFunction::Type {
     return local_context_.storage_config->hash_function.GetType();
+}
+
+auto LocalApi::GetTempSpace() const noexcept -> TmpDir::Ptr {
+    return local_context_.storage_config->CreateTypedTmpDir("api_space");
 }

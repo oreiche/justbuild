@@ -35,7 +35,7 @@ Json = Dict[str, Any]
 
 DEBUG = os.environ.get("DEBUG")
 
-REPOS: str = "etc/repos.json"
+REPOS: str = "etc/repos.in.json"
 MAIN_MODULE: str = ""
 MAIN_TARGET: str = ""
 MAIN_STAGE: str = "bin/just"
@@ -341,14 +341,16 @@ def prune_config(*, repos_file: str, empty_dir: str) -> None:
     with open(repos_file, "w") as f:
         json.dump(repos, f, indent=2)
 
+
 def ignore_dst(dst: str) -> Callable[[str, List[str]], List[str]]:
     def ignore_(path: str, names: List[str]) -> List[str]:
         if os.path.normpath(path) == dst:
             return names
         for n in names:
             if os.path.normpath(os.path.join(path, n)) == dst:
-                return[n]
+                return [n]
         return []
+
     return ignore_
 
 
@@ -423,6 +425,8 @@ def bootstrap() -> None:
             dirs.remove('computed_roots')
         if 'tree_structure' in dirs:
             dirs.remove('tree_structure')
+        if 'tree_operations' in dirs:
+            dirs.remove('tree_operations')
         for f in files:
             if f.endswith(".cpp"):
                 cpp_files.append(os.path.join(root, f))

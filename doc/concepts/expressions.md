@@ -84,6 +84,7 @@ and `null` otherwise.
 The value is the value of the key `"$1"` uninterpreted but replacing
 all outermost maps having a key `"type"` with the value either
 `","` or `",@"` in the following way.
+
  - If the value for the key `"type"` is `","`, the value for the
    key `"$1"` (or `null` if there is no key `"$1"`) is evaluated
    and the map is replaced by the value of that evaluation.
@@ -94,6 +95,7 @@ all outermost maps having a key `"type"` with the value either
    that list (i.e., the list obtained by evaluating the value for
    `"$1"`) are inserted (not the list itself) into the surrounding
    list replacing that map.
+
 For example, ``{"type": "`", "$1": [1, 2, {"type": ",@", "$1": [3, 4]}]}``
 evaluates to `[1, 2, 3, 4]` while
 ``{"type": "`", "$1": [1, 2, {"type": ",", "$1": [3, 4]}]}``
@@ -218,6 +220,30 @@ environment obtained from the original one by setting the
 variables specified at `"var_key"` and `"var_val"` (literal
 strings, default values `"_"` and `"$_"`, respectively). The
 result of the evaluation is the list of those values.
+
+##### Zipping
+
+###### `"zip_with"`
+
+The keys `"range_1"` and `"range_2"` are evaluated and have
+to evaluate to lists. For each pair of entries, one from each
+list, in order, the expression `"body"` is evaluated in an
+environment obtained from the original one by correspondingly
+setting the variables specified at `"var_1"` and `"var_2"`
+(default values `"$1"` and `"$2"`, respectively). The result of
+the evaluation is the list of those values. If the input lists
+are of different lengths, any entry with no correspondence in
+the other list is ignored.
+
+###### `"zip_map"`
+
+The keys `"range_key"` and `"range_val"` are evaluated and have
+to evaluate to lists. The result is a map, from an entry in
+`"range_key"` to the entry in `"range_val"` with the same index.
+If the input lists are of different lengths, any entry with no
+correspondence in the other list is ignored. It is equivalent but
+more convenient and more performant to a `"zip_with"` expression
+generating a list of maps combined with a `map_union`.
 
 ##### Folding: `"foldl"`
 

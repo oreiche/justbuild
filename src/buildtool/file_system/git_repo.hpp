@@ -109,6 +109,19 @@ class GitRepo {
     /// Reading a tree must be backed by an object database. Therefore, a real
     /// repository is required.
     /// \param id         The object id.
+    /// \param is_hex_id  Specify whether `id` is hex string or raw.
+    /// \param ignore_special   If set, treat symlinks as absent.
+    /// \note This method does not perform any content-based validity checks on
+    /// the read entries. For reading with symlinks validation use ReadTree().
+    [[nodiscard]] auto ReadDirectTree(std::string const& id,
+                                      bool is_hex_id = false,
+                                      bool ignore_special = false)
+        const noexcept -> std::optional<tree_entries_t>;
+
+    /// \brief Read entries from tree in CAS.
+    /// Reading a tree must be backed by an object database. Therefore, a real
+    /// repository is required.
+    /// \param id         The object id.
     /// \param check_symlinks   Function to check non-upwardness condition.
     /// \param is_hex_id  Specify whether `id` is hex string or raw.
     /// \param ignore_special   If set, treat symlinks as absent.
@@ -348,13 +361,17 @@ class GitRepo {
     /// \brief Open real repository at given location.
     explicit GitRepo(std::filesystem::path const& repo_path) noexcept;
 
-    using StoreDirEntryFunc =
-        std::function<bool(std::filesystem::path const&, ObjectType type)>;
+    /// \brief Function type handling directory entries read from filesystem.
+    /// \returns Success flag. Must guarantee that the logger is called exactly
+    /// once with fatal if returning false.
+    using StoreDirEntryFunc = std::function<
+        bool(std::filesystem::path const&, ObjectType, anon_logger_ptr const&)>;
 
     /// \brief Helper function to read the entries of a filesystem subdirectory
     /// and store them to the ODB. It is a modified version of the same-named
     /// function from FileSystemManager which accepts a subdir and a specific
     /// logger instead of the default.
+    /// It guarantees the logger is called exactly once with fatal if failure.
     [[nodiscard]] static auto ReadDirectory(
         std::filesystem::path const& dir,
         StoreDirEntryFunc const& read_and_store_entry,
@@ -363,6 +380,7 @@ class GitRepo {
     /// \brief Create a tree from the content of a directory by recursively
     /// adding its entries to the object database.
     /// \return The raw id of the tree.
+    /// It guarantees the logger is called exactly once with fatal if failure.
     [[nodiscard]] auto CreateTreeFromDirectory(
         std::filesystem::path const& dir,
         anon_logger_ptr const& logger) noexcept -> std::optional<std::string>;

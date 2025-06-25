@@ -18,9 +18,9 @@
 #include <algorithm>
 #include <compare>
 #include <cstddef>
+#include <filesystem>
 #include <fstream>
 #include <functional>
-#include <iomanip>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -44,6 +44,7 @@
 #include "src/buildtool/common/identifier.hpp"
 #include "src/buildtool/common/statistics.hpp"
 #include "src/buildtool/common/tree.hpp"
+#include "src/buildtool/common/tree_overlay.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/multithreading/task_system.hpp"
@@ -65,6 +66,7 @@ class ResultTargetMap {
         std::vector<ActionDescription::Ptr> actions;
         std::vector<std::string> blobs;
         std::vector<Tree::Ptr> trees;
+        std::vector<TreeOverlay::Ptr> tree_overlays;
     };
 
     explicit ResultTargetMap(std::size_t jobs) : width_{ComputeWidth(jobs)} {}
@@ -97,6 +99,7 @@ class ResultTargetMap {
             num_actions_[part] += entry->second->Actions().size();
             num_blobs_[part] += entry->second->Blobs().size();
             num_trees_[part] += entry->second->Trees().size();
+            num_tree_overlays_[part] += entry->second->TreeOverlays().size();
         }
         return entry->second;
     }
@@ -187,18 +190,21 @@ class ResultTargetMap {
         std::size_t na = 0;
         std::size_t nb = 0;
         std::size_t nt = 0;
+        std::size_t nto = 0;
         for (std::size_t i = 0; i < width_; i++) {
             na += num_actions_[i];
             nb += num_blobs_[i];
             nt += num_trees_[i];
+            nto += num_tree_overlays_[i];
         }
         result.actions.reserve(na);
         result.blobs.reserve(nb);
         result.trees.reserve(nt);
+        result.tree_overlays.reserve(nto);
 
         auto& origin_map = progress->OriginMap();
         origin_map.clear();
-        origin_map.reserve(na);
+        origin_map.reserve(na + nto);
         for (const auto& target : targets_) {
             std::for_each(target.begin(), target.end(), [&](auto const& el) {
                 auto const& actions = el.second->Actions();
@@ -210,6 +216,23 @@ class ResultTargetMap {
                         std::pair<ConfiguredTarget, std::size_t> origin{
                             el.first, pos++};
                         auto id = action->Id();
+                        if (origin_map.contains(id)) {
+                            origin_map[id].push_back(origin);
+                        }
+                        else {
+                            origin_map[id] = std::vector<
+                                std::pair<ConfiguredTarget, std::size_t>>{
+                                origin};
+                        }
+                    });
+                auto const& tree_overlays = el.second->TreeOverlays();
+                std::for_each(
+                    tree_overlays.begin(),
+                    tree_overlays.end(),
+                    [&origin_map, &pos, &el](auto const& overlay) {
+                        std::pair<ConfiguredTarget, std::size_t> origin{
+                            el.first, pos++};
+                        auto id = overlay->Id();
                         if (origin_map.contains(id)) {
                             origin_map[id].push_back(origin);
                         }
@@ -266,10 +289,14 @@ class ResultTargetMap {
                 }
                 auto const& blobs = el.second->Blobs();
                 auto const& trees = el.second->Trees();
+                auto const& tree_overlays = el.second->TreeOverlays();
                 result.blobs.insert(
                     result.blobs.end(), blobs.begin(), blobs.end());
                 result.trees.insert(
                     result.trees.end(), trees.begin(), trees.end());
+                result.tree_overlays.insert(result.tree_overlays.end(),
+                                            tree_overlays.begin(),
+                                            tree_overlays.end());
             });
         }
 
@@ -286,6 +313,17 @@ class ResultTargetMap {
             result.trees.end(),
             [](auto left, auto right) { return left->Id() == right->Id(); });
         result.trees.erase(lasttree, result.trees.end());
+
+        std::sort(
+            result.tree_overlays.begin(),
+            result.tree_overlays.end(),
+            [](auto left, auto right) { return left->Id() < right->Id(); });
+        auto lasttree_overlay = std::unique(
+            result.tree_overlays.begin(),
+            result.tree_overlays.end(),
+            [](auto left, auto right) { return left->Id() == right->Id(); });
+        result.tree_overlays.erase(lasttree_overlay,
+                                   result.tree_overlays.end());
 
         std::sort(result.actions.begin(),
                   result.actions.end(),
@@ -342,23 +380,27 @@ class ResultTargetMap {
                         "Analysed {} non-known source trees",
                         trees_traversed);
         }
-        Logger::Log(logger,
-                    LogLevel::Info,
-                    "Discovered {} actions, {} trees, {} blobs",
-                    result.actions.size(),
-                    result.trees.size(),
-                    result.blobs.size());
+        Logger::Log(
+            logger,
+            LogLevel::Info,
+            "Discovered {} actions, {} tree overlays, {} trees, {} blobs",
+            result.actions.size(),
+            result.tree_overlays.size(),
+            result.trees.size(),
+            result.blobs.size());
 
         return result;
     }
 
     template <bool kIncludeOrigins = false>
     [[nodiscard]] auto ToJson(gsl::not_null<Statistics const*> const& stats,
-                              gsl::not_null<Progress*> const& progress) const
+                              gsl::not_null<Progress*> const& progress,
+                              Logger const* logger = nullptr) const
         -> nlohmann::json {
-        auto const result = ToResult<kIncludeOrigins>(stats, progress);
+        auto const result = ToResult<kIncludeOrigins>(stats, progress, logger);
         auto actions = nlohmann::json::object();
         auto trees = nlohmann::json::object();
+        auto tree_overlays = nlohmann::json::object();
         std::for_each(result.actions.begin(),
                       result.actions.end(),
                       [&actions](auto const& action) {
@@ -376,20 +418,39 @@ class ResultTargetMap {
             result.trees.begin(),
             result.trees.end(),
             [&trees](auto const& tree) { trees[tree->Id()] = tree->ToJson(); });
-        return nlohmann::json{
+        std::for_each(result.tree_overlays.begin(),
+                      result.tree_overlays.end(),
+                      [&tree_overlays](auto const& tree_overlay) {
+                          tree_overlays[tree_overlay->Id()] =
+                              tree_overlay->ToJson();
+                      });
+        auto json = nlohmann::json{
             {"actions", actions}, {"blobs", result.blobs}, {"trees", trees}};
+        if (not tree_overlays.empty()) {
+            json["tree_overlays"] = tree_overlays;
+        }
+        return json;
     }
 
     template <bool kIncludeOrigins = true>
-    auto ToFile(std::string const& graph_file,
+    auto ToFile(std::vector<std::filesystem::path> const& destinations,
                 gsl::not_null<Statistics const*> const& stats,
                 gsl::not_null<Progress*> const& progress,
                 int indent = 2) const -> void {
-        Logger::Log(
-            LogLevel::Info, "Dumping action graph to file {}.", graph_file);
-        std::ofstream os(graph_file);
-        os << std::setw(indent) << ToJson<kIncludeOrigins>(stats, progress)
-           << std::endl;
+        auto logger = Logger("result-dumping");
+        logger.SetLogLimit(LogLevel::Error);
+        if (not destinations.empty()) {
+            // As serialization is expensive, compute the string only once
+            auto data =
+                ToJson<kIncludeOrigins>(stats, progress, &logger).dump(indent);
+            for (auto const& graph_file : destinations) {
+                Logger::Log(LogLevel::Info,
+                            "Dumping action graph to file {}.",
+                            graph_file.string());
+                std::ofstream os(graph_file);
+                os << data << std::endl;
+            }
+        }
     }
 
     void Clear(gsl::not_null<TaskSystem*> const& ts) {
@@ -415,6 +476,8 @@ class ResultTargetMap {
     std::vector<std::size_t> num_actions_{std::vector<std::size_t>(width_)};
     std::vector<std::size_t> num_blobs_{std::vector<std::size_t>(width_)};
     std::vector<std::size_t> num_trees_{std::vector<std::size_t>(width_)};
+    std::vector<std::size_t> num_tree_overlays_{
+        std::vector<std::size_t>(width_)};
 
     constexpr static auto ComputeWidth(std::size_t jobs) -> std::size_t {
         if (jobs <= 0) {
@@ -432,6 +495,7 @@ struct ResultTargetMap::ResultType</*kIncludeOrigins=*/true> {
     std::vector<ActionWithOrigin> actions;
     std::vector<std::string> blobs;
     std::vector<Tree::Ptr> trees;
+    std::vector<TreeOverlay::Ptr> tree_overlays;
 };
 
 }  // namespace BuildMaps::Target

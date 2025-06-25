@@ -36,6 +36,7 @@
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_api/common/execution_api.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
+#include "src/utils/cpp/tmp_dir.hpp"
 
 // forward declaration for actual implementations
 class BazelNetwork;
@@ -49,7 +50,8 @@ class BazelApi final : public IExecutionApi {
              gsl::not_null<Auth const*> const& auth,
              gsl::not_null<RetryConfig const*> const& retry_config,
              ExecutionConfiguration const& exec_config,
-             HashFunction hash_function) noexcept;
+             HashFunction hash_function,
+             TmpDir::Ptr temp_space) noexcept;
     BazelApi(BazelApi const&) = delete;
     BazelApi(BazelApi&& other) noexcept;
     auto operator=(BazelApi const&) -> BazelApi& = delete;
@@ -63,23 +65,19 @@ class BazelApi final : public IExecutionApi {
         std::vector<std::string> const& output_files,
         std::vector<std::string> const& output_dirs,
         std::map<std::string, std::string> const& env_vars,
-        std::map<std::string, std::string> const& properties) const noexcept
-        -> IExecutionAction::Ptr final;
+        std::map<std::string, std::string> const& properties,
+        bool force_legacy) const noexcept -> IExecutionAction::Ptr final;
 
-    // NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] auto RetrieveToPaths(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<std::filesystem::path> const& output_paths,
-        IExecutionApi const* alternative = nullptr) const noexcept
-        -> bool final;
+        IExecutionApi const* alternative) const noexcept -> bool final;
 
-    // NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] auto RetrieveToFds(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
         std::vector<int> const& fds,
         bool raw_tree,
-        IExecutionApi const* alternative = nullptr) const noexcept
-        -> bool final;
+        IExecutionApi const* alternative) const noexcept -> bool final;
 
     [[nodiscard]] auto ParallelRetrieveToCas(
         std::vector<Artifact::ObjectInfo> const& artifacts_info,
@@ -123,6 +121,8 @@ class BazelApi final : public IExecutionApi {
     [[nodiscard]] auto BlobSpliceSupport() const noexcept -> bool final;
 
     [[nodiscard]] auto GetHashType() const noexcept -> HashFunction::Type final;
+
+    [[nodiscard]] auto GetTempSpace() const noexcept -> TmpDir::Ptr final;
 
   private:
     std::shared_ptr<BazelNetwork> network_;

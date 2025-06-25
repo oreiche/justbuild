@@ -201,7 +201,8 @@ class TestProject {
                                         .apis = &apis,
                                         .remote_context = &remote_context,
                                         .statistics = &stats,
-                                        .progress = &progress};
+                                        .progress = &progress,
+                                        .profile = std::nullopt};
 
     GraphTraverser const gt{
         clargs.gtargs, &exec_context, [](auto /*done*/, auto /*cv*/) {}};
@@ -210,9 +211,8 @@ class TestProject {
 
     REQUIRE(result);
     REQUIRE(result->output_paths.size() == 1);
-    CHECK(FileSystemManager::IsFile(result->output_paths.at(0)));
-    auto const contents =
-        FileSystemManager::ReadFile(result->output_paths.at(0));
+    CHECK(FileSystemManager::IsFile(result->output_paths[0]));
+    auto const contents = FileSystemManager::ReadFile(result->output_paths[0]);
     CHECK(contents.has_value());
     CHECK(contents == "Hello, World!\n");
 
@@ -231,7 +231,7 @@ class TestProject {
 
         REQUIRE(exec_result);
         REQUIRE(exec_result->output_paths.size() == 1);
-        auto const exec_path = exec_result->output_paths.at(0);
+        auto const exec_path = exec_result->output_paths[0];
         CHECK(FileSystemManager::IsFile(exec_path));
         CHECK(FileSystemManager::IsExecutable(exec_path));
         CHECK(FileSystemManager::Type(exec_path) == ObjectType::Executable);
@@ -277,7 +277,8 @@ class TestProject {
                                         .apis = &apis,
                                         .remote_context = &remote_context,
                                         .statistics = &stats,
-                                        .progress = &progress};
+                                        .progress = &progress,
+                                        .profile = std::nullopt};
 
     GraphTraverser const gt{
         clargs.gtargs, &exec_context, [](auto /*done*/, auto /*cv*/) {}};
@@ -286,7 +287,7 @@ class TestProject {
 
     REQUIRE(result);
     REQUIRE(result->output_paths.size() == 1);
-    CHECK(FileSystemManager::IsFile(result->output_paths.at(0)));
+    CHECK(FileSystemManager::IsFile(result->output_paths[0]));
 
     if (is_hermetic) {
         CHECK(stats.ActionsQueuedCounter() == 0);
@@ -327,7 +328,8 @@ class TestProject {
                                         .apis = &apis,
                                         .remote_context = &remote_context,
                                         .statistics = &stats,
-                                        .progress = &progress};
+                                        .progress = &progress,
+                                        .profile = std::nullopt};
 
     GraphTraverser const gt{
         clargs.gtargs, &exec_context, [](auto /*done*/, auto /*cv*/) {}};
@@ -336,7 +338,7 @@ class TestProject {
 
     REQUIRE(result);
     REQUIRE(result->output_paths.size() == 1);
-    CHECK(FileSystemManager::IsFile(result->output_paths.at(0)));
+    CHECK(FileSystemManager::IsFile(result->output_paths[0]));
 
     auto const clargs_full_build = p.CmdLineArgs("_entry_points_full_build");
     GraphTraverser const gt_full_build{clargs_full_build.gtargs,
@@ -347,7 +349,7 @@ class TestProject {
 
     REQUIRE(full_build_result);
     REQUIRE(full_build_result->output_paths.size() == 1);
-    CHECK(FileSystemManager::IsFile(full_build_result->output_paths.at(0)));
+    CHECK(FileSystemManager::IsFile(full_build_result->output_paths[0]));
 
     if (is_hermetic) {
         CHECK(stats.ActionsQueuedCounter() == 8);
@@ -393,7 +395,8 @@ class TestProject {
         .apis = &full_apis,
         .remote_context = &remote_context,
         .statistics = &stats,
-        .progress = &progress};
+        .progress = &progress,
+        .profile = std::nullopt};
 
     GraphTraverser const gt_upload{clargs_update_cpp.gtargs,
                                    &full_context,
@@ -404,7 +407,7 @@ class TestProject {
     REQUIRE(cpp_result);
     REQUIRE(cpp_result->output_paths.size() == 1);
 
-    CHECK(FileSystemManager::IsFile(cpp_result->output_paths.at(0)));
+    CHECK(FileSystemManager::IsFile(cpp_result->output_paths[0]));
 
     if (is_hermetic) {
         CHECK(stats.ActionsQueuedCounter() == 0);
@@ -422,7 +425,8 @@ class TestProject {
         .apis = &apis_known,
         .remote_context = &remote_context,
         .statistics = &stats,
-        .progress = &progress};
+        .progress = &progress,
+        .profile = std::nullopt};
     GraphTraverser const gt{
         clargs.gtargs, &context_known, [](auto /*done*/, auto /*cv*/) {}};
     auto const result =
@@ -430,7 +434,7 @@ class TestProject {
 
     REQUIRE(result);
     REQUIRE(result->output_paths.size() == 1);
-    CHECK(FileSystemManager::IsFile(result->output_paths.at(0)));
+    CHECK(FileSystemManager::IsFile(result->output_paths[0]));
 
     if (is_hermetic) {
         CHECK(stats.ActionsQueuedCounter() == 2);
@@ -474,7 +478,8 @@ static void TestBlobsUploadedAndUsed(
                                         .apis = &apis,
                                         .remote_context = &remote_context,
                                         .statistics = &stats,
-                                        .progress = &progress};
+                                        .progress = &progress,
+                                        .profile = std::nullopt};
 
     GraphTraverser gt{
         clargs.gtargs, &exec_context, [](auto /*done*/, auto /*cv*/) {}};
@@ -483,10 +488,9 @@ static void TestBlobsUploadedAndUsed(
 
     REQUIRE(result);
     REQUIRE(result->output_paths.size() == 1);
-    CHECK(FileSystemManager::IsFile(result->output_paths.at(0)));
+    CHECK(FileSystemManager::IsFile(result->output_paths[0]));
 
-    auto const contents =
-        FileSystemManager::ReadFile(result->output_paths.at(0));
+    auto const contents = FileSystemManager::ReadFile(result->output_paths[0]);
     CHECK(contents.has_value());
     CHECK(contents == "this is a test to check if blobs are uploaded");
 
@@ -532,7 +536,8 @@ static void TestEnvironmentVariablesSetAndUsed(
                                         .apis = &apis,
                                         .remote_context = &remote_context,
                                         .statistics = &stats,
-                                        .progress = &progress};
+                                        .progress = &progress,
+                                        .profile = std::nullopt};
 
     GraphTraverser gt{
         clargs.gtargs, &exec_context, [](auto /*done*/, auto /*cv*/) {}};
@@ -541,10 +546,9 @@ static void TestEnvironmentVariablesSetAndUsed(
 
     REQUIRE(result);
     REQUIRE(result->output_paths.size() == 1);
-    CHECK(FileSystemManager::IsFile(result->output_paths.at(0)));
+    CHECK(FileSystemManager::IsFile(result->output_paths[0]));
 
-    auto const contents =
-        FileSystemManager::ReadFile(result->output_paths.at(0));
+    auto const contents = FileSystemManager::ReadFile(result->output_paths[0]);
     CHECK(contents.has_value());
     CHECK(contents == "content from environment variable");
 
@@ -590,7 +594,8 @@ static void TestTreesUsed(
                                         .apis = &apis,
                                         .remote_context = &remote_context,
                                         .statistics = &stats,
-                                        .progress = &progress};
+                                        .progress = &progress,
+                                        .profile = std::nullopt};
 
     GraphTraverser gt{
         clargs.gtargs, &exec_context, [](auto /*done*/, auto /*cv*/) {}};
@@ -599,10 +604,9 @@ static void TestTreesUsed(
 
     REQUIRE(result);
     REQUIRE(result->output_paths.size() == 1);
-    CHECK(FileSystemManager::IsFile(result->output_paths.at(0)));
+    CHECK(FileSystemManager::IsFile(result->output_paths[0]));
 
-    auto const contents =
-        FileSystemManager::ReadFile(result->output_paths.at(0));
+    auto const contents = FileSystemManager::ReadFile(result->output_paths[0]);
     CHECK(contents.has_value());
     CHECK(contents == "this is a test to check if blobs are uploaded");
 
@@ -648,7 +652,8 @@ static void TestNestedTreesUsed(
                                         .apis = &apis,
                                         .remote_context = &remote_context,
                                         .statistics = &stats,
-                                        .progress = &progress};
+                                        .progress = &progress,
+                                        .profile = std::nullopt};
 
     GraphTraverser gt{
         clargs.gtargs, &exec_context, [](auto /*done*/, auto /*cv*/) {}};
@@ -657,10 +662,9 @@ static void TestNestedTreesUsed(
 
     REQUIRE(result);
     REQUIRE(result->output_paths.size() == 1);
-    CHECK(FileSystemManager::IsFile(result->output_paths.at(0)));
+    CHECK(FileSystemManager::IsFile(result->output_paths[0]));
 
-    auto const contents =
-        FileSystemManager::ReadFile(result->output_paths.at(0));
+    auto const contents = FileSystemManager::ReadFile(result->output_paths[0]);
     CHECK(contents.has_value());
     CHECK(contents == "this is a test to check if blobs are uploaded");
 
@@ -705,7 +709,8 @@ static void TestFlakyHelloWorldDetected(
                                         .apis = &apis,
                                         .remote_context = &remote_context,
                                         .statistics = &stats,
-                                        .progress = &progress};
+                                        .progress = &progress,
+                                        .profile = std::nullopt};
 
     {
         auto clargs = p.CmdLineArgs("_entry_points_ctimes");

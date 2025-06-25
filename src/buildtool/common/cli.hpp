@@ -26,6 +26,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 #include "CLI/CLI.hpp"
@@ -73,10 +74,11 @@ struct AnalysisArguments {
     std::optional<std::filesystem::path> target_root;
     std::optional<std::filesystem::path> rule_root;
     std::optional<std::filesystem::path> expression_root;
-    std::optional<std::filesystem::path> graph_file;
-    std::optional<std::filesystem::path> graph_file_plain;
-    std::optional<std::filesystem::path> artifacts_to_build_file;
+    std::vector<std::filesystem::path> graph_file;
+    std::vector<std::filesystem::path> graph_file_plain;
+    std::vector<std::filesystem::path> artifacts_to_build_files;
     std::optional<std::filesystem::path> serve_errors_file;
+    std::optional<std::string> profile;
 };
 
 /// \brief Arguments required for describing targets/rules.
@@ -113,7 +115,7 @@ struct BuildArguments {
     std::optional<std::vector<std::string>> local_launcher{std::nullopt};
     std::chrono::milliseconds timeout{kDefaultTimeout};
     std::size_t build_jobs{};
-    std::optional<std::string> dump_artifacts{std::nullopt};
+    std::vector<std::filesystem::path> dump_artifacts{};
     std::optional<std::string> print_to_stdout{std::nullopt};
     bool print_unique{false};
     bool show_runfiles{false};
@@ -191,7 +193,8 @@ struct ServeArguments {
 };
 
 struct GcArguments {
-    bool no_rotate{};
+    bool no_rotate = false;
+    bool all = false;
 };
 
 struct ToAddArguments {
@@ -345,21 +348,34 @@ static inline auto SetupAnalysisArguments(
                     "File path for dumping the blob identifiers of serve "
                     "errors as json.")
         ->type_name("PATH");
+    app->add_option(
+           "--profile", clargs->profile, "Location to write the profile to.")
+        ->type_name("PATH");
     if (with_graph) {
-        app->add_option(
+        app->add_option_function<std::string>(
                "--dump-graph",
-               clargs->graph_file,
+               [clargs](auto const& file_) {
+                   clargs->graph_file.emplace_back(file_);
+               },
                "File path for writing the action graph description to.")
-            ->type_name("PATH");
-        app->add_option("--dump-plain-graph",
-                        clargs->graph_file_plain,
-                        "File path for writing the action graph description "
-                        "(without origins) to.")
-            ->type_name("PATH");
-        app->add_option("--dump-artifacts-to-build",
-                        clargs->artifacts_to_build_file,
-                        "File path for writing the artifacts to build to.")
-            ->type_name("PATH");
+            ->type_name("PATH")
+            ->trigger_on_parse();
+        app->add_option_function<std::string>(
+               "--dump-plain-graph",
+               [clargs](auto const& file_) {
+                   clargs->graph_file_plain.emplace_back(file_);
+               },
+               "File path for writing the action graph description to.")
+            ->type_name("PATH")
+            ->trigger_on_parse();
+        app->add_option_function<std::string>(
+               "--dump-artifacts-to-build",
+               [clargs](auto const& file_) {
+                   clargs->artifacts_to_build_files.emplace_back(file_);
+               },
+               "File path for writing the artifacts to build to.")
+            ->type_name("PATH")
+            ->trigger_on_parse();
     }
 }
 
@@ -525,10 +541,14 @@ static inline auto SetupExtendedBuildArguments(
     gsl::not_null<CLI::App*> const& app,
     gsl::not_null<BuildArguments*> const& clargs) {
 
-    app->add_option("--dump-artifacts",
-                    clargs->dump_artifacts,
-                    "Dump artifacts to file (use - for stdout).")
-        ->type_name("PATH");
+    app->add_option_function<std::string>(
+           "--dump-artifacts",
+           [clargs](auto const& file_) {
+               clargs->dump_artifacts.emplace_back(file_);
+           },
+           "Dump artifacts to file (use - for stdout).")
+        ->type_name("PATH")
+        ->trigger_on_parse();
 
     app->add_flag("-s,--show-runfiles",
                   clargs->show_runfiles,
@@ -686,8 +706,9 @@ static inline auto SetupToAddArguments(
     app->add_option_function<std::string>(
         "--resolve-special",
         [clargs](auto const& raw_value) {
-            if (kResolveSpecialMap.contains(raw_value)) {
-                clargs->resolve_special = kResolveSpecialMap.at(raw_value);
+            if (auto const it = kResolveSpecialMap.find(raw_value);
+                it != kResolveSpecialMap.end()) {
+                clargs->resolve_special = it->second;
             }
             else {
                 Logger::Log(LogLevel::Warning,
@@ -820,10 +841,17 @@ static inline auto SetupServeArguments(
 
 static inline void SetupGcArguments(gsl::not_null<CLI::App*> const& app,
                                     gsl::not_null<GcArguments*> const& args) {
-    app->add_flag("--no-rotate",
-                  args->no_rotate,
-                  "Do not rotate cache generations, only clean up what can be "
-                  "done without losing cache.");
+    auto* no_rotate =
+        app->add_flag("--no-rotate",
+                      args->no_rotate,
+                      "Do not rotate cache generations, only clean up what can "
+                      "be done without losing cache.");
+
+    auto* all = app->add_flag(
+        "--all", args->all, "Remove all cache generations at once");
+
+    no_rotate->excludes(all);
+    all->excludes(no_rotate);
 }
 
 #endif  // INCLUDED_SRC_BUILDTOOL_COMMON_CLI_HPP

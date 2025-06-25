@@ -147,6 +147,48 @@
   , "repos": ["failure-report (data)"]
   , "keep": ["out/log", "out/serve.log", "out/failure.log"]
   }
+, "deep tree (data)":
+  { "type": "install"
+  , "files":
+    { "ROOT": "data/ROOT"
+    , "TARGETS": "data/targets/TARGETS.deep"
+    , "deep-output.py": "data/deep-output.py"
+    }
+  }
+, "deep tree":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["deep-tree"]
+  , "test": ["deep-tree.sh"]
+  , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
+  , "repos": ["deep tree (data)"]
+  , "keep-dirs": ["out"]
+  }
+, "interruption-test (data)":
+  { "type": "install"
+  , "files": {"ROOT": "data/ROOT", "TARGETS": "data/targets/TARGETS.slow"}
+  }
+, "interruption-test":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["interruption-test"]
+  , "test": ["interruption-test.sh"]
+  , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
+  , "repos": ["interruption-test (data)"]
+  , "keep-dirs": ["out"]
+  }
+, "load test (data)":
+  { "type": "generic"
+  , "outs": ["ROOT", "TARGETS"]
+  , "cmds": ["touch ROOT", "python3 wide-deep-targets.py"]
+  , "deps": ["wide-deep-targets.py"]
+  }
+, "load test":
+  { "type": ["end-to-end", "with serve"]
+  , "name": ["load-test"]
+  , "test": ["load-test.sh"]
+  , "deps": [["", "mr-tool-under-test"], ["", "tool-under-test"]]
+  , "repos": ["load test (data)"]
+  , "keep-dirs": ["out"]
+  }
 , "serve-many-targets (data)":
   { "type": "install"
   , "files": {"ROOT": "data/ROOT", "TARGETS": "data/targets/TARGETS.transform"}
@@ -172,58 +214,44 @@
   , "repos": ["serve-many-targets (data)"]
   }
 , "TESTS (unconfigured)":
-  { "type": ["@", "rules", "test", "suite"]
-  , "arguments_config": ["TEST_STANDALONE_SERVE"]
-  , "stage":
-    [ { "type": "if"
-      , "cond": {"type": "var", "name": "TEST_STANDALONE_SERVE"}
-      , "then": "standalone-serve"
-      , "else": "separate-remote"
-      }
-    ]
+  { "type": ["@", "rules", "test", "matrix"]
+  , "stage": ["serve-service"]
   , "deps":
-    { "type": "++"
-    , "$1":
-      [ [ "serve-target-remote-build"
-        , "serve-target-remote-build-dispatch"
-        , "serve-target-failed-build"
-        , "serve-many-targets"
-        , "serve-target-cache-hit"
-        , "serve-start-execute"
-        , "serve-start-execute-sharding"
-        , "serve-export-deps"
-        , "serve-query-target-cache-value"
-        , "describe"
-        , "deduplication-of-serve-requests"
-        , "failure-report"
-        , "serve-tree"
-        ]
-      , [ ["./", "serve-archive-root", "TESTS"]
-        , ["./", "serve-git-root", "TESTS"]
-        , ["./", "serve-file-root", "TESTS"]
-        , ["./", "serve-git-tree-root", "TESTS"]
-        , ["./", "serve-distdir-root", "TESTS"]
-        ]
-      ]
-    }
-  }
-, "TESTS (separate remote)":
-  { "type": "configure"
-  , "tainted": ["test"]
-  , "target": "TESTS (unconfigured)"
-  , "config":
-    {"type": "singleton_map", "key": "TEST_STANDALONE_SERVE", "value": false}
-  }
-, "TESTS (standalone serve)":
-  { "type": "configure"
-  , "tainted": ["test"]
-  , "target": "TESTS (unconfigured)"
-  , "config":
-    {"type": "singleton_map", "key": "TEST_STANDALONE_SERVE", "value": true}
+    [ "deduplication-of-serve-requests"
+    , "deep tree"
+    , "describe"
+    , "failure-report"
+    , "interruption-test"
+    , "load test"
+    , "serve-export-deps"
+    , "serve-many-targets"
+    , "serve-query-target-cache-value"
+    , "serve-start-execute"
+    , "serve-start-execute-sharding"
+    , "serve-target-cache-hit"
+    , "serve-target-failed-build"
+    , "serve-target-remote-build"
+    , "serve-target-remote-build-dispatch"
+    , "serve-tree"
+    , ["./", "serve-archive-root", "TESTS"]
+    , ["./", "serve-distdir-root", "TESTS"]
+    , ["./", "serve-file-root", "TESTS"]
+    , ["./", "serve-git-root", "TESTS"]
+    , ["./", "serve-git-tree-root", "TESTS"]
+    ]
   }
 , "TESTS":
-  { "type": ["@", "rules", "test", "suite"]
-  , "stage": ["serve-service"]
-  , "deps": ["TESTS (separate remote)", "TESTS (standalone serve)"]
+  { "type": "configure"
+  , "tainted": ["test"]
+  , "target": "TESTS (unconfigured)"
+  , "config":
+    { "type": "'"
+    , "$1":
+      { "TEST_MATRIX":
+        { "TEST_STANDALONE_SERVE":
+          {"standalone-serve": true, "separate-remote": false}
+        }
+      }
+    }
   }
 }

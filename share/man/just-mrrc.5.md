@@ -160,10 +160,49 @@ The just-mrrc is given by a JSON object.
    an existing file, this file is read as an additional rc file
    overlaying the given rc file in the specified order; the value
    of `"rc files"` in the overlaying files is ignored.  
-   In this way, an rc file commited to a repository can be allowed
+   In this way, an rc file committed to a repository can be allowed
    to set a sensible configuration, remote-execution and serve end
    points, etc. This is particularly useful when simultaneously
    working on several projects with different settings.
+
+ - The value for the key *`"invocation log"`* is a JSON object
+   specifying how each invocation should be logged. It supports
+   the following subkeys.
+   - *`"directory"`* A simple location object specifying under which
+     directory the invocations should be logged. If not given, no
+     invocation logging will happen.
+   - *`"project id"`* A path fragment specifying the subdirectory of
+     the given directory; if not specified, `"unknown"` will be used.
+     Under this directory, for each invocation, an invocation-log
+     directory will be created. The *`"project id"`* is given as
+     a separate subkey, in order to allow workspace-specific rc
+     files that are merged in to set this value.
+   - *`"invocation message"`* An additional info message to be shown,
+     followed by the base name of the invocation logging directory.
+   - *`"metadata"`* A file name specifying where in the invocation-log
+     directory the metadata file should be stored. If not given,
+     no metadata file will be written. See **`just-profile`**(5) for
+     details of the format.
+   - *`"context variables"`* An optional list of environment variables,
+     which are captured at invocation time and stored as key-value pairs
+     in the metadata file. These variables do not affect the build in
+     any way. Instead, they are supposed to provide useful context
+     information about the invocation like username, merge-request ID or
+     source branch.
+   - *`"--dump-graph"`* A file name specifying the file in
+     the invocation-log directory for an invocation-specific
+     `--dump-graph` option.
+   - *`"--dump-plain-graph"`* A file name specifying the file
+     in the invocation-log directory for an invocation-specific
+     `--dump-plain-graph` option.
+   - *`"--dump-artifacts-to-build"`* A file name specifying the
+     file in the invocation-log directory for the invocation-specific
+     `--dump-artifacts-to-build` option.
+   - *`"--dump-artifacts"`* A file name specifying in the file
+     in the invocation-log directory for the invocation-specific
+     `--dump-artifacts` option.
+   - *`"--profile"`* A file name specifying the file in invocation-log
+     directory for an invocation-specific `--profile` option.
 
 
 EXAMPLE
@@ -182,6 +221,12 @@ An example just-mrrc file could look like the following:
   , {"root": "home", "path": ".just-repos.json"}
   , {"root": "system", "path": "etc/just-repos.json"}
   ]
+, "invocation log":
+  { "directory": {"root": "system", "path": "var/opt/just-invocation"}
+  , "metadata": "metadata.json"
+  , "--dump-graph": "graph.json"
+  , "--profile": "profile.json"
+  }
 , "absent":
   [ {"root": "workspace", "path": "etc/absent.json"}
   , {"root": "home", "path": ".just-absent"}

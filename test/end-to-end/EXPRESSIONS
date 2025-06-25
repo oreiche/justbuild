@@ -8,11 +8,13 @@
     , "data"
     , "extra_infra"
     , "keep"
+    , "keep-dirs"
     , "transition"
     , "TEST_COMPATIBLE_REMOTE"
     , "TEST_REMOTE_EXECUTION"
     , "TIMEOUT_SCALE"
     , "TEST_STANDALONE_SERVE"
+    , "USES_SERVE"
     ]
   , "imports":
     { "artifacts_list": ["@", "rules", "", "field_artifacts_list"]
@@ -85,10 +87,27 @@
           }
         ]
       , [ "out_dirs"
-        , { "type": "if"
-          , "cond": {"type": "var", "name": "TEST_STANDALONE_SERVE"}
-          , "then": ["serve"]
-          , "else": ["remote"]
+        , { "type": "++"
+          , "$1":
+            [ { "type": "if"
+              , "cond": {"type": "var", "name": "USES_SERVE"}
+              , "then":
+                { "type": "if"
+                , "cond": {"type": "var", "name": "TEST_STANDALONE_SERVE"}
+                , "then": ["serve"]
+                , "else": ["remote", "serve"]
+                }
+              , "else": ["remote"]
+              }
+            , { "type": "foreach"
+              , "var": "dir_path"
+              , "range": {"type": "var", "name": "keep-dirs"}
+              , "body":
+                { "type": "join"
+                , "$1": ["work/", {"type": "var", "name": "dir_path"}]
+                }
+              }
+            ]
           }
         ]
       , [ "inputs"
@@ -197,11 +216,13 @@
     , "data"
     , "extra_infra"
     , "keep"
+    , "keep-dirs"
     , "transition"
     , "TEST_COMPATIBLE_REMOTE"
     , "TEST_REMOTE_EXECUTION"
     , "TIMEOUT_SCALE"
     , "TEST_STANDALONE_SERVE"
+    , "USES_SERVE"
     ]
   , "imports": {"action": "test-action"}
   , "expression":

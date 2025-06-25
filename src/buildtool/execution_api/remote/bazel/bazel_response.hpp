@@ -19,13 +19,15 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <utility>  // std::move
+#include <utility>  // std::move, std:pair
 
 #include <grpcpp/support/status.h>
 
 #include "gsl/gsl"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/bazel_types.hpp"
+#include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_response.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_execution_client.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_network.hpp"
@@ -52,11 +54,33 @@ class BazelResponse final : public IExecutionResponse {
     auto StdOut() noexcept -> std::string final {
         return ReadStringBlob(output_.action_result.stdout_digest());
     }
+    auto StdErrDigest() noexcept -> std::optional<ArtifactDigest> final {
+        auto digest = ArtifactDigestFactory::FromBazel(
+            network_->GetHashFunction().GetType(),
+            output_.action_result.stderr_digest());
+        if (digest) {
+            return *digest;
+        }
+        return std::nullopt;
+    }
+    auto StdOutDigest() noexcept -> std::optional<ArtifactDigest> final {
+        auto digest = ArtifactDigestFactory::FromBazel(
+            network_->GetHashFunction().GetType(),
+            output_.action_result.stdout_digest());
+        if (digest) {
+            return *digest;
+        }
+        return std::nullopt;
+    }
     auto ExitCode() const noexcept -> int final {
         return output_.action_result.exit_code();
     }
     auto IsCached() const noexcept -> bool final {
         return output_.cached_result;
+    };
+
+    auto ExecutionDuration() noexcept -> double final {
+        return output_.duration;
     };
 
     auto ActionDigest() const noexcept -> std::string const& final {
@@ -65,15 +89,14 @@ class BazelResponse final : public IExecutionResponse {
 
     auto Artifacts() noexcept
         -> expected<gsl::not_null<ArtifactInfos const*>, std::string> final;
-    auto DirectorySymlinks() noexcept
-        -> expected<gsl::not_null<DirSymlinks const*>, std::string> final;
+    auto HasUpwardsSymlinks() noexcept -> expected<bool, std::string> final;
 
   private:
     std::string action_id_;
     std::shared_ptr<BazelNetwork> const network_;
     BazelExecutionClient::ExecutionOutput output_{};
     ArtifactInfos artifacts_;
-    DirSymlinks dir_symlinks_;
+    bool has_upwards_symlinks_ = false;  // only tracked in compatible mode
     bool populated_ = false;
 
     explicit BazelResponse(std::string action_id,
@@ -95,8 +118,14 @@ class BazelResponse final : public IExecutionResponse {
     /// \returns Error message on failure, nullopt on success.
     [[nodiscard]] auto Populate() noexcept -> std::optional<std::string>;
 
-    [[nodiscard]] auto UploadTreeMessageDirectories(bazel_re::Tree const& tree)
-        const -> expected<ArtifactDigest, std::string>;
+    /// \brief Tries to upload the tree rot and subdirectories. Performs also a
+    /// symlinks check.
+    /// \returns Pair of ArtifactDigest of root tree and flag signaling the
+    /// presence of any upwards symlinks on success, error message on failure.
+    [[nodiscard]] auto UploadTreeMessageDirectories(
+        bazel_re::Tree const& tree) const
+        -> expected<std::pair<ArtifactDigest, /*has_upwards_symlinks*/ bool>,
+                    std::string>;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_REMOTE_BAZEL_BAZEL_RESPONSE_HPP

@@ -24,6 +24,7 @@
 #include <cerrno>  // for errno
 #include <cstdlib>
 #include <cstring>  // for strerror()
+#include <ctime>
 #include <exception>
 #include <filesystem>
 #include <functional>
@@ -32,14 +33,19 @@
 #include <memory>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+#include "fmt/chrono.h"
+#include "fmt/core.h"
 #include "nlohmann/json.hpp"
 #include "src/buildtool/build_engine/expression/configuration.hpp"
 #include "src/buildtool/build_engine/expression/expression.hpp"
 #include "src/buildtool/build_engine/expression/expression_ptr.hpp"
 #include "src/buildtool/common/clidefaults.hpp"
 #include "src/buildtool/common/user_structs.hpp"
+#include "src/buildtool/execution_api/common/ids.hpp"
+#include "src/buildtool/file_system/file_system_manager.hpp"
 #include "src/buildtool/logging/log_level.hpp"
 #include "src/buildtool/logging/logger.hpp"
 #include "src/buildtool/storage/config.hpp"
@@ -50,8 +56,10 @@
 #include "src/other_tools/just_mr/setup_utils.hpp"
 #include "src/other_tools/just_mr/utils.hpp"
 #include "src/utils/cpp/file_locking.hpp"
+#include "src/utils/cpp/path.hpp"
 
 auto CallJust(std::optional<std::filesystem::path> const& config_file,
+              InvocationLogArguments const& invocation_log,
               MultiRepoCommonArguments const& common_args,
               MultiRepoSetupArguments const& setup_args,
               MultiRepoJustSubCmdsArguments const& just_cmd_args,
@@ -79,12 +87,15 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
     bool supports_remote_properties{false};
     bool supports_serve{false};
     bool supports_dispatch{false};
-    std::optional<std::filesystem::path> mr_config_path{std::nullopt};
+    bool does_build{false};
+    std::optional<std::pair<std::filesystem::path, std::string>> mr_config_pair{
+        std::nullopt};
 
     std::optional<LockFile> lock{};
     if (subcommand and kKnownJustSubcommands.contains(*subcommand)) {
+        auto const& flags = kKnownJustSubcommands.at(*subcommand);
         // Read the config file if needed
-        if (kKnownJustSubcommands.at(*subcommand).config) {
+        if (flags.config) {
             auto repo_lock =
                 RepositoryGarbageCollector::SharedLock(storage_config);
             if (not repo_lock) {
@@ -98,7 +109,7 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
                 config_file, common_args.absent_repository_file);
 
             use_config = true;
-            mr_config_path = MultiRepoSetup(config,
+            mr_config_pair = MultiRepoSetup(config,
                                             common_args,
                                             setup_args,
                                             just_cmd_args,
@@ -108,7 +119,7 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
                                             storage,
                                             /*interactive=*/false,
                                             multi_repo_tool_name);
-            if (not mr_config_path) {
+            if (not mr_config_pair) {
                 Logger::Log(LogLevel::Error,
                             "Failed to setup config for calling \"{} {}\"",
                             common_args.just_path
@@ -118,14 +129,14 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
                 return kExitSetupError;
             }
         }
-        use_build_root = kKnownJustSubcommands.at(*subcommand).build_root;
-        use_launcher = kKnownJustSubcommands.at(*subcommand).launch;
-        supports_defines = kKnownJustSubcommands.at(*subcommand).defines;
-        supports_remote = kKnownJustSubcommands.at(*subcommand).remote;
-        supports_remote_properties =
-            kKnownJustSubcommands.at(*subcommand).remote_props;
-        supports_serve = kKnownJustSubcommands.at(*subcommand).serve;
-        supports_dispatch = kKnownJustSubcommands.at(*subcommand).dispatch;
+        use_build_root = flags.build_root;
+        use_launcher = flags.launch;
+        supports_defines = flags.defines;
+        supports_remote = flags.remote;
+        supports_remote_properties = flags.remote_props;
+        supports_serve = flags.serve;
+        supports_dispatch = flags.dispatch;
+        does_build = flags.does_build;
     }
     // build just command
     std::vector<std::string> cmd = {common_args.just_path->string()};
@@ -134,7 +145,7 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
     }
     if (use_config) {
         cmd.emplace_back("-C");
-        cmd.emplace_back(mr_config_path->string());
+        cmd.emplace_back(mr_config_pair->first.string());
     }
     if (use_build_root and forward_build_root) {
         cmd.emplace_back("--local-build-root");
@@ -253,12 +264,144 @@ auto CallJust(std::optional<std::filesystem::path> const& config_file,
             cmd.emplace_back(subcmd_arg);
         }
     }
+    std::optional<std::filesystem::path> log_dir = std::nullopt;
+    auto invocation_time = std::time(nullptr);
+
+    // Check invocation logging
+    if (invocation_log.directory) {
+        auto dir = *invocation_log.directory;
+        if (invocation_log.project_id) {
+            if (not IsValidFileName(*invocation_log.project_id)) {
+                Logger::Log(LogLevel::Error,
+                            "Invalid file name for poject id: {}",
+                            nlohmann::json(*invocation_log.project_id).dump());
+                std::exit(kExitClargsError);
+            }
+            dir = dir / *invocation_log.project_id;
+        }
+        else {
+            dir = dir / "unknown";
+        }
+        std::string uuid = CreateUUID();
+        auto invocation_id = fmt::format(
+            "{:%Y-%m-%d-%H:%M:%S}-{}", fmt::gmtime(invocation_time), uuid);
+        dir = dir / invocation_id;
+        if (FileSystemManager::CreateDirectoryExclusive(dir)) {
+            if (invocation_log.invocation_msg) {
+                Logger::Log(LogLevel::Info,
+                            "{}{}",
+                            *invocation_log.invocation_msg,
+                            invocation_id);
+            }
+            Logger::Log(
+                LogLevel::Info, "Invocation logged at {}", dir.string());
+            log_dir = dir;
+        }
+        else {
+            Logger::Log(LogLevel::Warning,
+                        "Failed to create directory {} for invocation logging",
+                        nlohmann::json(dir.string()).dump());
+        }
+    }
+    // invocation-specific
+    if (log_dir and supports_remote_properties) {
+        if (invocation_log.graph_file) {
+            if (not IsValidFileName(*invocation_log.graph_file)) {
+                Logger::Log(LogLevel::Error,
+                            "Invalid file name for option --dump-graph: {}",
+                            nlohmann::json(*invocation_log.graph_file).dump());
+                std::exit(kExitClargsError);
+            }
+            cmd.emplace_back("--dump-graph");
+            cmd.emplace_back(*log_dir / *invocation_log.graph_file);
+        }
+        if (invocation_log.graph_file_plain) {
+            if (not IsValidFileName(*invocation_log.graph_file_plain)) {
+                Logger::Log(
+                    LogLevel::Error,
+                    "Invalid file name for option --dump-plain-graph: {}",
+                    nlohmann::json(*invocation_log.graph_file_plain).dump());
+                std::exit(kExitClargsError);
+            }
+            cmd.emplace_back("--dump-plain-graph");
+            cmd.emplace_back(*log_dir / *invocation_log.graph_file_plain);
+        }
+        if (invocation_log.dump_artifacts_to_build) {
+            if (not IsValidFileName(*invocation_log.dump_artifacts_to_build)) {
+                Logger::Log(
+                    LogLevel::Error,
+                    "Invalid file name for option --dump-artifacts_to_build: "
+                    "{}",
+                    nlohmann::json(*invocation_log.dump_artifacts_to_build)
+                        .dump());
+                std::exit(kExitClargsError);
+            }
+            cmd.emplace_back("--dump-artifacts-to-build");
+            cmd.emplace_back(*log_dir /
+                             *invocation_log.dump_artifacts_to_build);
+        }
+        if (does_build and invocation_log.dump_artifacts) {
+            if (not IsValidFileName(*invocation_log.dump_artifacts)) {
+                Logger::Log(
+                    LogLevel::Error,
+                    "Invalid file name for option --dump-artifacts: {}",
+                    nlohmann::json(*invocation_log.dump_artifacts).dump());
+                std::exit(kExitClargsError);
+            }
+            cmd.emplace_back("--dump-artifacts");
+            cmd.emplace_back(*log_dir / *invocation_log.dump_artifacts);
+        }
+        if (invocation_log.profile) {
+            if (not IsValidFileName(*invocation_log.profile)) {
+                Logger::Log(LogLevel::Error,
+                            "Invalid file name for option --profile: {}",
+                            nlohmann::json(*invocation_log.profile).dump());
+                std::exit(kExitClargsError);
+            }
+            cmd.emplace_back("--profile");
+            cmd.emplace_back(*log_dir / *invocation_log.profile);
+        }
+    }
     // add (remaining) args given by user as clargs
     for (auto it = just_cmd_args.additional_just_args.begin() +
                    additional_args_offset;
          it != just_cmd_args.additional_just_args.end();
          ++it) {
         cmd.emplace_back(*it);
+    }
+
+    // Write invocation metadata, if requested
+    if (log_dir and invocation_log.metadata) {
+        if (not IsValidFileName(*invocation_log.metadata)) {
+            Logger::Log(LogLevel::Error,
+                        "Invlaid file name for metadata file: {}",
+                        nlohmann::json(*invocation_log.metadata).dump());
+            std::exit(kExitClargsError);
+        }
+
+        auto meta = nlohmann::json::object();
+        meta["time"] = invocation_time;
+        if (mr_config_pair) {
+            meta["configuration"] = mr_config_pair->second;
+        }
+        meta["cmdline"] = cmd;
+        if (not invocation_log.context_vars.empty()) {
+            auto context = nlohmann::json::object();
+            for (auto const& env_var : invocation_log.context_vars) {
+                auto* env_value = std::getenv(env_var.c_str());
+                context[env_var] =
+                    env_value != nullptr ? env_value : nlohmann::json{};
+            }
+            meta["context"] = context;
+        }
+        // "configuration" -- the blob-identifier of the multi-repo
+        // configuration
+        auto file_name = *log_dir / *invocation_log.metadata;
+        if (not FileSystemManager::WriteFile(meta.dump(2), file_name)) {
+            Logger::Log(LogLevel::Warning,
+                        "Failed to write metadata file {}.",
+                        nlohmann::json(file_name).dump());
+        }
     }
 
     Logger::Log(

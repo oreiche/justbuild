@@ -30,6 +30,7 @@
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/common/execution_action.hpp"
 #include "src/buildtool/execution_engine/dag/dag.hpp"
+#include "src/utils/cpp/tmp_dir.hpp"
 
 /// \brief Abstract remote execution API
 /// Can be used to create actions.
@@ -44,15 +45,18 @@ class IExecutionApi {
     auto operator=(IExecutionApi&&) -> IExecutionApi& = default;
     virtual ~IExecutionApi() = default;
 
-    /// \brief Create a new action.
+    /// \brief Create a new action (>=RBEv2.0).
     /// \param[in] root_digest  Digest of the build root.
     /// \param[in] command      Command as argv vector
-    /// \param[in] cwd          Working direcotry, relative to execution root
+    /// \param[in] cwd          Working directory, relative to execution root
     /// \param[in] output_files List of paths to output files, relative to cwd
     /// \param[in] output_dirs  List of paths to output directories.
     /// \param[in] env_vars     The environment variables to set.
     /// \param[in] properties   Platform properties to set.
+    /// \param[in] force_legacy Force use of legacy API RBEv2.0
     /// \returns The new action.
+    /// Note that types of output files and directories are not verified.
+    /// NOLINTNEXTLINE(google-default-arguments)
     [[nodiscard]] virtual auto CreateAction(
         ArtifactDigest const& root_digest,
         std::vector<std::string> const& command,
@@ -60,8 +64,8 @@ class IExecutionApi {
         std::vector<std::string> const& output_files,
         std::vector<std::string> const& output_dirs,
         std::map<std::string, std::string> const& env_vars,
-        std::map<std::string, std::string> const& properties) const noexcept
-        -> IExecutionAction::Ptr = 0;
+        std::map<std::string, std::string> const& properties,
+        bool force_legacy = false) const noexcept -> IExecutionAction::Ptr = 0;
 
     /// \brief Retrieve artifacts from CAS and store to specified paths.
     /// Tree artifacts are resolved its containing file artifacts are
@@ -156,6 +160,8 @@ class IExecutionApi {
 
     [[nodiscard]] virtual auto GetHashType() const noexcept
         -> HashFunction::Type = 0;
+
+    [[nodiscard]] virtual auto GetTempSpace() const noexcept -> TmpDir::Ptr = 0;
 };
 
 #endif  // INCLUDED_SRC_BUILDTOOL_EXECUTION_API_COMMON_EXECUTION_APIHPP

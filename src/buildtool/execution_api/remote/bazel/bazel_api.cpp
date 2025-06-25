@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <compare>
 #include <cstdio>
 #include <exception>
 #include <functional>
@@ -37,6 +38,7 @@
 #include "src/buildtool/execution_api/common/stream_dumper.hpp"
 #include "src/buildtool/execution_api/common/tree_reader.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_action.hpp"
+#include "src/buildtool/execution_api/remote/bazel/bazel_capabilities_client.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_network.hpp"
 #include "src/buildtool/execution_api/remote/bazel/bazel_network_reader.hpp"
 #include "src/buildtool/file_system/file_system_manager.hpp"
@@ -49,6 +51,9 @@
 
 namespace {
 
+auto constexpr kVersion2dot1 =
+    Capabilities::Version{.major = 2, .minor = 1, .patch = 0};
+
 [[nodiscard]] auto RetrieveToCas(
     std::unordered_set<Artifact::ObjectInfo> const& infos,
     IExecutionApi const& api,
@@ -59,45 +64,29 @@ namespace {
         return false;
     }
 
-    std::vector const digests(back_map->GetKeys().begin(),
-                              back_map->GetKeys().end());
-
-    // Fetch blobs from this CAS.
+    // Fetch blobs from this CAS:
     auto reader = network->CreateReader();
-    std::size_t count{};
-    std::unordered_set<ArtifactBlob> container{};
-    for (auto blobs : reader.ReadIncrementally(&digests)) {
-        if (count + blobs.size() > digests.size()) {
-            Logger::Log(LogLevel::Warning,
-                        "received more blobs than requested.");
-            return false;
-        }
-        for (auto& blob : blobs) {
-            auto const info = back_map->GetReference(blob.GetDigest());
-            blob.SetExecutable(info.has_value() and
-                               IsExecutableObject(info.value()->type));
-            // Collect blob and upload to other CAS if transfer size reached.
-            if (not UpdateContainerAndUpload(
-                    &container,
-                    std::move(blob),
-                    /*exception_is_fatal=*/true,
-                    [&api](std::unordered_set<ArtifactBlob>&& blobs) {
-                        return api.Upload(std::move(blobs),
-                                          /*skip_find_missing=*/true);
-                    })) {
-                return false;
-            }
-        }
-        count += blobs.size();
+    auto read_blobs = reader.Read(back_map->GetKeys());
+
+    // Restore executable permissions:
+    std::unordered_set<ArtifactBlob> result;
+    result.reserve(read_blobs.size());
+    for (auto it = read_blobs.begin(); it != read_blobs.end();) {
+        auto const info = back_map->GetReference(it->GetDigest());
+
+        auto node = read_blobs.extract(it++);
+        node.value().SetExecutable(info.has_value() and
+                                   IsExecutableObject(info.value()->type));
+        result.insert(std::move(node));
     }
 
-    if (count != digests.size()) {
+    auto const all_fetched = result.size() == infos.size();
+    if (not all_fetched) {
         Logger::Log(LogLevel::Debug, "could not retrieve all requested blobs.");
-        return false;
     }
-
-    // Upload remaining blobs to other CAS.
-    return api.Upload(std::move(container), /*skip_find_missing=*/true);
+    // Upload blobs to other CAS.
+    return api.Upload(std::move(result), /*skip_find_missing=*/true) and
+           all_fetched;
 }
 
 [[nodiscard]] auto RetrieveToCasSplitted(
@@ -144,14 +133,16 @@ BazelApi::BazelApi(std::string const& instance_name,
                    gsl::not_null<Auth const*> const& auth,
                    gsl::not_null<RetryConfig const*> const& retry_config,
                    ExecutionConfiguration const& exec_config,
-                   HashFunction hash_function) noexcept {
+                   HashFunction hash_function,
+                   TmpDir::Ptr temp_space) noexcept {
     network_ = std::make_shared<BazelNetwork>(instance_name,
                                               host,
                                               port,
                                               auth,
                                               retry_config,
                                               exec_config,
-                                              hash_function);
+                                              hash_function,
+                                              std::move(temp_space));
 }
 
 // implement move constructor in cpp, where all members are complete types
@@ -167,8 +158,26 @@ auto BazelApi::CreateAction(
     std::vector<std::string> const& output_files,
     std::vector<std::string> const& output_dirs,
     std::map<std::string, std::string> const& env_vars,
-    std::map<std::string, std::string> const& properties) const noexcept
-    -> IExecutionAction::Ptr {
+    std::map<std::string, std::string> const& properties,
+    bool force_legacy) const noexcept -> IExecutionAction::Ptr {
+    if (ProtocolTraits::IsNative(GetHashType())) {
+        // fall back to legacy for native
+        force_legacy = true;
+    }
+
+    bool best_effort = not force_legacy;
+    if (not force_legacy and
+        network_->GetCapabilities()->high_api_version < kVersion2dot1) {
+        best_effort = false;
+    }
+    if (not best_effort and
+        network_->GetCapabilities()->low_api_version >= kVersion2dot1) {
+        Logger::Log(LogLevel::Warning,
+                    "Server does not support RBEv2.0, falling back to newer "
+                    "API version (best effort).");
+        best_effort = true;
+    }
+
     return std::unique_ptr<BazelAction>{new (std::nothrow)
                                             BazelAction{network_,
                                                         root_digest,
@@ -177,10 +186,10 @@ auto BazelApi::CreateAction(
                                                         output_files,
                                                         output_dirs,
                                                         env_vars,
-                                                        properties}};
+                                                        properties,
+                                                        best_effort}};
 }
 
-// NOLINTNEXTLINE(google-default-arguments)
 [[nodiscard]] auto BazelApi::RetrieveToPaths(
     std::vector<Artifact::ObjectInfo> const& artifacts_info,
     std::vector<std::filesystem::path> const& output_paths,
@@ -205,15 +214,13 @@ auto BazelApi::CreateAction(
         else {
             if (IsTreeObject(info.type)) {
                 // read object infos from sub tree and call retrieve recursively
-                auto request_remote_tree = alternative != nullptr
-                                               ? std::make_optional(info.digest)
-                                               : std::nullopt;
-                auto reader = TreeReader<BazelNetworkReader>{
-                    network_->CreateReader(), std::move(request_remote_tree)};
+                auto reader =
+                    TreeReader<BazelNetworkReader>{network_->CreateReader()};
                 auto const result = reader.RecursivelyReadTreeLeafs(
                     info.digest, output_paths[i]);
                 if (not result or
-                    not RetrieveToPaths(result->infos, result->paths)) {
+                    not RetrieveToPaths(
+                        result->infos, result->paths, alternative)) {
                     return false;
                 }
             }
@@ -225,46 +232,39 @@ auto BazelApi::CreateAction(
     }
 
     // Request file blobs
-    auto size = file_digests.size();
-    auto reader = network_->CreateReader();
-    std::size_t count{};
-    for (auto blobs : reader.ReadIncrementally(&file_digests)) {
-        if (count + blobs.size() > size) {
-            Logger::Log(LogLevel::Warning,
-                        "received more blobs than requested.");
-            return false;
-        }
-        for (std::size_t pos = 0; pos < blobs.size(); ++pos) {
-            auto gpos = artifact_pos[count + pos];
-            auto const& type = artifacts_info[gpos].type;
-
-            bool written = false;
-            if (auto const content = blobs[pos].ReadContent()) {
-                written = FileSystemManager::WriteFileAs</*kSetEpochTime=*/true,
-                                                         /*kSetWritable=*/true>(
-                    *content, output_paths[gpos], type);
-            }
-
-            if (not written) {
-                Logger::Log(LogLevel::Warning,
-                            "staging to output path {} failed.",
-                            output_paths[gpos].string());
-                return false;
-            }
-        }
-        count += blobs.size();
-    }
-
-    if (count != size) {
+    auto const blobs = network_->CreateReader().ReadOrdered(file_digests);
+    if (blobs.size() != file_digests.size()) {
         Logger::Log(LogLevel::Warning,
                     "could not retrieve all requested blobs.");
         return false;
     }
+    for (std::size_t i = 0; i < blobs.size(); ++i) {
+        auto const gpos = artifact_pos[i];
+        auto const type = artifacts_info[gpos].type;
+        auto const& dst = output_paths[gpos];
 
+        bool written = false;
+        if (auto const path = blobs[i].GetFilePath()) {
+            if (FileSystemManager::CreateDirectory(dst.parent_path()) and
+                FileSystemManager::RemoveFile(dst)) {
+                written = IsSymlinkObject(type)
+                              ? FileSystemManager::CopySymlinkAs<
+                                    /*kSetEpochTime=*/true>(*path, dst)
+                              : FileSystemManager::CreateFileHardlinkAs<
+                                    /*kSetEpochTime=*/true>(*path, dst, type);
+            }
+        }
+
+        if (not written) {
+            Logger::Log(LogLevel::Warning,
+                        "staging to output path {} failed.",
+                        dst.string());
+            return false;
+        }
+    }
     return true;
 }
 
-// NOLINTNEXTLINE(google-default-arguments)
 [[nodiscard]] auto BazelApi::RetrieveToFds(
     std::vector<Artifact::ObjectInfo> const& artifacts_info,
     std::vector<int> const& fds,
@@ -473,6 +473,10 @@ auto BazelApi::CreateAction(
         return false;
     }
 
+    if (failure) {
+        return false;
+    }
+
     try {
         for (auto const& info : artifacts_info) {
             done->insert(info);
@@ -484,7 +488,7 @@ auto BazelApi::CreateAction(
                     ex.what());
     }
 
-    return not failure;
+    return true;
 }
 
 [[nodiscard]] auto BazelApi::RetrieveToMemory(
@@ -526,11 +530,9 @@ auto BazelApi::CreateAction(
             gsl::not_null<std::vector<std::string>*> const& targets) {
             auto reader = network->CreateReader();
             targets->reserve(digests.size());
-            for (auto blobs : reader.ReadIncrementally(&digests)) {
-                for (auto const& blob : blobs) {
-                    if (auto const content = blob.ReadContent()) {
-                        targets->emplace_back(*content);
-                    }
+            for (auto const& blob : reader.ReadOrdered(digests)) {
+                if (auto const content = blob.ReadContent()) {
+                    targets->emplace_back(*content);
                 }
             }
         });
@@ -603,4 +605,8 @@ auto BazelApi::CreateAction(
 [[nodiscard]] auto BazelApi::GetHashType() const noexcept
     -> HashFunction::Type {
     return network_->GetHashFunction().GetType();
+}
+
+[[nodiscard]] auto BazelApi::GetTempSpace() const noexcept -> TmpDir::Ptr {
+    return network_->GetTempSpace();
 }

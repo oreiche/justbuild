@@ -199,13 +199,14 @@ void ComputeAndFill(
     root_build_args.rebuild = std::nullopt;
     root_build_args.build.print_to_stdout = std::nullopt;
     root_build_args.build.print_unique = false;
-    root_build_args.build.dump_artifacts = std::nullopt;
+    root_build_args.build.dump_artifacts = std::vector<std::filesystem::path>{};
     root_build_args.build.show_runfiles = false;
     auto root_exec_context = ExecutionContext{context->repo_config,
                                               context->apis,
                                               context->remote_context,
                                               &statistics,
-                                              &progress};
+                                              &progress,
+                                              std::nullopt};
 
     auto cache_lookup =
         expected<std::optional<std::string>, std::monostate>(std::nullopt);
@@ -240,8 +241,8 @@ void ComputeAndFill(
                         "Root {} taken from cache to be {}",
                         target.ToString(),
                         root);
-            auto root_result =
-                FileRoot::FromGit(storage_config->GitRoot(), root);
+            auto root_result = FileRoot::FromGit(
+                storage_config, storage_config->GitRoot(), root);
             if (not root_result) {
                 (*logger)(fmt::format("Failed to create git root for {}", root),
                           /*fatal=*/true);
@@ -261,7 +262,7 @@ void ComputeAndFill(
         if (storage_config->hash_function.GetType() !=
             HashFunction::Type::GitSHA1) {
             Logger::Log(LogLevel::Performance,
-                        "Computing root {} locally as rehahing would have to "
+                        "Computing root {} locally as rehashing would have to "
                         "be done locally",
                         key.ToString());
         }
@@ -344,7 +345,8 @@ void ComputeAndFill(
                 target.ToString(),
                 *result,
                 log_desc);
-    auto root_result = FileRoot::FromGit(storage_config->GitRoot(), *result);
+    auto root_result =
+        FileRoot::FromGit(storage_config, storage_config->GitRoot(), *result);
     if (not root_result) {
         (*logger)(fmt::format("Failed to create git root for {}", *result),
                   /*fatal=*/true);
@@ -389,6 +391,7 @@ void ComputeAndFill(
             (*logger)(
                 fmt::format("Failed to ensure {} is known to serve", *result),
                 /*fatal=*/true);
+            return;
         }
     }
     {
@@ -607,7 +610,8 @@ void ComputeAndFill(
     }
 
     if (local_tree_structure.has_value()) {
-        auto resolved_root = FileRoot::FromGit(native_storage_config.GitRoot(),
+        auto resolved_root = FileRoot::FromGit(storage_config,
+                                               native_storage_config.GitRoot(),
                                                local_tree_structure->hash());
         if (not resolved_root) {
             return unexpected{

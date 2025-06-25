@@ -15,69 +15,94 @@
   , "files": {"bin/lock-tool-under-test": ["@", "src", "", "bin/just-lock.py"]}
   }
 , "remote tests (unconfigured)":
-  { "type": ["@", "rules", "test", "suite"]
+  { "type": ["@", "rules", "test", "matrix"]
   , "arguments_config": ["TEST_COMPATIBLE_REMOTE", "TEST_BOOTSTRAP_JUST_MR"]
-  , "stage":
-    [ { "type": "if"
-      , "cond": {"type": "var", "name": "TEST_COMPATIBLE_REMOTE"}
-      , "then": "compatible"
-      , "else": "native"
-      }
-    ]
   , "deps":
     { "type": "++"
     , "$1":
       [ [["./", "remote-execution", "TESTS"], ["./", "just-mr", "TESTS"]]
       , { "type": "if"
         , "cond": {"type": "var", "name": "TEST_BOOTSTRAP_JUST_MR"}
-        , "then": []
         , "else":
           [ ["./", "serve-service", "TESTS"]
           , ["./", "computed-roots", "TESTS"]
           , ["./", "tree-structure", "TESTS"]
+          , ["./", "symlinks", "TESTS"]
           ]
         }
       ]
     }
   }
-, "remote tests, compatible":
-  { "type": "configure"
-  , "tainted": ["test"]
-  , "target": "remote tests (unconfigured)"
-  , "config":
-    {"type": "singleton_map", "key": "TEST_COMPATIBLE_REMOTE", "value": true}
-  }
-, "remote tests, native":
-  { "type": "configure"
-  , "tainted": ["test"]
-  , "target": "remote tests (unconfigured)"
-  , "config":
-    {"type": "singleton_map", "key": "TEST_COMPATIBLE_REMOTE", "value": false}
-  }
 , "remote tests":
+  { "type": "configure"
+  , "tainted": ["test"]
+  , "target": "remote tests (unconfigured)"
+  , "config":
+    { "type": "'"
+    , "$1":
+      { "TEST_MATRIX":
+        { "TEST_COMAPTIBLE_REMOTE":
+          {"remote-compat": true, "remote-native": "false"}
+        }
+      }
+    }
+  }
+, "just-mr tests (unconfigured)":
   { "type": ["@", "rules", "test", "suite"]
-  , "stage": ["using-remote"]
-  , "deps": ["remote tests, compatible", "remote tests, native"]
+  , "arguments_config": ["TEST_BOOTSTRAP_JUST_MR"]
+  , "deps":
+    { "type": "`"
+    , "$1":
+      [ "remote tests"
+      , ["./", "built-in-rules", "TESTS"]
+      , ["./", "cli", "TESTS"]
+      , ["./", "just-lock", "TESTS"]
+      , ["./", "target-cache", "TESTS"]
+      , ["./", "gc", "TESTS"]
+      , ["./", "git-import", "TESTS"]
+      , { "type": ",@"
+        , "$1":
+          { "type": "if"
+          , "cond": {"type": "var", "name": "TEST_BOOTSTRAP_JUST_MR"}
+          , "else": [["./", "profile", "TESTS"]]
+          }
+        }
+      ]
+    }
+  }
+, "just-mr tests (matrix)":
+  { "type": ["@", "rules", "test", "matrix"]
+  , "deps": ["just-mr tests (unconfigured)"]
+  }
+, "just-mr tests":
+  { "type": "configure"
+  , "tainted": ["test"]
+  , "target": "just-mr tests (matrix)"
+  , "config":
+    { "type": "'"
+    , "$1":
+      { "TEST_MATRIX":
+        { "TEST_BOOTSTRAP_JUST_MR":
+          {"just-mr-bootstrap": true, "just-mr-native": false}
+        }
+      }
+    }
   }
 , "TESTS":
   { "type": ["@", "rules", "test", "suite"]
-  , "arguments_config": []
+  , "arguments_config": ["TEST_BOOTSTRAP_JUST_MR"]
   , "stage": ["end-to-end"]
   , "deps":
-    [ "remote tests"
-    , ["./", "actions", "TESTS"]
-    , ["./", "build-fails", "TESTS"]
-    , ["./", "built-in-rules", "TESTS"]
-    , ["./", "cli", "TESTS"]
-    , ["./", "execution-service", "TESTS"]
-    , ["./", "gc", "TESTS"]
-    , ["./", "generated-binary", "TESTS"]
-    , ["./", "git-import", "TESTS"]
-    , ["./", "just-lock", "TESTS"]
-    , ["./", "symlinks", "TESTS"]
-    , ["./", "target-cache", "TESTS"]
-    , ["./", "target-tests", "TESTS"]
-    , ["./", "user-errors", "TESTS"]
-    ]
+    { "type": "`"
+    , "$1":
+      [ "just-mr tests"
+      , ["./", "actions", "TESTS"]
+      , ["./", "build-fails", "TESTS"]
+      , ["./", "execution-service", "TESTS"]
+      , ["./", "generated-binary", "TESTS"]
+      , ["./", "target-tests", "TESTS"]
+      , ["./", "user-errors", "TESTS"]
+      ]
+    }
   }
 }

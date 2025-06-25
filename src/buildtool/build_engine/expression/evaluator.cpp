@@ -840,14 +840,11 @@ auto LookupExpr(SubExprEvaluator&& eval,
         throw Evaluator::EvaluationError{fmt::format(
             "Map expected to be mapping but found {}.", d->ToString())};
     }
-    auto lookup = Expression::kNone;
-    if (d->Map().contains(k->String())) {
-        lookup = d->Map().at(k->String());
+    auto const& lookup = d->Map().Find(k->String());
+    if (lookup and (*lookup)->IsNotNull()) {
+        return **lookup;
     }
-    if (lookup->IsNone()) {
-        lookup = eval(expr->Get("default", Expression::none_t()), env);
-    }
-    return lookup;
+    return eval(expr->Get("default", Expression::none_t()), env);
 }
 
 auto ArrayAccessExpr(SubExprEvaluator&& eval,
@@ -936,7 +933,7 @@ auto ToSubdirExpr(SubExprEvaluator&& eval,
     else {
         for (auto const& el : d->Map()) {
             auto new_key = ToNormalPath(subdir / el.first).string();
-            if (auto it = result.find(new_key);
+            if (auto const it = result.find(new_key);
                 it != result.end() and
                 (not((it->second == el.second) and el.second->IsCacheable()))) {
                 auto msg_expr = expr->Map().Find("msg");
@@ -979,7 +976,7 @@ auto FromSubdirExpr(SubExprEvaluator&& eval,
             std::filesystem::path(el.first).lexically_relative(subdir));
         if (PathIsNonUpwards(new_path)) {
             auto new_key = new_path.string();
-            if (auto it = result.find(new_key);
+            if (auto const it = result.find(new_key);
                 it != result.end() &&
                 (!((it->second == el.second) && el.second->IsCacheable()))) {
                 throw Evaluator::EvaluationError{
@@ -1033,6 +1030,58 @@ auto ForeachMapExpr(SubExprEvaluator&& eval,
                                        .Update(var_val->String(), it.second));
                    });
     return ExpressionPtr{result};
+}
+
+auto ZipWithExpr(SubExprEvaluator&& eval,
+                 ExpressionPtr const& expr,
+                 Configuration const& env) -> ExpressionPtr {
+    auto range_1 = eval(expr->Get("range_1", Expression::kEmptyList), env);
+    auto const& range_1_list = range_1->List();
+    if (range_1_list.empty()) {
+        return Expression::kEmptyList;
+    }
+    auto range_2 = eval(expr->Get("range_2", Expression::kEmptyList), env);
+    auto const& range_2_list = range_2->List();
+    if (range_2_list.empty()) {
+        return Expression::kEmptyList;
+    }
+    auto const size = std::min(range_1_list.size(), range_2_list.size());
+    auto const& var_1 = expr->Get("var_1", "$1"s);
+    auto const& var_2 = expr->Get("var_2", "$2"s);
+    auto const& body = expr->Get("body", list_t{});
+    auto result = Expression::list_t{};
+    result.reserve(size);
+    for (auto it = std::make_pair(range_1_list.begin(), range_2_list.begin());
+         it.first != range_1_list.end() and it.second != range_2_list.end();
+         ++it.first, ++it.second) {
+        result.emplace_back(eval(body,
+                                 env.Update(var_1->String(), *it.first)
+                                     .Update(var_2->String(), *it.second)));
+    }
+    return ExpressionPtr{result};
+}
+
+auto ZipMapExpr(SubExprEvaluator&& eval,
+                ExpressionPtr const& expr,
+                Configuration const& env) -> ExpressionPtr {
+    auto range_key = eval(expr->Get("range_key", Expression::kEmptyList), env);
+    auto const& range_key_list = range_key->List();
+    if (range_key_list.empty()) {
+        return Expression::kEmptyMap;
+    }
+    auto range_val = eval(expr->Get("range_val", Expression::kEmptyList), env);
+    auto const& range_val_list = range_val->List();
+    if (range_val_list.empty()) {
+        return Expression::kEmptyMap;
+    }
+    auto result = Expression::map_t::underlying_map_t{};
+    for (auto it =
+             std::make_pair(range_key_list.begin(), range_val_list.begin());
+         it.first != range_key_list.end() and it.second != range_val_list.end();
+         ++it.first, ++it.second) {
+        result[(*it.first)->String()] = *it.second;
+    }
+    return ExpressionPtr{Expression::map_t{result}};
 }
 
 auto FoldLeftExpr(SubExprEvaluator&& eval,
@@ -1331,6 +1380,8 @@ auto const kBuiltInFunctions =
                           {"from_subdir", FromSubdirExpr},
                           {"foreach", ForeachExpr},
                           {"foreach_map", ForeachMapExpr},
+                          {"zip_with", ZipWithExpr},
+                          {"zip_map", ZipMapExpr},
                           {"foldl", FoldLeftExpr},
                           {"let*", LetExpr},
                           {"env", EnvExpr},

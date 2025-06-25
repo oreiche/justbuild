@@ -27,6 +27,7 @@
 
 #include "catch2/catch_test_macros.hpp"
 #include "src/buildtool/common/artifact_digest.hpp"
+#include "src/buildtool/common/artifact_digest_factory.hpp"
 #include "src/buildtool/common/protocol_traits.hpp"
 #include "src/buildtool/crypto/hash_function.hpp"
 #include "src/buildtool/execution_api/bazel_msg/bazel_msg_factory.hpp"
@@ -526,6 +527,30 @@ TEST_CASE("LocalCAS: Split-Splice", "[storage]") {
     }
 }
 
+TEST_CASE("Skip compactification", "[storage]") {
+    auto const config = TestStorageConfig::Create();
+    auto const storage = Storage::Create(&config.Get());
+
+    auto const& cas = storage.CAS();
+
+    // Create a large object in CAS:
+    using LargeTestUtils::File;
+    auto object = File::Create(cas, File::kLargeId, File::kLargeSize);
+    REQUIRE(object.has_value());
+    auto& [digest, path] = *object;
+    REQUIRE(cas.BlobPath(digest, /*is_executable=*/false).has_value());
+
+    // Trigger garbage collection with --all
+    REQUIRE(GarbageCollector::TriggerGarbageCollection(
+        config.Get(), /*no_rotation=*/false, /*gc_all=*/true));
+
+    // Check no generation remains:
+    for (std::size_t i = 0; i < config.Get().num_generations; ++i) {
+        CHECK_FALSE(
+            FileSystemManager::Exists(config.Get().GenerationCacheRoot(i)));
+    }
+}
+
 // Test uplinking of nested large objects:
 // A large tree depends on a number of nested objects:
 //
@@ -643,7 +668,7 @@ class TestFilesDirectory final {
     }
 
   private:
-    TmpDirPtr temp_directory_;
+    TmpDir::Ptr temp_directory_;
     explicit TestFilesDirectory() noexcept {
         auto test_dir = FileSystemManager::GetCurrentDirectory() / "tmp";
         temp_directory_ = TmpDir::Create(test_dir / "tmp_space");
@@ -656,7 +681,25 @@ auto Blob<kIsExecutable>::Create(LocalCAS<kDefaultDoGlobalUplink> const& cas,
                                  std::string const& id,
                                  std::uintmax_t size) noexcept
     -> std::optional<std::pair<ArtifactDigest, std::filesystem::path>> {
-    auto path = Generate(id, size);
+    std::optional<std::filesystem::path> path;
+    while (not path.has_value()) {
+        path = Generate(id, size);
+        auto digest = path.has_value()
+                          ? ArtifactDigestFactory::HashFileAs<ObjectType::File>(
+                                cas.GetHashFunction(), *path)
+                          : std::nullopt;
+        if (not digest) {
+            return std::nullopt;
+        }
+
+        if (cas.BlobPath(digest.value(), kIsExecutable).has_value()) {
+            if (not FileSystemManager::RemoveFile(*path)) {
+                return std::nullopt;
+            }
+            path.reset();
+        }
+    }
+
     auto digest = path ? cas.StoreBlob(*path, kIsExecutable) : std::nullopt;
     auto blob_path =
         digest ? cas.BlobPath(*digest, kIsExecutable) : std::nullopt;

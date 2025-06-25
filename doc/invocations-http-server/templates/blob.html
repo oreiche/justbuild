@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block heading %}
+Blob {{ name | e }}
+{% endblock %}
+
+{% block content %}
+<h1>Blob {{ name | e }}</h1>
+
+<a href="/blob/{{ name | e }}/{{ name | e}}">download</a>
+
+<pre>{{ data | e}}</pre>
+{% endblock %}

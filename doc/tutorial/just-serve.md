@@ -293,7 +293,7 @@ Our `repos.json` at this stage reads:
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450"
+      , "commit": "7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -504,7 +504,7 @@ We are now ready to see how this setup works. At this point the `repos.json` is
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450"
+      , "commit": "7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -570,13 +570,13 @@ serve endpoint
 ``` sh
 $ just-mr -R localhost:9999 --local-build-root ~/local-build-root build helloworld
 INFO: Performing repositories setup
-INFO: Found 5 repositories to set up
+INFO: Found 5 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","--local-build-root","/home/tutorial/local-build-root","-R","127.0.0.1:9999","helloworld"]
 INFO: Using '127.0.0.1:9999' as the remote execution endpoint.
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
 INFO: Export targets found: 0 cached, 1 served, 0 uncached, 0 not eligible for caching
-INFO: Discovered 4 actions, 2 trees, 0 blobs
+INFO: Discovered 4 actions, 0 tree overlays, 2 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 4 actions, 0 cache hits.
 INFO: Artifacts built, logical paths are:
@@ -643,7 +643,7 @@ removing any `"absent"` pragma fields
     { "repository":
       { "type": "git"
       , "branch": "master"
-      , "commit": "3a5f0f0f50c59495ffc3b198df59e6edb8416450"
+      , "commit": "7a2fb9f639a61cf7b7d7e45c7c4cea845e7528c6"
       , "repository": "https://github.com/just-buildsystem/rules-cc.git"
       , "subdir": "rules"
       }
@@ -727,13 +727,13 @@ endpoint still running, successfully
 ``` sh
 $ just-mr --rc rc-file build helloworld
 INFO: Performing repositories setup
-INFO: Found 5 repositories to set up
+INFO: Found 5 repositories involved
 INFO: Setup finished, exec ["just","build","-C","...","--local-build-root","/home/tutorial/local-build-root","-R","localhost:9999","helloworld"]
 INFO: Using 'localhost:9999' as the remote execution endpoint.
 INFO: Requested target is [["@","tutorial","","helloworld"],{}]
 INFO: Analysed target [["@","tutorial","","helloworld"],{}]
 INFO: Export targets found: 0 cached, 1 served, 0 uncached, 0 not eligible for caching
-INFO: Discovered 4 actions, 2 trees, 0 blobs
+INFO: Discovered 4 actions, 0 tree overlays, 2 trees, 0 blobs
 INFO: Building [["@","tutorial","","helloworld"],{}].
 INFO: Processed 4 actions, 4 cache hits.
 INFO: Artifacts built, logical paths are:
