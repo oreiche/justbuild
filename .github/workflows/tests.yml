@@ -41,14 +41,14 @@ jobs:
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            echo '{\"DEBUG\":true,\"TEST_ENV\":{},\"DROP_LARGE_TESTS\":true}' > debug-native.conf; \
+            echo '{\"DEBUG\":{\"ENABLE\":true},\"TEST_ENV\":{},\"DROP_LARGE_TESTS\":true}' > debug-native.conf; \
             just-mr --main 'just tests' build -c debug-native.conf ALL"
 
       - name: Run all tests in compatible mode
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            echo '{\"DEBUG\":true,\"TEST_ENV\":{\"COMPATIBLE\":\"YES\"},\"DROP_LARGE_TESTS\":true}' > debug-compat.conf; \
+            echo '{\"DEBUG\":{\"ENABLE\":true},\"TEST_ENV\":{\"COMPATIBLE\":\"YES\"},\"DROP_LARGE_TESTS\":true}' > debug-compat.conf; \
             just-mr --main 'just tests' build -c debug-compat.conf ALL"
 
       - name: Run garbage collector and clean cache
@@ -103,14 +103,14 @@ jobs:
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            echo '{\"DEBUG\":false,\"TEST_ENV\":{},\"DROP_LARGE_TESTS\":true}' > release-native.conf; \
+            echo '{\"DEBUG\":{},\"TEST_ENV\":{},\"DROP_LARGE_TESTS\":true}' > release-native.conf; \
             just-mr --main 'just tests' build -c release-native.conf ALL"
 
       - name: Run all tests in compatible mode
         run: |
           docker exec ubuntu bash -c "\
             set -e; \
-            echo '{\"DEBUG\":false,\"TEST_ENV\":{\"COMPATIBLE\":\"YES\"},\"DROP_LARGE_TESTS\":true}' > release-compat.conf; \
+            echo '{\"DEBUG\":{},\"TEST_ENV\":{\"COMPATIBLE\":\"YES\"},\"DROP_LARGE_TESTS\":true}' > release-compat.conf; \
             just-mr --main 'just tests' build -c release-compat.conf ALL"
 
       - name: Run garbage collector and clean cache
