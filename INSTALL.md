@@ -31,7 +31,7 @@ variables. The full list can be obtained via `just-mr describe`.
 | ARCH | x86, x86_64, arm, arm64 | x86_64 |
 | HOST_ARCH | x86, x86_64, arm, arm64 | *derived from ARCH* |
 | TARGET_ARCH | x86, x86_64, arm, arm64 | *derived from ARCH* |
-| DEBUG | true, false | false |
+| DEBUG | map, anything logically false | null |
 | TOOLCHAIN_CONFIG["FAMILY"] | gnu, clang, unknown | unknown |
 | TOOLCHAIN_CONFIG["BUILD_STATIC"] | true, false | false |
 
@@ -46,12 +46,13 @@ using the `bin/bootstrap.py` script.
 
 ### Bootstrapping compiling the dependencies from scratch
 
-If using bundled dependencies is acceptable, the only thing required
+If using bundled dependencies is acceptable, the only things required
 are a C++20 compiler with the libraries required by the language
 standard (note that, e.g., in Debian `libstdc++-10-dev` is not a
-dependency of `clang`) and a Python3 interpreter. By default the bootstrap
-script uses the clang compiler. If you also want the bootstrap script to
-download the dependencies itself, `wget` is required as well.
+dependency of `clang`), a C compiler, and a Python3 interpreter. By
+default, the bootstrap script uses `c++` as C++ compiler and `cc` as C
+compiler. If you also want the bootstrap script to download the
+dependencies itself, `wget` is required as well.
 
 In this case, the command is simply
 ```sh
@@ -150,20 +151,21 @@ ${BUILDDIR}/out/bin/just install \
   -o ${BUILDDIR}/out/ 'installed just-mr'
 ```
 
-# Installing `just-import-git`
+# Installing `just-import-git`, `just-deduplicate-repos`, and `just-lock`
 
 The file `bin/just-import-git.py` is a useful Python script that allows quick
 generation of a multi-repository build configuration file from a simpler
 template for projects with dependencies provided by Git repositories.
-
 It is recommended to make this script available in your `$PATH` as
 `just-import-git`. Running it requires, of course, a Python3 interpreter.
-
-# Installing `just-deduplicate-repos`
 
 The file `bin/just-deduplicate-repos.py` is a useful Python script that
 removes duplicates from a multi-repository configuration by merging
 indistinguishable repositories.
-
 It is recommended to make this script available in your `$PATH` as
 `just-deduplicate-repos`. Running it requires, of course, a Python3 interpreter.
+
+The file `bin/just-lock.py` is a useful Python script to generate and maintain
+a multi-repository configuration.
+It is recommended to make this script available in your `$PATH` as
+`just-lock`. Running it requires, of course, a Python3 interpreter.
