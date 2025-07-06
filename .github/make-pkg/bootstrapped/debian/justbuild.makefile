@@ -5,6 +5,8 @@ DISTFILES ?= $(DATADIR)/third_party
 
 ifeq ($(shell uname -m),aarch64)
   ARCH ?= arm64
+else ifeq ($(shell uname -m),loongarch64)
+  ARCH ?= loongarch64
 else
   ARCH ?= x86_64
 endif

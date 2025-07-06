@@ -1,0 +1,60 @@
+Description: Add support for loongarch64 target
+ .
+ justbuild (1.5.1-1+loong64) unstable; urgency=medium
+ .
+   * Add support for loongarch64 target
+Author: Dandan Zhang <zhangdandan@loongson.cn>
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+Index: b/etc/toolchain/CC/TARGETS
+===================================================================
+--- a/etc/toolchain/CC/TARGETS
++++ b/etc/toolchain/CC/TARGETS
+@@ -83,6 +83,7 @@
+         , "linux_x86_64": ["x86_64-linux-gnu-gcc"]
+         , "linux_arm": ["arm-linux-gnueabi-gcc"]
+         , "linux_arm64": ["aarch64-linux-gnu-gcc"]
++        , "linux_loongarch64": ["loongarch64-linux-gnu-gcc"]
+         }
+       , "default":
+         { "type": "fail"
+@@ -115,6 +116,7 @@
+         , "linux_x86_64": ["x86_64-linux-gnu-g++"]
+         , "linux_arm": ["arm-linux-gnueabi-g++"]
+         , "linux_arm64": ["aarch64-linux-gnu-g++"]
++        , "linux_loongarch64": ["loongarch64-linux-gnu-g++"]
+         }
+       , "default":
+         { "type": "fail"
+@@ -156,6 +158,7 @@
+         , "linux_x86_64": ["x86_64-linux-gnu-ar"]
+         , "linux_arm": ["arm-linux-gnueabi-ar"]
+         , "linux_arm64": ["aarch64-linux-gnu-ar"]
++        , "linux_loongarch64": ["loongarch64-linux-gnu-ar"]
+         }
+       , "default":
+         { "type": "fail"
+@@ -195,6 +198,7 @@
+         , "linux_x86_64": ["x86_64-linux-gnu-ar"]
+         , "linux_arm": ["arm-linux-gnueabi-ar"]
+         , "linux_arm64": ["aarch64-linux-gnu-ar"]
++        , "linux_loongarch64": ["loongarch64-linux-gnu-ar"]
+         }
+       , "default":
+         { "type": "fail"
+@@ -227,6 +231,7 @@
+         , "linux_x86_64": ["-target", "x86_64-linux-gnu"]
+         , "linux_arm": ["-target", "arm-linux-gnueabi"]
+         , "linux_arm64": ["-target", "aarch64-linux-gnu"]
++        , "linux_loongarch64": ["-target", "loongarch64-linux-gnu"]
+         }
+       , "default":
+         { "type": "fail"
+@@ -261,6 +266,7 @@
+         , "linux_x86_64": ["-target", "x86_64-linux-gnu"]
+         , "linux_arm": ["-target", "arm-linux-gnueabi"]
+         , "linux_arm64": ["-target", "aarch64-linux-gnu"]
++        , "linux_loongarch64": ["-target", "loongarch64-linux-gnu"]
+         }
+       , "default":
+         { "type": "fail"
