@@ -24,7 +24,7 @@
 auto version() -> std::string {
     static const std::size_t kMajor = 1;
     static const std::size_t kMinor = 6;
-    static const std::size_t kRevision = 0;
+    static const std::size_t kRevision = 1;
     std::string suffix = std::string{};
 #ifdef VERSION_EXTRA_SUFFIX
     suffix += VERSION_EXTRA_SUFFIX;
