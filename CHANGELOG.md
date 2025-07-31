@@ -1,3 +1,23 @@
+## Release `1.6.2` (2025-07-30)
+
+Bug fixes on top of `1.6.1`.
+
+### Fixes
+
+- `just serve` can now also work with a compatible remote-execution
+  service that relies on the length field of digests being set
+  correctly (as requested by the protocol). Previously, some blobs
+  were requested by correct hash but with size set to `0`. To keep
+  everything backwards compatible (both, when only `serve` or only
+  `just` gets updated), the `ServeTargetRequest` of the internal
+  `serve` protocol was extended by a new field where the client can
+  send a list of full blob digests asking the server to download
+  those before handling the request.
+- If `serve` reports an error, the full digest of the error-log
+  blob (including size) is shown to the user and not only the
+  hash. This allows inspection of the error log, even if a strict
+  compatible remote execution is used.
+
 ## Release `1.6.1` (2025-07-16)
 
 Bug fixes on top of `1.6.0`.
