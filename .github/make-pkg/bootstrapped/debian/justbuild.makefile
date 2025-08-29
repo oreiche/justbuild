@@ -3,14 +3,20 @@ DATADIR ?= $(CURDIR)/debian
 BUILDDIR ?= $(DATADIR)/build
 DISTFILES ?= $(DATADIR)/third_party
 
-ifeq ($(shell uname -m),aarch64)
-  ARCH ?= arm64
-else ifeq ($(shell uname -m),loongarch64)
-  ARCH ?= loongarch64
-else
-  ARCH ?= x86_64
-endif
-TARGET_ARCH ?= $(ARCH)
+# convert debian architecture to justbuild architecture name
+define convert_arch
+$(strip
+  $(if $(filter $($(1)),amd64),   x86_64,
+  $(if $(filter $($(1)),arm64),   arm64,
+  $(if $(filter $($(1)),loong64), loongarch64,
+  $(error Unsupported $(1): $($(1)))))))
+endef
+
+# ensure that build deps are compiled for the build machine
+ARCH ?= $(call convert_arch,DEB_BUILD_ARCH)
+
+# set target architecture for cross-compilation
+TARGET_ARCH ?= $(call convert_arch,DEB_HOST_ARCH)
 
 export LOCALBASE = /usr
 export NON_LOCAL_DEPS = $(shell cat $(DATADIR)/non_local_deps)
