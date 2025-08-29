@@ -7,9 +7,15 @@ DISTFILES ?= $(DATADIR)/third_party
 define convert_arch
 $(strip
   $(if $(filter $($(1)),amd64),   x86_64,
+  $(if $(filter $($(1)),i386),    x86,
   $(if $(filter $($(1)),arm64),   arm64,
+  $(if $(filter $($(1)),armel),   arm,
+  $(if $(filter $($(1)),armhf),   armhf,
+  $(if $(filter $($(1)),ppc64el), ppc64el,
+  $(if $(filter $($(1)),riscv64), riscv64,
+  $(if $(filter $($(1)),s390x),   s390x,
   $(if $(filter $($(1)),loong64), loongarch64,
-  $(error Unsupported $(1): $($(1)))))))
+  $(error Unsupported $(1): $($(1)))))))))))))
 endef
 
 # ensure that build deps are compiled for the build machine
@@ -24,11 +30,27 @@ export SOURCE_DATE_EPOCH = $(shell dpkg-parsechangelog -STimestamp)
 export INCLUDE_PATH = $(BUILDDIR)/include
 export PKG_CONFIG_PATH = $(BUILDDIR)/pkgconfig
 
+CCFAMILY ?= gnu
+
+ifeq ($(DEB_HOST_ARCH),riscv64)
+  # force use of gcc as generated protobuf bindings do not compile with clang on
+  # riscv64 due to missing c_atomic extensions (see protobuf platform_macros.h).
+  CCFAMILY = gnu
+endif
+
+ifeq ($(CCFAMILY),clang)
+  # enable reproducible builds with clang.
+  # background: justbuild builds every source file in an isolated unique action
+  #             directory and clang can be instructed to strip that unique path.
+  CFLAGS += -fdebug-compilation-dir=. -gdwarf-4 -Wno-ignored-optimization-argument
+  CXXFLAGS += -fdebug-compilation-dir=. -gdwarf-4 -Wno-ignored-optimization-argument
+endif
+
 CFLAGS += -I$(INCLUDE_PATH)
 CXXFLAGS += -I$(INCLUDE_PATH)
 
 define JUST_BUILD_CONF
-{ "TOOLCHAIN_CONFIG": {"FAMILY": "gnu"}
+{ "TOOLCHAIN_CONFIG": {"FAMILY": "$(CCFAMILY)"}
 , "ARCH": "$(ARCH)"
 , "TARGET_ARCH": "$(TARGET_ARCH)"
 , "SOURCE_DATE_EPOCH": $(SOURCE_DATE_EPOCH)

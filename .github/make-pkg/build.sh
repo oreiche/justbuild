@@ -141,8 +141,7 @@ mv ${SRCDIR} ${SRCDIR}-${VERSION}
       # use clang if build depends on it
       if echo "${BUILD_DEPENDS}" | grep -q clang; then
         # set FAMILY to "clang" and specify reproducibility compile flag
-        sed -i 's/{"FAMILY": "gnu"}/{"FAMILY": "clang"}/' ./debian/justbuild.makefile
-        sed -i 's/\([C|CXX]FLAGS +=\)/\1 -fdebug-compilation-dir=. -gdwarf-4 -Wno-ignored-optimization-argument/' ./debian/justbuild.makefile
+        sed -i 's/^CCFAMILY ?= gnu/CCFAMILY = clang/' ./debian/justbuild.makefile
       fi
     fi
 

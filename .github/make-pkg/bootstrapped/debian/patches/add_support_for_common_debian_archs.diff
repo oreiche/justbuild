@@ -1,0 +1,75 @@
+Description: Add support for common Debian archs
+  Define toolchain names for armhf, ppc64el, riscv64, and s390x.
+Author: Oliver Reiche <oliver.reiche@gmail.com>
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+Index: b/etc/toolchain/CC/TARGETS
+===================================================================
+--- a/etc/toolchain/CC/TARGETS
++++ b/etc/toolchain/CC/TARGETS
+@@ -85,6 +85,10 @@
+         , "linux_arm": ["arm-linux-gnueabi-gcc"]
+         , "linux_arm64": ["aarch64-linux-gnu-gcc"]
+         , "linux_loongarch64": ["loongarch64-linux-gnu-gcc"]
++        , "linux_armhf": ["arm-linux-gnueabihf-gcc"]
++        , "linux_ppc64el": ["powerpc64le-linux-gnu-gcc"]
++        , "linux_riscv64": ["riscv64-linux-gnu-gcc"]
++        , "linux_s390x": ["s390x-linux-gnu-gcc"]
+         }
+       , "default":
+         { "type": "fail"
+@@ -118,6 +119,10 @@
+         , "linux_arm": ["arm-linux-gnueabi-g++"]
+         , "linux_arm64": ["aarch64-linux-gnu-g++"]
+         , "linux_loongarch64": ["loongarch64-linux-gnu-g++"]
++        , "linux_armhf": ["arm-linux-gnueabihf-g++"]
++        , "linux_ppc64el": ["powerpc64le-linux-gnu-g++"]
++        , "linux_riscv64": ["riscv64-linux-gnu-g++"]
++        , "linux_s390x": ["s390x-linux-gnu-g++"]
+         }
+       , "default":
+         { "type": "fail"
+@@ -160,6 +162,10 @@
+         , "linux_arm": ["arm-linux-gnueabi-ar"]
+         , "linux_arm64": ["aarch64-linux-gnu-ar"]
+         , "linux_loongarch64": ["loongarch64-linux-gnu-ar"]
++        , "linux_armhf": ["arm-linux-gnueabihf-ar"]
++        , "linux_ppc64el": ["powerpc64le-linux-gnu-ar"]
++        , "linux_riscv64": ["riscv64-linux-gnu-ar"]
++        , "linux_s390x": ["s390x-linux-gnu-ar"]
+         }
+       , "default":
+         { "type": "fail"
+@@ -200,6 +203,10 @@
+         , "linux_arm": ["arm-linux-gnueabi-ar"]
+         , "linux_arm64": ["aarch64-linux-gnu-ar"]
+         , "linux_loongarch64": ["loongarch64-linux-gnu-ar"]
++        , "linux_armhf": ["arm-linux-gnueabihf-ar"]
++        , "linux_ppc64el": ["powerpc64le-linux-gnu-ar"]
++        , "linux_riscv64": ["riscv64-linux-gnu-ar"]
++        , "linux_s390x": ["s390x-linux-gnu-ar"]
+         }
+       , "default":
+         { "type": "fail"
+@@ -233,6 +237,10 @@
+         , "linux_arm": ["-target", "arm-linux-gnueabi"]
+         , "linux_arm64": ["-target", "aarch64-linux-gnu"]
+         , "linux_loongarch64": ["-target", "loongarch64-linux-gnu"]
++        , "linux_armhf": ["-target", "arm-linux-gnueabihf"]
++        , "linux_ppc64el": ["-target", "powerpc64le-linux-gnu"]
++        , "linux_riscv64": ["-target", "riscv64-linux-gnu"]
++        , "linux_s390x": ["-target", "s390x-linux-gnu"]
+         }
+       , "default":
+         { "type": "fail"
+@@ -268,6 +273,10 @@
+         , "linux_arm": ["-target", "arm-linux-gnueabi"]
+         , "linux_arm64": ["-target", "aarch64-linux-gnu"]
+         , "linux_loongarch64": ["-target", "loongarch64-linux-gnu"]
++        , "linux_armhf": ["-target", "arm-linux-gnueabihf"]
++        , "linux_ppc64el": ["-target", "powerpc64le-linux-gnu"]
++        , "linux_riscv64": ["-target", "riscv64-linux-gnu"]
++        , "linux_s390x": ["-target", "s390x-linux-gnu"]
+         }
+       , "default":
+         { "type": "fail"
