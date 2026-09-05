@@ -41,8 +41,8 @@
     { "type": "'"
     , "$1":
       { "TEST_MATRIX":
-        { "TEST_COMAPTIBLE_REMOTE":
-          {"remote-compat": true, "remote-native": "false"}
+        { "TEST_COMPATIBLE_REMOTE":
+          {"remote-compat": true, "remote-native": false}
         }
       }
     }
